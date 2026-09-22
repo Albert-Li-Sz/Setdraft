@@ -49,6 +49,13 @@ function readInteger(record: Record<string, unknown>, key: string, path: string)
 	return value as number;
 }
 
+function readOptionalInteger(record: Record<string, unknown>, key: string, path: string): number | undefined {
+	const value = record[key];
+	if (value === undefined) return undefined;
+	if (!Number.isSafeInteger(value)) throw new InvalidRequestError(`${path}.${key} must be an integer.`);
+	return value as number;
+}
+
 function readIntegerArray(record: Record<string, unknown>, key: string, path: string): number[] | undefined {
 	const value = record[key];
 	if (value === undefined) return undefined;
@@ -225,6 +232,8 @@ export function parseAiConfigurationRequest(value: unknown): HydroAiConfiguratio
 	const modelId = readString(root, "modelId", "request").trim();
 	const apiKey = readOptionalString(root, "apiKey", "request")?.trim();
 	const baseUrl = readOptionalString(root, "baseUrl", "request")?.trim();
+	const contextWindow = readOptionalInteger(root, "contextWindow", "request");
+	const maxTokens = readOptionalInteger(root, "maxTokens", "request");
 	if (provider.length === 0) throw new InvalidRequestError("request.provider cannot be empty.");
 	if (modelId.length === 0) throw new InvalidRequestError("request.modelId cannot be empty.");
 	return {
@@ -232,5 +241,7 @@ export function parseAiConfigurationRequest(value: unknown): HydroAiConfiguratio
 		modelId,
 		apiKey: apiKey && apiKey.length > 0 ? apiKey : undefined,
 		baseUrl: baseUrl && baseUrl.length > 0 ? baseUrl : undefined,
+		contextWindow,
+		maxTokens,
 	};
 }

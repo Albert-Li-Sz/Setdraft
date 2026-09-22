@@ -26,6 +26,8 @@ export interface HydroAiConfigurationInput {
 	modelId: string;
 	apiKey?: string;
 	baseUrl?: string;
+	contextWindow?: number;
+	maxTokens?: number;
 }
 
 export interface HydroAiConfigurationSnapshot {
@@ -33,6 +35,8 @@ export interface HydroAiConfigurationSnapshot {
 	provider?: string;
 	modelId?: string;
 	baseUrl?: string;
+	contextWindow?: number;
+	maxTokens?: number;
 	apiKeyConfigured: boolean;
 	providers: HydroAiProviderOption[];
 	error?: string;
@@ -58,6 +62,8 @@ interface StoredHydroAiConfiguration {
 	modelId: string;
 	apiKey?: string;
 	baseUrl?: string;
+	contextWindow: number;
+	maxTokens: number;
 }
 
 interface ActivatedConfiguration {
@@ -98,6 +104,39 @@ function normalizeBaseUrl(value: string | undefined): string | undefined {
 	return url.toString().replace(/\/$/u, "");
 }
 
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+const DEFAULT_MAX_TOKENS = 16_384;
+const MIN_CONTEXT_WINDOW = 1_024;
+const MAX_CONTEXT_WINDOW = 4_000_000;
+const MIN_MAX_TOKENS = 1;
+const MAX_MAX_TOKENS = 1_000_000;
+
+function normalizeTokenLimits(
+	contextWindow: number | undefined,
+	maxTokens: number | undefined,
+): { contextWindow: number; maxTokens: number } {
+	const resolvedContextWindow = contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+	const resolvedMaxTokens = maxTokens ?? DEFAULT_MAX_TOKENS;
+	if (
+		!Number.isSafeInteger(resolvedContextWindow) ||
+		resolvedContextWindow < MIN_CONTEXT_WINDOW ||
+		resolvedContextWindow > MAX_CONTEXT_WINDOW
+	) {
+		throw new HydroAiConfigurationError(`上下文长度须为 ${MIN_CONTEXT_WINDOW}–${MAX_CONTEXT_WINDOW} 之间的整数。`);
+	}
+	if (
+		!Number.isSafeInteger(resolvedMaxTokens) ||
+		resolvedMaxTokens < MIN_MAX_TOKENS ||
+		resolvedMaxTokens > MAX_MAX_TOKENS
+	) {
+		throw new HydroAiConfigurationError(`最大输出长度须为 ${MIN_MAX_TOKENS}–${MAX_MAX_TOKENS} 之间的整数。`);
+	}
+	if (resolvedMaxTokens > resolvedContextWindow) {
+		throw new HydroAiConfigurationError("最大输出长度不能超过上下文长度。");
+	}
+	return { contextWindow: resolvedContextWindow, maxTokens: resolvedMaxTokens };
+}
+
 function readStoredConfiguration(value: unknown): StoredHydroAiConfiguration {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new HydroAiConfigurationError("AI 配置文件必须包含一个 JSON 对象。");
@@ -112,11 +151,18 @@ function readStoredConfiguration(value: unknown): StoredHydroAiConfiguration {
 	if (record.baseUrl !== undefined && typeof record.baseUrl !== "string") {
 		throw new HydroAiConfigurationError("AI 配置文件中的 baseUrl 必须是字符串。");
 	}
+	if (record.contextWindow !== undefined && typeof record.contextWindow !== "number") {
+		throw new HydroAiConfigurationError("AI 配置文件中的 contextWindow 必须是整数。");
+	}
+	if (record.maxTokens !== undefined && typeof record.maxTokens !== "number") {
+		throw new HydroAiConfigurationError("AI 配置文件中的 maxTokens 必须是整数。");
+	}
 	return {
 		provider: record.provider,
 		modelId: record.modelId,
 		apiKey: record.apiKey,
 		baseUrl: record.baseUrl,
+		...normalizeTokenLimits(record.contextWindow, record.maxTokens),
 	};
 }
 
@@ -168,6 +214,8 @@ export class HydroAiConfiguration implements HydroAiConfigurationController, Hyd
 			provider: this.active?.configuration.provider,
 			modelId: this.active?.configuration.modelId,
 			baseUrl: this.active?.configuration.baseUrl,
+			contextWindow: this.active?.configuration.contextWindow,
+			maxTokens: this.active?.configuration.maxTokens,
 			apiKeyConfigured: this.active?.configuration.apiKey !== undefined,
 			providers: this.providers,
 			error: this.configurationError,
@@ -179,11 +227,16 @@ export class HydroAiConfiguration implements HydroAiConfigurationController, Hyd
 		const modelId = input.modelId.trim();
 		const suppliedApiKey = optionalTrimmedString(input.apiKey);
 		const retainedApiKey = this.active?.configuration.apiKey;
+		const tokenLimits = normalizeTokenLimits(
+			input.contextWindow ?? this.active?.configuration.contextWindow,
+			input.maxTokens ?? this.active?.configuration.maxTokens,
+		);
 		const configuration: StoredHydroAiConfiguration = {
 			provider,
 			modelId,
 			apiKey: suppliedApiKey ?? retainedApiKey,
 			baseUrl: normalizeBaseUrl(input.baseUrl),
+			...tokenLimits,
 		};
 		const activated = await this.activate(configuration);
 		await this.persist(configuration);
@@ -252,7 +305,13 @@ export class HydroAiConfiguration implements HydroAiConfigurationController, Hyd
 			if (!protocol)
 				throw new HydroAiConfigurationError("当前环境模型未使用支持的三种 API 协议，请在网页中配置模型。");
 			this.active = {
-				configuration: { provider: protocol.id, modelId: selected.id, baseUrl: selected.baseUrl },
+				configuration: {
+					provider: protocol.id,
+					modelId: selected.id,
+					baseUrl: selected.baseUrl,
+					contextWindow: selected.contextWindow,
+					maxTokens: selected.maxTokens,
+				},
 				executor: await createHydroAgentExecutor({
 					...this.sessionOptions,
 					modelRuntime: runtime,
@@ -287,8 +346,8 @@ export class HydroAiConfiguration implements HydroAiConfigurationController, Hyd
 					reasoning: false,
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 128000,
-					maxTokens: 16384,
+					contextWindow: configuration.contextWindow,
+					maxTokens: configuration.maxTokens,
 					...(protocol.id === "openai-completions"
 						? {
 								compat: {
@@ -298,7 +357,14 @@ export class HydroAiConfiguration implements HydroAiConfigurationController, Hyd
 									maxTokensField: "max_tokens" as const,
 								},
 							}
-						: {}),
+						: protocol.id === "openai-responses"
+							? {
+									compat: {
+										supportsMaxOutputTokens: true,
+										supportsStrictMode: false,
+									},
+								}
+							: {}),
 				},
 			],
 		});

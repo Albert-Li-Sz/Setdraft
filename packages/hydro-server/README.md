@@ -8,7 +8,7 @@ npm run dev --workspace=@hydro-problem-make/server
 
 The default listener is `http://127.0.0.1:4321`. Set `HYDRO_WEB_ROOT` to a built web directory when the server should also serve the frontend.
 
-The web settings page uses `GET`, `PUT`, and `DELETE /api/ai/config`. The `provider` field selects one of `openai-completions`, `openai-responses`, and `anthropic-messages`; `modelId` is a freely entered API model ID. Configure an API key and optional Base URL. Existing provider configurations migrate to a protocol using their model metadata. The default local file is `.hydro-problem-make/ai-config.json`; override it with `HYDRO_AI_CONFIG_PATH`. Saving configuration updates Agent availability immediately and does not send a model request.
+The web settings page uses `GET`, `PUT`, and `DELETE /api/ai/config`. The `provider` field selects one of `openai-completions`, `openai-responses`, and `anthropic-messages`; `modelId` is a freely entered API model ID. Configure an API key, optional Base URL, `contextWindow`, and `maxTokens`. Existing files without token limits receive defaults of 128000 and 16384. The default local file is `.hydro-problem-make/ai-config.json`; override it with `HYDRO_AI_CONFIG_PATH`. Saving configuration updates Agent availability immediately and does not send a model request.
 
 Set `HYDRO_ENABLE_AGENT=1` to use credentials already configured for Pi instead of the local web configuration. Optional `HYDRO_MODEL_PROVIDER` and `HYDRO_MODEL_ID` values select one available model. The server stays available with deterministic validation and packaging if no model is configured.
 

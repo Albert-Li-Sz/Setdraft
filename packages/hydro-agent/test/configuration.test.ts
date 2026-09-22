@@ -48,12 +48,16 @@ describe("HydroAiConfiguration", () => {
 			modelId,
 			apiKey: "test-api-key",
 			baseUrl: "http://127.0.0.1:11434/v1/",
+			contextWindow: 200_000,
+			maxTokens: 32_768,
 		});
 		expect(saved).toMatchObject({
 			configured: true,
 			provider: "openai-completions",
 			modelId,
 			baseUrl: "http://127.0.0.1:11434/v1",
+			contextWindow: 200_000,
+			maxTokens: 32_768,
 			apiKeyConfigured: true,
 		});
 		expect(JSON.stringify(saved)).not.toContain("test-api-key");
@@ -65,6 +69,8 @@ describe("HydroAiConfiguration", () => {
 			modelId,
 			apiKey: "test-api-key",
 			baseUrl: "http://127.0.0.1:11434/v1",
+			contextWindow: 200_000,
+			maxTokens: 32_768,
 		});
 		expect((await stat(configPath)).mode & 0o777).toBe(0o600);
 
@@ -73,6 +79,8 @@ describe("HydroAiConfiguration", () => {
 			configured: true,
 			provider: "openai-completions",
 			modelId,
+			contextWindow: 200_000,
+			maxTokens: 32_768,
 			apiKeyConfigured: true,
 		});
 		for (const provider of ["openai-responses", "anthropic-messages"]) {
@@ -85,6 +93,12 @@ describe("HydroAiConfiguration", () => {
 		}
 		await expect(restored.configure({ provider: "unknown-protocol", modelId })).rejects.toThrow("协议");
 		await expect(restored.configure({ provider: "openai-completions", modelId: "  " })).rejects.toThrow("模型名称");
+		await expect(
+			restored.configure({ provider: "openai-completions", modelId, contextWindow: 1_000 }),
+		).rejects.toThrow("上下文长度");
+		await expect(
+			restored.configure({ provider: "openai-completions", modelId, contextWindow: 8_192, maxTokens: 16_384 }),
+		).rejects.toThrow("不能超过上下文长度");
 		expect(restored.getSnapshot()).toMatchObject({
 			configured: true,
 			provider: "anthropic-messages",
@@ -140,73 +154,90 @@ describe("HydroAiConfiguration", () => {
 			provider: "openai-completions",
 			modelId: selected.id,
 			baseUrl: selected.baseUrl,
+			contextWindow: selected.contextWindow,
+			maxTokens: selected.maxTokens,
 		});
 		expect(JSON.stringify(configuration.getSnapshot())).not.toContain("ambient-test-key");
 	});
 
 	it.each([
-		{ protocol: "openai-completions", basePath: "/v1", endpoint: "/v1/chat/completions" },
-		{ protocol: "openai-responses", basePath: "/v1", endpoint: "/v1/responses" },
-		{ protocol: "anthropic-messages", basePath: "", endpoint: "/v1/messages" },
-	])("sends arbitrary model names using the selected $protocol protocol", async ({ protocol, basePath, endpoint }) => {
-		const directory = await mkdtemp(join(tmpdir(), "hydro-ai-protocol-"));
-		temporaryDirectories.push(directory);
-		const requests: { url?: string; method?: string; headers: IncomingHttpHeaders; body: string }[] = [];
-		const server = createServer((request, response) => {
-			const chunks: Buffer[] = [];
-			request.on("data", (chunk: Buffer) => chunks.push(chunk));
-			request.on("end", () => {
-				requests.push({
-					url: request.url,
-					method: request.method,
-					headers: request.headers,
-					body: Buffer.concat(chunks).toString("utf8"),
+		{
+			protocol: "openai-completions",
+			basePath: "/v1",
+			endpoint: "/v1/chat/completions",
+			outputField: "max_tokens",
+		},
+		{ protocol: "openai-responses", basePath: "/v1", endpoint: "/v1/responses", outputField: "max_output_tokens" },
+		{ protocol: "anthropic-messages", basePath: "", endpoint: "/v1/messages", outputField: "max_tokens" },
+	])(
+		"sends arbitrary model names using the selected $protocol protocol",
+		async ({ protocol, basePath, endpoint, outputField }) => {
+			const directory = await mkdtemp(join(tmpdir(), "hydro-ai-protocol-"));
+			temporaryDirectories.push(directory);
+			const requests: { url?: string; method?: string; headers: IncomingHttpHeaders; body: string }[] = [];
+			const server = createServer((request, response) => {
+				const chunks: Buffer[] = [];
+				request.on("data", (chunk: Buffer) => chunks.push(chunk));
+				request.on("end", () => {
+					requests.push({
+						url: request.url,
+						method: request.method,
+						headers: request.headers,
+						body: Buffer.concat(chunks).toString("utf8"),
+					});
+					response.writeHead(400, { "content-type": "application/json" });
+					response.end(
+						JSON.stringify({ error: { type: "invalid_request_error", message: "local-protocol-test" } }),
+					);
 				});
-				response.writeHead(400, { "content-type": "application/json" });
-				response.end(JSON.stringify({ error: { type: "invalid_request_error", message: "local-protocol-test" } }));
 			});
-		});
-		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-		try {
-			const address = server.address();
-			if (address === null || typeof address === "string") throw new Error("Missing test server address");
-			const configuration = await HydroAiConfiguration.create({
-				workspaceRoot: join(directory, "workspace"),
-				agentDir: join(directory, "agent"),
-				skillPath: fileURLToPath(new URL("../../../.pi/skills/hydro-problem-authoring/SKILL.md", import.meta.url)),
-				configPath: join(directory, "ai-config.json"),
-				modelRuntimeFactory: () =>
-					ModelRuntime.create({
-						refreshOnCreate: false,
-						allowModelNetwork: false,
-						modelsPath: null,
-						authPath: join(directory, "auth.json"),
-					}),
-			});
-			const modelId = "custom-vendor/arbitrary-model-2026";
-			await configuration.configure({
-				provider: protocol,
-				modelId,
-				apiKey: "local-test-key",
-				baseUrl: `http://127.0.0.1:${address.port}${basePath}`,
-			});
-			const outcome = await configuration.execute({
-				runId: "protocol-request",
-				source: "输出 42。",
-				signal: AbortSignal.timeout(10000),
-				onEvent: () => {},
-			});
-			expect(outcome.status).toBe("failed");
-			expect(outcome.assistantText).toContain("local-protocol-test");
-			expect(requests).toHaveLength(1);
-			expect(requests[0].method).toBe("POST");
-			expect(new URL(requests[0].url ?? "", "http://127.0.0.1").pathname).toBe(endpoint);
-			expect(JSON.parse(requests[0].body)).toMatchObject({ model: modelId, stream: true });
-			if (protocol === "anthropic-messages") expect(requests[0].headers["x-api-key"]).toBe("local-test-key");
-			else expect(requests[0].headers.authorization).toBe("Bearer local-test-key");
-		} finally {
-			server.closeAllConnections();
-			await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-		}
-	});
+			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+			try {
+				const address = server.address();
+				if (address === null || typeof address === "string") throw new Error("Missing test server address");
+				const configuration = await HydroAiConfiguration.create({
+					workspaceRoot: join(directory, "workspace"),
+					agentDir: join(directory, "agent"),
+					skillPath: fileURLToPath(
+						new URL("../../../.pi/skills/hydro-problem-authoring/SKILL.md", import.meta.url),
+					),
+					configPath: join(directory, "ai-config.json"),
+					modelRuntimeFactory: () =>
+						ModelRuntime.create({
+							refreshOnCreate: false,
+							allowModelNetwork: false,
+							modelsPath: null,
+							authPath: join(directory, "auth.json"),
+						}),
+				});
+				const modelId = "custom-vendor/arbitrary-model-2026";
+				await configuration.configure({
+					provider: protocol,
+					modelId,
+					apiKey: "local-test-key",
+					baseUrl: `http://127.0.0.1:${address.port}${basePath}`,
+					contextWindow: 65_536,
+					maxTokens: 2_048,
+				});
+				const outcome = await configuration.execute({
+					runId: "protocol-request",
+					source: "输出 42。",
+					signal: AbortSignal.timeout(10000),
+					onEvent: () => {},
+				});
+				expect(outcome.status).toBe("failed");
+				expect(outcome.assistantText).toContain("local-protocol-test");
+				expect(requests).toHaveLength(1);
+				expect(requests[0].method).toBe("POST");
+				expect(new URL(requests[0].url ?? "", "http://127.0.0.1").pathname).toBe(endpoint);
+				const requestBody = JSON.parse(requests[0].body) as Record<string, unknown>;
+				expect(requestBody).toMatchObject({ model: modelId, stream: true, [outputField]: 2_048 });
+				if (protocol === "anthropic-messages") expect(requests[0].headers["x-api-key"]).toBe("local-test-key");
+				else expect(requests[0].headers.authorization).toBe("Bearer local-test-key");
+			} finally {
+				server.closeAllConnections();
+				await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+			}
+		},
+	);
 });

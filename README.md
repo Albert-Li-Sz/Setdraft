@@ -16,7 +16,7 @@ npm run dev:hydro-web
 
 Open `http://127.0.0.1:5173`. The current UI accepts a Markdown statement, test input/output pairs, limits, tags, and attachments; it validates the normalized problem and downloads a reproducible Hydro ZIP. A green format result does not claim that the algorithm, test strength, or a real Hydro import has passed.
 
-Open **设置 → Pi Agent · AI API** to select OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages. Enter the model ID freely, an API key, and an optional Base URL. The API service stores this local configuration in `.hydro-problem-make/ai-config.json` and applies it immediately. No model request is made while saving the configuration.
+Open **设置 → Pi Agent · AI API** to select OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages. Enter the model ID freely, an API key, an optional Base URL, and the model's context/output token limits. The API service stores this local configuration in `.hydro-problem-make/ai-config.json` and applies it immediately. No model request is made while saving the configuration.
 
 Paste a complete statement and run Pi Agent to generate a standard solution, independent oracle, testlib generator and validator, data, and a C++ testlib SPJ when needed. Build the [Docker sandbox](packages/hydro-agent/README.md) first. The Agent writes the project in small persistent patches, uses cached quick checks while repairing it, and requires a complete verification before releasing a Hydro ZIP and a separate source/evidence ZIP. Uploaded code can be corrected or replaced automatically, and uploaded attachments flow through Agent packaging. **重制 / 下一题** clears the draft without cancelling saved tasks; history supports continuation, downloading and deleting records.
 

@@ -96,11 +96,11 @@ export function SettingsPage(props: SettingsPageProps) {
 							</div>
 							<div>
 								<dt>任务队列</dt>
-								<dd>单并发 · 本地保存 · 支持续接</dd>
+								<dd>默认双并发 · 本地保存 · 支持续接</dd>
 							</div>
 							<div>
 								<dt>模型预算</dt>
-								<dd>由服务端 Pi 配置控制</dd>
+								<dd>上下文与输出长度可独立设置</dd>
 							</div>
 							<div>
 								<dt>Linux 沙箱</dt>

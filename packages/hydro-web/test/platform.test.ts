@@ -54,11 +54,20 @@ describe("platform navigation and API configuration", () => {
 			configured: true,
 			provider: "openai",
 			modelId: "gpt-test",
+			contextWindow: 262_144,
+			maxTokens: 32_768,
 			apiKeyConfigured: true,
 			providers: [{ id: "openai", name: "OpenAI", models: [{ id: "gpt-test", name: "GPT Test" }] }],
 		});
-		expect(configuration).toMatchObject({ configured: true, provider: "openai", modelId: "gpt-test" });
+		expect(configuration).toMatchObject({
+			configured: true,
+			provider: "openai",
+			modelId: "gpt-test",
+			contextWindow: 262_144,
+			maxTokens: 32_768,
+		});
 		expect(readAiConfiguration({ ...configuration, apiKey: "must-not-be-here" })).toBeUndefined();
+		expect(readAiConfiguration({ ...configuration, contextWindow: 1.5 })).toBeUndefined();
 	});
 
 	it("marks algorithm and data validation as passed from verified authoring evidence", () => {

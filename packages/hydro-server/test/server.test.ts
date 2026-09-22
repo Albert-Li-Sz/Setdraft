@@ -333,6 +333,8 @@ describe("Hydro HTTP API", () => {
 					provider: input.provider,
 					modelId: input.modelId,
 					baseUrl: input.baseUrl,
+					contextWindow: input.contextWindow,
+					maxTokens: input.maxTokens,
 					apiKeyConfigured: input.apiKey !== undefined,
 					providers: [provider],
 				};
@@ -356,6 +358,8 @@ describe("Hydro HTTP API", () => {
 				modelId: "gpt-test",
 				apiKey: "secret-value",
 				baseUrl: "https://gateway.example/v1",
+				contextWindow: 262_144,
+				maxTokens: 32_768,
 			}),
 		});
 		expect(saved.status).toBe(200);
@@ -364,8 +368,17 @@ describe("Hydro HTTP API", () => {
 			modelId: "gpt-test",
 			apiKey: "secret-value",
 			baseUrl: "https://gateway.example/v1",
+			contextWindow: 262_144,
+			maxTokens: 32_768,
 		});
 		expect(JSON.stringify(await saved.json())).not.toContain("secret-value");
+
+		const invalidLength = await fetch(`${origin}/api/ai/config`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ provider: "openai", modelId: "gpt-test", contextWindow: "262144" }),
+		});
+		expect(invalidLength.status).toBe(400);
 
 		const cleared = await fetch(`${origin}/api/ai/config`, { method: "DELETE" });
 		expect(cleared.status).toBe(200);

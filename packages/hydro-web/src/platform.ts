@@ -128,6 +128,8 @@ export interface AiConfiguration {
 	provider?: string;
 	modelId?: string;
 	baseUrl?: string;
+	contextWindow?: number;
+	maxTokens?: number;
 	apiKeyConfigured: boolean;
 	providers: AiProviderOption[];
 	error?: string;
@@ -224,6 +226,13 @@ function readOptionalText(record: Record<string, unknown>, key: string): string 
 	return value === undefined || typeof value === "string" ? value : false;
 }
 
+function readOptionalPositiveInteger(record: Record<string, unknown>, key: string): number | undefined | false {
+	const value = record[key];
+	return value === undefined || (Number.isSafeInteger(value) && (value as number) > 0)
+		? (value as number | undefined)
+		: false;
+}
+
 export function readAiConfiguration(value: unknown): AiConfiguration | undefined {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 	const record = value as Record<string, unknown>;
@@ -239,7 +248,17 @@ export function readAiConfiguration(value: unknown): AiConfiguration | undefined
 	const modelId = readOptionalText(record, "modelId");
 	const baseUrl = readOptionalText(record, "baseUrl");
 	const error = readOptionalText(record, "error");
-	if (provider === false || modelId === false || baseUrl === false || error === false) return undefined;
+	const contextWindow = readOptionalPositiveInteger(record, "contextWindow");
+	const maxTokens = readOptionalPositiveInteger(record, "maxTokens");
+	if (
+		provider === false ||
+		modelId === false ||
+		baseUrl === false ||
+		error === false ||
+		contextWindow === false ||
+		maxTokens === false
+	)
+		return undefined;
 	const providers: AiProviderOption[] = [];
 	for (const item of record.providers) {
 		if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined;
@@ -261,6 +280,8 @@ export function readAiConfiguration(value: unknown): AiConfiguration | undefined
 		provider,
 		modelId,
 		baseUrl,
+		contextWindow,
+		maxTokens,
 		apiKeyConfigured: record.apiKeyConfigured,
 		providers,
 		error,
