@@ -217,11 +217,18 @@ export function createHydroServer(options: HydroServerOptions = {}): Server {
 				const { source, referenceProgram, attachments } = parseAgentRunRequest(
 					await readJson(request, maxRequestBytes),
 				);
+				if (options.sandbox) {
+					const sandboxStatus = await options.sandbox.status();
+					if (!sandboxStatus.available) {
+						sendJson(response, 503, { error: "SANDBOX_UNAVAILABLE", message: sandboxStatus.message });
+						return;
+					}
+				}
 				sendJson(response, 202, options.runManager.create(source, referenceProgram, attachments));
 				return;
 			}
 			const runRoute = url.pathname.match(
-				/^\/api\/runs\/([^/]+)(?:\/(events|cancel|archive|continue|authoring|authoring-report|live-verify))?$/,
+				/^\/api\/runs\/([^/]+)(?:\/(events|cancel|archive|continue|retry|authoring|authoring-report|live-verify))?$/,
 			);
 			if (runRoute !== null) {
 				const manager = options.runManager;
@@ -336,6 +343,21 @@ export function createHydroServer(options: HydroServerOptions = {}): Server {
 						sendJson(response, 409, {
 							error: "RUN_NOT_CONTINUABLE",
 							message: error instanceof Error ? error.message : "任务当前无法继续。",
+						});
+					}
+					return;
+				}
+				if (request.method === "POST" && action === "retry") {
+					if (!manager.getReadiness().available) {
+						sendJson(response, 503, { error: "AGENT_UNAVAILABLE", message: "请先配置可用的 AI API。" });
+						return;
+					}
+					try {
+						sendJson(response, 202, manager.retry(runId));
+					} catch (error) {
+						sendJson(response, 409, {
+							error: "RUN_NOT_RETRYABLE",
+							message: error instanceof Error ? error.message : "任务不能续接。",
 						});
 					}
 					return;

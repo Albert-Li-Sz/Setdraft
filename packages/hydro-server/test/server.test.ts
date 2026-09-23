@@ -283,6 +283,24 @@ describe("Hydro HTTP API", () => {
 		}
 	});
 
+	it("offers a bodyless retry route for a failed task", async () => {
+		const inputs: Array<Parameters<HydroAgentExecutor["execute"]>[0]> = [];
+		const manager = new HydroRunManager({
+			readiness: { available: true, models: ["fake/model"] },
+			async execute(input) {
+				inputs.push(input);
+				return { status: "failed", model: "fake/model", assistantText: "same validator error" };
+			},
+		});
+		const origin = await startServer(manager);
+		const run = manager.create("# Retry");
+		await vi.waitFor(() => expect(manager.get(run.id)?.status).toBe("failed"));
+		const response = await fetch(`${origin}/api/runs/${run.id}/retry`, { method: "POST" });
+		expect(response.status).toBe(202);
+		await vi.waitFor(() => expect(inputs).toHaveLength(2));
+		expect(inputs[1].conversation).toEqual([{ role: "assistant", content: "same validator error" }]);
+	});
+
 	it("runs standard programs through the sandbox endpoint and rejects malformed requests", async () => {
 		const calls: unknown[] = [];
 		const sandbox: HydroSandbox = {
@@ -456,6 +474,48 @@ describe("Hydro HTTP API", () => {
 		expect(zip.includes(Buffer.from("checker_type: testlib"))).toBe(true);
 		expect(zip.includes(Buffer.from("testdata/checker.cc"))).toBe(true);
 		expect(zip.includes(Buffer.from(source))).toBe(true);
+	});
+
+	it("accepts interactive and answer-only mode fields in structured requests", async () => {
+		const origin = await startServer();
+		const body = requestBody();
+		const interactive = await fetch(`${origin}/api/problems/archive`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				problem: {
+					...body.problem,
+					type: "interactive",
+					multiPass: 2,
+					interactor: '#include "testlib.h"\nint main(int argc,char**argv){registerInteraction(argc,argv);}',
+				},
+			}),
+		});
+		expect(interactive.status).toBe(200);
+		const interactiveZip = Buffer.from(await interactive.arrayBuffer());
+		expect(interactiveZip.includes(Buffer.from("multi_pass: 2"))).toBe(true);
+		const answer = await fetch(`${origin}/api/problems/archive`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				problem: {
+					...body.problem,
+					type: "submit_answer",
+					answerMode: "multi",
+					subtasks: [
+						{
+							id: 1,
+							type: "max",
+							score: 100,
+							cases: [{ inputFile: "1.in", input: "answer.txt\n", outputFile: "1.out", output: "3\n" }],
+						},
+					],
+				},
+			}),
+		});
+		expect(answer.status).toBe(200);
+		const answerZip = Buffer.from(await answer.arrayBuffer());
+		expect(answerZip.includes(Buffer.from("subType: multi"))).toBe(true);
 	});
 
 	it("validates and returns a deterministic Hydro archive", async () => {

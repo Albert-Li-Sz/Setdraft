@@ -4,11 +4,19 @@ This private package embeds Pi with the project-owned Hydro authoring Skill and 
 
 Artifacts are addressed by safe run IDs and problem slugs, then stored below `artifacts/<run-id>/hydro/` in the assigned workspace.
 
-Authoring sessions expose `run_reference_program` for exploration, `update_hydro_authoring` for persistent staged authoring, quick/full `verify_hydro_authoring`, `build_hydro_problem`, `validate_hydro_package`, and the structured `request_hydro_clarification` gate. Uploaded code is optional and replaceable; candidate tests never replace the selected reference. User attachments are injected into the final package without making the model reproduce binary content.
+Authoring sessions expose `select_hydro_judging`, `update_hydro_authoring`, `finalize_hydro_authoring`, the manual `verify_hydro_authoring`/`build_hydro_problem`/`validate_hydro_package` tools, exploratory `run_reference_program`, and structured `request_hydro_clarification`. Uploaded code is optional and replaceable; candidate tests never replace the selected reference. User attachments are injected into the final package without making the model reproduce binary content.
 
-The Agent stores programs, testlib sources and case plans in small patches, so a failed component can be replaced without retransmitting the complete project. Quick verification checks a representative subset while the model repairs the project. Full verification compiles a reference solution, independent oracle, C++ testlib generator and validator, known-wrong solutions, and an optional C++ testlib SPJ. It generates deterministic data, checks all input, runs samples and differential tests, tests validator rejection and checker probes, and requires wrong solutions to fail. Identical program runs and project revisions reuse a SHA-256 keyed cache. Building uses the successful full-verification ID and case IDs to copy the exact verified bytes with matching resource limits.
+The Agent stores programs, testlib sources and case plans in small patches, so a failed component can be replaced without retransmitting the complete project. A complete patch runs quick verification immediately and returns grouped root causes. Three distinct revisions with the same leading failure signature stop the run while retaining the draft; `/api/runs/:id/retry` resets that streak. `finalize_hydro_authoring` runs full verification, checks known-wrong score ceilings, builds the package and validates its directory. Identical project revisions reuse a SHA-256 keyed cache. Downloads use the exact full-verified draft revision, case bytes and resource limits.
 
-Private sources, seeds, data and reports live in `artifacts/<run-id>/authoring/<verification-id>/`. The separate authoring download includes these materials, the pinned testlib header and license, original statement and a SHA-256 manifest. The Hydro ZIP contains only judging files and public material; SPJ uses `checker_type: testlib` and `checker: checker.cc`. Interactive and partial-score/multi-pass checker workflows are not implemented. Local checks do not replace mathematical correctness arguments or live Hydro judging.
+Private sources, seeds, data and reports live in `artifacts/<run-id>/authoring/<verification-id>/`. The separate authoring download includes these materials, the pinned testlib header and license, original statement, toolchain versions, draft revision and a SHA-256 manifest. The Hydro ZIP contains only judging files and public material. Supported releases are ordinary batch, testlib SPJ (including partial scores), interactive with up to 20 passes, and single/multi-file answer submission. Interactive tests exercise bidirectional communication, timeout, optional query-limit probes and `nextpass.in`/`state.txt` propagation. Multi-file answer submissions test ZIP extraction, missing/corrupt archives and wrong answers. Local checks do not replace mathematical correctness arguments or optional live Hydro judging.
+
+## Complete authoring sequence
+
+1. Save the current statement and attachments. Check that the model, Docker image and requested limits are available; classify the judging mode from the statement. A conflicting old program or title does not override a complete statement.
+2. Stage the statement/scoring release plan and authoring project: reference solution, independent oracle, seeded testlib generator, strict validator, sample/boundary/random/stress cases, malformed inputs and representative wrong solutions. Add a checker, interactor or answer files for the selected mode.
+3. Let each complete draft update run quick verification. Read grouped failures, patch only the responsible fields, and preserve the same fixed seeds. If the same failure persists through three revisions, use the saved diagnosis and one-click retry after changing the approach.
+4. Call `finalize_hydro_authoring` with every case ID once. Full verification recompiles and replays all data, confirms oracle agreement, validator rejection, runtime limits, negative programs and mode-specific probes. It checks score ceilings before writing a package. Any failure withholds both downloads.
+5. Inspect the generated Hydro directory. Download the minimal Hydro ZIP and separate private authoring ZIP. The manifest records source hash, model, skill version, testlib version, toolchain, seeds and file hashes. A configured real Hydro instance can be tested separately.
 
 Build the local execution image from the repository root:
 
@@ -25,7 +33,15 @@ Pi transcripts persist in `sessions/<run-id>/`. Only a successful `request_hydro
 Run the opt-in Docker tests from this package directory:
 
 ```bash
-HYDRO_TEST_SANDBOX=1 node ../../node_modules/vitest/dist/cli.js --run test/sandbox.test.ts test/executor.test.ts test/authoring-project.test.ts
+HYDRO_TEST_SANDBOX=1 node ../../node_modules/vitest/dist/cli.js --run test/sandbox.test.ts test/executor.test.ts test/authoring-project.test.ts test/modes.test.ts
 ```
 
 The executor tests use an in-process faux AI provider; no live model calls are made.
+
+For a real speed comparison, collect multiple runs of the same statement with the same model, context window and output limit for both versions, then run:
+
+```bash
+node scripts/hydro-benchmark.mjs --workspace .hydro-problem-make --baseline id1,id2,id3 --candidate id4,id5,id6
+```
+
+The script reports median execution time, model/tool rounds and success rate, and rejects mismatched model settings. The target is at least 50% lower median time without lower success rate. Older runs without recorded model settings need a new measured baseline.

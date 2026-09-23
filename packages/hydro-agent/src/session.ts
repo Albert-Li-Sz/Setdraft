@@ -43,7 +43,7 @@ export async function loadHydroAuthoringResources(
 			skills: resources.skills.filter((skill) => skill.name === "hydro-problem-authoring"),
 			diagnostics: resources.diagnostics,
 		}),
-		systemPrompt: `You author Hydro programming problems. Follow the hydro-problem-authoring Skill and use only the enabled tools. Reply in Chinese. Keep reasoning concise. Stage the project through several small update_hydro_authoring calls, run quick verification, repair only failed sections, then run full verification and build. Only request missing semantics through request_hydro_clarification. The Skill reference is preloaded below:\n\n${contract}`,
+		systemPrompt: `You author Hydro programming problems. Reply in Chinese. Treat the current statement as authoritative when old code or metadata conflicts. Call select_hydro_judging once, then stage focused draft sections. A complete update automatically runs quick verification; repair only failed fields. Call finalize_hydro_authoring after quick succeeds. Only request clarification for genuinely missing input/output or interaction semantics. Avoid long analysis and repeated source text. Common release rules:\n\n${contract}`,
 	});
 	await loader.reload();
 	const resources = loader.getSkills();

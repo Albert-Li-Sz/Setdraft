@@ -6,6 +6,12 @@ export interface HydroLiveVerificationRequest {
 	slug: string;
 	packageDirectory: string;
 	authoringProject: HydroAuthoringProject;
+	/** Answer-only tasks submit these text files (or a ZIP of them), not program source. */
+	answerSubmission?: {
+		mode: "single" | "multi";
+		correctFiles: Array<{ name: string; content: string }>;
+		wrongSubmissions: Array<{ name: string; files: Array<{ name: string; content: string }> }>;
+	};
 }
 
 export interface HydroLiveSubmissionResult {
@@ -62,11 +68,13 @@ function normalizeAdapterOutput(
 		throw new Error("Hydro 实测导入结果格式无效。");
 	const reference = submission(value.reference, "reference");
 	if (!Array.isArray(value.wrongPrograms)) throw new Error("Hydro 实测适配器未返回错误程序结果。");
+	const expectedWrongNames = request.answerSubmission
+		? request.answerSubmission.wrongSubmissions.map((item) => item.name)
+		: request.authoringProject.wrongPrograms.map((item) => item.name);
 	const wrongPrograms = value.wrongPrograms.map((item, index) =>
-		submission(item, request.authoringProject.wrongPrograms[index]?.name ?? `wrong-${index + 1}`),
+		submission(item, expectedWrongNames[index] ?? `wrong-${index + 1}`),
 	);
-	if (wrongPrograms.length !== request.authoringProject.wrongPrograms.length)
-		throw new Error("Hydro 实测必须提交全部已知错误程序。");
+	if (wrongPrograms.length !== expectedWrongNames.length) throw new Error("Hydro 实测必须提交全部已知错误程序。");
 	const referencePassed = reference.accepted && (reference.score === undefined || reference.score === 100);
 	const wrongProgramsRejected = wrongPrograms.every((item) => !item.accepted);
 	const success = imported.success && referencePassed && wrongProgramsRejected;
@@ -137,7 +145,7 @@ export class CommandHydroLiveVerifier implements HydroLiveVerifier {
 					reject(error);
 				}
 			});
-			child.stdin.end(JSON.stringify({ version: 1, ...request }));
+			child.stdin.end(JSON.stringify({ version: request.answerSubmission ? 2 : 1, ...request }));
 		});
 	}
 }

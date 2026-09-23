@@ -81,7 +81,8 @@ function readSubtask(value: unknown, index: number): HydroSubtask {
 	const path = `problem.subtasks[${index}]`;
 	const record = readRecord(value, path);
 	const type = readString(record, "type", path);
-	if (type !== "sum" && type !== "min") throw new InvalidRequestError(`${path}.type must be sum or min.`);
+	if (type !== "sum" && type !== "min" && type !== "max")
+		throw new InvalidRequestError(`${path}.type must be sum, min or max.`);
 	return {
 		id: readInteger(record, "id", path),
 		type,
@@ -105,6 +106,12 @@ function decodeBase64(value: string, path: string): Uint8Array {
 export function parseProblemRequest(value: unknown): HydroProblemSpec {
 	const root = readRecord(value, "request");
 	const problem = readRecord(root.problem, "problem");
+	const type = readOptionalString(problem, "type", "problem");
+	if (type !== undefined && type !== "default" && type !== "interactive" && type !== "submit_answer")
+		throw new InvalidRequestError("problem.type must be default, interactive or submit_answer.");
+	const answerMode = readOptionalString(problem, "answerMode", "problem");
+	if (answerMode !== undefined && answerMode !== "single" && answerMode !== "multi")
+		throw new InvalidRequestError("problem.answerMode must be single or multi.");
 	let checker: HydroProblemSpec["checker"];
 	if (problem.checker !== undefined) {
 		const value = readRecord(problem.checker, "problem.checker");
@@ -128,6 +135,10 @@ export function parseProblemRequest(value: unknown): HydroProblemSpec {
 					};
 				});
 	return {
+		type,
+		multiPass: readOptionalInteger(problem, "multiPass", "problem"),
+		answerMode,
+		interactor: readOptionalString(problem, "interactor", "problem"),
 		slug: readString(problem, "slug", "problem"),
 		title: readString(problem, "title", "problem"),
 		pid: readOptionalString(problem, "pid", "problem"),

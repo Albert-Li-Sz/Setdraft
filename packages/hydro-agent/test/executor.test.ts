@@ -8,10 +8,10 @@ import { createFauxCore, fauxAssistantMessage, fauxThinking, fauxToolCall } from
 import type { JsonValue } from "../../ai/src/types.ts";
 import { buildAuthoringArchive } from "../src/authoring-archive.ts";
 import { createHydroAgentExecutor } from "../src/executor.ts";
-import { DockerHydroSandbox } from "../src/sandbox.ts";
+import { DockerHydroSandbox, type HydroSandbox } from "../src/sandbox.ts";
 import { divisorProject, noInputProject } from "./authoring-fixtures.ts";
 
-async function fixture(withSandbox = false, maxTokens = 16384) {
+async function fixture(withSandbox: boolean | HydroSandbox = false, maxTokens = 16384) {
 	const workspaceRoot = await mkdtemp(join(tmpdir(), "hydro-executor-"));
 	const faux = createFauxCore({ provider: "hydro-faux", models: [{ id: "faux-1", maxTokens }] });
 	const runtime = await ModelRuntime.create({
@@ -33,7 +33,7 @@ async function fixture(withSandbox = false, maxTokens = 16384) {
 		skillPath: fileURLToPath(new URL("../../../.pi/skills/hydro-problem-authoring/SKILL.md", import.meta.url)),
 		modelRuntime: runtime,
 		provider: "hydro-faux",
-		sandbox: withSandbox ? new DockerHydroSandbox() : undefined,
+		sandbox: withSandbox === true ? new DockerHydroSandbox() : withSandbox || undefined,
 	});
 	return {
 		workspaceRoot,
@@ -47,6 +47,169 @@ async function fixture(withSandbox = false, maxTokens = 16384) {
 }
 
 describe("Pi authoring executor", () => {
+	it("auto-checks a complete staged draft and finalizes in one call", async () => {
+		const modes: string[] = [];
+		const fakeSandbox: HydroSandbox = {
+			status: async () => ({ available: true, image: "faux", message: "ready" }),
+			run: async () => {
+				throw new Error("Unexpected exploratory run");
+			},
+			verifyProject: async (_project, options) => {
+				modes.push(options?.mode ?? "full");
+				return {
+					success: true,
+					mode: options?.mode ?? "full",
+					checks: [
+						{ stage: "generator", passed: true, message: "ok" },
+						{ stage: "oracle", passed: true, message: "ok" },
+						{ stage: "validator-negative", passed: true, message: "ok" },
+						{ stage: "wrong-program-killed", passed: true, message: "ok" },
+					],
+					cases: [
+						{ id: "empty", input: "", output: "42\n", durationMs: 1, timeLimitMs: 1000, memoryLimitMb: 256 },
+					],
+				};
+			},
+		};
+		const f = await fixture(fakeSandbox);
+		try {
+			const { reference, ...rest } = noInputProject;
+			f.faux.setResponses([
+				fauxAssistantMessage(fauxToolCall("select_hydro_judging", { type: "default" }), { stopReason: "toolUse" }),
+				fauxAssistantMessage(fauxToolCall("update_hydro_authoring", { patch: { reference } }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(fauxToolCall("update_hydro_authoring", { patch: rest as JsonValue }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					fauxToolCall("finalize_hydro_authoring", {
+						problem: {
+							slug: "forty-two",
+							title: "42",
+							tags: [],
+							language: "zh",
+							statement: "输出 42。",
+							timeLimit: "1s",
+							memoryLimit: "256m",
+							subtasks: [
+								{
+									id: 1,
+									type: "sum",
+									score: 100,
+									cases: [{ caseId: "empty", inputFile: "1.in", outputFile: "1.out" }],
+								},
+							],
+						},
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("验证通过。"),
+			]);
+			const result = await f.executor.execute({
+				runId: "auto-finalize",
+				source: "输出 42。",
+				signal: new AbortController().signal,
+				onEvent: () => {},
+			});
+			expect(result.status, JSON.stringify(result)).toBe("succeeded");
+			expect(modes).toEqual(["quick", "full"]);
+			expect(result.metrics).toMatchObject({ quickVerifications: 1, fullVerifications: 1 });
+		} finally {
+			await f.cleanup();
+		}
+	});
+
+	it("stops after the same quick failure on three distinct revisions", async () => {
+		const fakeSandbox: HydroSandbox = {
+			status: async () => ({ available: true, image: "faux", message: "ready" }),
+			run: async () => {
+				throw new Error("Unexpected exploratory run");
+			},
+			verifyProject: async () => ({
+				success: false,
+				mode: "quick",
+				checks: [
+					{
+						stage: "compile:validator",
+						passed: false,
+						message: "/work/validator/main.cpp:12:3: error: invalid validator",
+					},
+				],
+				cases: [],
+			}),
+		};
+		const f = await fixture(fakeSandbox);
+		try {
+			f.faux.setResponses([
+				fauxAssistantMessage(fauxToolCall("update_hydro_authoring", { patch: noInputProject as JsonValue }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					fauxToolCall("update_hydro_authoring", {
+						patch: { validator: `${noInputProject.validator}\n// revision 2` },
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					fauxToolCall("update_hydro_authoring", {
+						patch: { validator: `${noInputProject.validator}\n// revision 3` },
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("继续分析。"),
+			]);
+			const result = await f.executor.execute({
+				runId: "same-failure",
+				source: "输出 42。",
+				signal: new AbortController().signal,
+				onEvent: () => {},
+			});
+			expect(result.status).toBe("failed");
+			expect(result.assistantText).toContain("连续三个不同草稿版本");
+			expect(result.failureReason).toContain("invalid validator");
+		} finally {
+			await f.cleanup();
+		}
+	});
+	it("shows the grouped validation cause when a repair attempt ends without a package", async () => {
+		const fakeSandbox: HydroSandbox = {
+			status: async () => ({ available: true, image: "faux", message: "ready" }),
+			run: async () => {
+				throw new Error("Unexpected exploratory run");
+			},
+			verifyProject: async () => ({
+				success: false,
+				mode: "quick",
+				checks: [
+					{ stage: "compile:validator", passed: false, message: "error: wrong testlib API" },
+					{ stage: "compile:validator", passed: false, message: "error: wrong testlib API" },
+				],
+				cases: [],
+			}),
+		};
+		const f = await fixture(fakeSandbox);
+		try {
+			f.faux.setResponses([
+				fauxAssistantMessage(fauxToolCall("update_hydro_authoring", { patch: noInputProject as JsonValue }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("暂时无法修复。"),
+				fauxAssistantMessage("仍未修复。"),
+				fauxAssistantMessage("稍后再试。"),
+			]);
+			const result = await f.executor.execute({
+				runId: "quick-diagnosis",
+				source: "输出 42。",
+				signal: new AbortController().signal,
+				onEvent: () => {},
+			});
+			expect(result.status).toBe("failed");
+			expect(result.failureReason).toContain("compile:validator：error: wrong testlib API（重复 2 次）");
+		} finally {
+			await f.cleanup();
+		}
+	});
 	it("restores its Pi transcript when a user answers a clarification", async () => {
 		const f = await fixture();
 		try {

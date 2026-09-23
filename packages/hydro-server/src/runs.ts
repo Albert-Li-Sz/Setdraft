@@ -8,6 +8,8 @@ import type {
 	HydroAgentAttachment,
 	HydroAgentExecutionOutcome,
 	HydroAgentExecutor,
+	HydroAgentMetrics,
+	HydroAgentModelSettings,
 	HydroAgentPhase,
 	HydroAgentProgressEvent,
 	HydroConversationMessage,
@@ -35,11 +37,14 @@ export interface HydroRunListItem {
 	createdAt: string;
 	updatedAt: string;
 	model?: string;
+	modelSettings?: HydroAgentModelSettings;
+	judgingType?: "default" | "interactive" | "submit_answer";
 	artifact?: HydroRunArtifact;
 	phase?: HydroAgentPhase;
 	phaseMessage?: string;
 	phaseStartedAt?: string;
 	lastEventSequence: number;
+	metrics?: HydroAgentMetrics;
 }
 
 export interface HydroRunSnapshot extends HydroRunListItem {
@@ -54,11 +59,13 @@ export interface HydroRunSnapshot extends HydroRunListItem {
 export interface HydroRunEvent {
 	sequence: number;
 	runId: string;
-	type: "status" | "text_delta" | "tool" | "phase";
+	type: "status" | "text_delta" | "tool" | "phase" | "metrics" | "judging_type";
 	createdAt: string;
 	message: string;
 	status?: HydroRunStatus;
 	phase?: HydroAgentPhase;
+	metrics?: HydroAgentMetrics;
+	judgingType?: "default" | "interactive" | "submit_answer";
 }
 
 interface MutableRun extends HydroRunSnapshot {
@@ -96,6 +103,8 @@ function compactAuthoringSummary(summary: AuthoringSummary | undefined): Authori
 	if (!summary) return undefined;
 	return {
 		verificationId: summary.verificationId,
+		revision: summary.revision,
+		type: summary.type,
 		success: summary.success,
 		testCases: summary.testCases,
 		generatedCases: summary.generatedCases,
@@ -120,6 +129,8 @@ function listItem(run: MutableRun): HydroRunListItem {
 		createdAt: run.createdAt,
 		updatedAt: run.updatedAt,
 		model: run.model,
+		modelSettings: run.modelSettings,
+		judgingType: run.judgingType,
 		artifact: run.artifact
 			? {
 					slug: run.artifact.slug,
@@ -132,6 +143,7 @@ function listItem(run: MutableRun): HydroRunListItem {
 		phaseMessage: run.phaseMessage,
 		phaseStartedAt: run.phaseStartedAt,
 		lastEventSequence: run.eventSequence,
+		metrics: run.metrics,
 	};
 }
 
@@ -199,6 +211,7 @@ export class HydroRunManager {
 			referenceProgram,
 			attachments,
 			lastEventSequence: 0,
+			metrics: undefined,
 			eventSequence: 0,
 			events: [],
 			listeners: new Set(),
@@ -219,17 +232,32 @@ export class HydroRunManager {
 			attachments?: HydroAgentAttachment[] | null;
 		},
 	): HydroRunSnapshot {
+		return this.resume(runId, input.message, input.referenceProgram, input.attachments);
+	}
+
+	retry(runId: string): HydroRunSnapshot {
+		return this.resume(runId);
+	}
+
+	private resume(
+		runId: string,
+		message?: string,
+		referenceProgram?: HydroReferenceProgram | null,
+		attachments?: HydroAgentAttachment[] | null,
+	): HydroRunSnapshot {
 		const run = this.runs.get(runId);
 		if (run === undefined) throw new Error("任务不存在。");
 		if (!["needs_input", "failed", "cancelled"].includes(run.status) || run.abortController || run.deleting)
 			throw new Error("当前任务尚未结束或已经完成，不能继续。");
-		const message = input.message.trim();
-		if (!message || message.length > 200_000) throw new Error("补充信息须为 1–200000 个字符。");
+		const normalizedMessage = message?.trim();
+		if (message !== undefined && (!normalizedMessage || normalizedMessage.length > 200_000))
+			throw new Error("补充信息须为 1–200000 个字符。");
 		if (run.assistantText) run.conversation.push({ role: "assistant", content: run.assistantText });
-		run.conversation.push({ role: "user", content: message });
-		if (input.referenceProgram !== undefined) run.referenceProgram = input.referenceProgram ?? undefined;
-		if (input.attachments !== undefined) run.attachments = input.attachments ?? [];
+		if (normalizedMessage) run.conversation.push({ role: "user", content: normalizedMessage });
+		if (referenceProgram !== undefined) run.referenceProgram = referenceProgram ?? undefined;
+		if (attachments !== undefined) run.attachments = attachments ?? [];
 		run.assistantText = "";
+		run.metrics = undefined;
 		run.error = undefined;
 		run.status = "queued";
 		run.phase = undefined;
@@ -237,7 +265,11 @@ export class HydroRunManager {
 		run.phaseStartedAt = undefined;
 		run.updatedAt = new Date().toISOString();
 		this.queue.push(run.id);
-		this.emit(run, { type: "status", status: "queued", message: "已收到补充信息，继续任务。" });
+		this.emit(run, {
+			type: "status",
+			status: "queued",
+			message: normalizedMessage ? "已收到补充信息，继续任务。" : "已从保存草稿继续修复。",
+		});
 		this.persist(run);
 		void this.drain();
 		return snapshot(run);
@@ -295,6 +327,28 @@ export class HydroRunManager {
 			slug: run.artifact.slug,
 			packageDirectory: run.artifactDirectory,
 			authoringProject: evidence.project,
+			answerSubmission:
+				evidence.project.type === "submit_answer"
+					? {
+							mode: evidence.project.answerMode ?? "single",
+							correctFiles: evidence.report.cases.map((item) => ({
+								name:
+									evidence.project.cases.find((entry) => entry.id === item.id)?.submissionFile ?? "answer.txt",
+								content: item.output,
+							})),
+							wrongSubmissions: [
+								{
+									name: "extra-token-answer",
+									files: evidence.report.cases.map((item) => ({
+										name:
+											evidence.project.cases.find((entry) => entry.id === item.id)?.submissionFile ??
+											"answer.txt",
+										content: `${item.output}\n__definitely_wrong_extra_token__\n`,
+									})),
+								},
+							],
+						}
+					: undefined,
 		};
 	}
 
@@ -387,6 +441,20 @@ export class HydroRunManager {
 			this.persist(run);
 			return;
 		}
+		if (event.type === "metrics") {
+			run.metrics = event.metrics;
+			run.updatedAt = new Date().toISOString();
+			this.emit(run, { type: "metrics", message: "任务统计已更新", metrics: event.metrics });
+			this.persist(run);
+			return;
+		}
+		if (event.type === "judging_type") {
+			run.judgingType = event.judgingType;
+			run.updatedAt = new Date().toISOString();
+			this.emit(run, { type: "judging_type", message: "已选择判题类型", judgingType: event.judgingType });
+			this.persist(run);
+			return;
+		}
 		const message =
 			event.type === "tool_started"
 				? `开始执行 ${event.toolName}`
@@ -396,7 +464,10 @@ export class HydroRunManager {
 
 	private applyOutcome(run: MutableRun, outcome: HydroAgentExecutionOutcome): void {
 		run.model = outcome.model;
+		if (outcome.modelSettings) run.modelSettings = outcome.modelSettings;
 		run.assistantText = outcome.assistantText;
+		if (outcome.metrics) run.metrics = outcome.metrics;
+		if (outcome.failureReason) run.error = outcome.failureReason;
 		if (outcome.artifact !== undefined) {
 			run.artifact = {
 				slug: outcome.artifact.slug,
@@ -525,6 +596,9 @@ export class HydroRunManager {
 				createdAt: stored.createdAt,
 				updatedAt: stored.updatedAt,
 				model: stored.model,
+				modelSettings: stored.modelSettings,
+				judgingType: stored.judgingType,
+				metrics: stored.metrics,
 				assistantText: stored.assistantText ?? "",
 				error: interrupted ? "服务已重启，请点击继续任务。" : stored.error,
 				artifact: normalizeArtifact(stored.artifact),

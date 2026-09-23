@@ -30,7 +30,10 @@ export function buildHydroProblemFiles(spec: HydroProblemSpec): ReadonlyMap<stri
 	files.set(`problem_${spec.language}.md`, asBytes(ensureTrailingNewline(spec.statement)));
 
 	const config = {
-		type: "default",
+		type: spec.type ?? "default",
+		...(spec.multiPass ? { multi_pass: spec.multiPass } : {}),
+		...(spec.type === "submit_answer" && spec.answerMode === "multi" ? { subType: "multi" } : {}),
+		...(spec.type === "interactive" ? { interactor: "interactor.cc" } : {}),
 		checker_type: spec.checker?.type ?? "default",
 		...(spec.checker ? { checker: "checker.cc" } : {}),
 		time: spec.timeLimit,
@@ -58,6 +61,7 @@ export function buildHydroProblemFiles(spec: HydroProblemSpec): ReadonlyMap<stri
 	};
 	files.set("testdata/config.yaml", asBytes(serializeYaml(config)));
 	if (spec.checker) files.set("testdata/checker.cc", asBytes(spec.checker.source));
+	if (spec.type === "interactive" && spec.interactor) files.set("testdata/interactor.cc", asBytes(spec.interactor));
 	for (const subtask of spec.subtasks) {
 		for (const testCase of subtask.cases) {
 			files.set(`testdata/${testCase.inputFile}`, asBytes(testCase.input));

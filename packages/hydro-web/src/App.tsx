@@ -390,6 +390,37 @@ export function App() {
 				// The final run snapshot remains authoritative.
 			}
 		});
+		source.addEventListener("metrics", (event) => {
+			if (!isCurrent() || !(event instanceof MessageEvent) || typeof event.data !== "string") return;
+			try {
+				const data = JSON.parse(event.data) as Record<string, unknown>;
+				if (typeof data.metrics !== "object" || data.metrics === null) return;
+				setAgentRun((current) =>
+					current?.id === runId ? { ...current, metrics: data.metrics as AgentRun["metrics"] } : current,
+				);
+			} catch {
+				// The final snapshot remains authoritative.
+			}
+		});
+		source.addEventListener("judging_type", (event) => {
+			if (!isCurrent() || !(event instanceof MessageEvent) || typeof event.data !== "string") return;
+			try {
+				const data = JSON.parse(event.data) as Record<string, unknown>;
+				if (
+					data.judgingType !== "default" &&
+					data.judgingType !== "interactive" &&
+					data.judgingType !== "submit_answer"
+				)
+					return;
+				setAgentRun((current) =>
+					current?.id === runId
+						? { ...current, judgingType: data.judgingType as AgentRun["judgingType"] }
+						: current,
+				);
+			} catch {
+				// The final snapshot remains authoritative.
+			}
+		});
 		source.addEventListener("status", (event) => {
 			if (!isCurrent()) return;
 			if (!(event instanceof MessageEvent) || typeof event.data !== "string") return;
@@ -467,7 +498,7 @@ export function App() {
 		}
 	}
 
-	async function continueAgentRun(message: string): Promise<boolean> {
+	async function continueAgentRun(message?: string): Promise<boolean> {
 		if (!agentRun) return false;
 		workspaceRevision.current += 1;
 		const revision = workspaceRevision.current;
@@ -475,14 +506,21 @@ export function App() {
 		eventSourceRef.current = undefined;
 		setBusyAction("continue");
 		try {
-			const response = await fetch(apiUrl(apiOrigin, `/runs/${agentRun.id}/continue`), {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					message,
-					referenceProgram: taskReferenceProgram.code.trim() ? taskReferenceProgram : null,
-				}),
-			});
+			const response = await fetch(
+				apiUrl(apiOrigin, `/runs/${agentRun.id}/${message === undefined ? "retry" : "continue"}`),
+				{
+					method: "POST",
+					...(message === undefined
+						? {}
+						: {
+								headers: { "content-type": "application/json" },
+								body: JSON.stringify({
+									message,
+									referenceProgram: taskReferenceProgram.code.trim() ? taskReferenceProgram : null,
+								}),
+							}),
+				},
+			);
 			const body = (await response.json()) as unknown;
 			if (!response.ok) throw new Error(errorMessage(body));
 			const run = readAgentRun(body);
@@ -854,6 +892,7 @@ export function App() {
 											setContinuationDrafts((current) => ({ ...current, [agentRun.id]: message }));
 									}}
 									onContinue={continueAgentRun}
+									onRetry={() => continueAgentRun()}
 									onCancel={() => void cancelAgentRun()}
 									onEditProgram={() => {
 										setEditingTaskProgram(true);

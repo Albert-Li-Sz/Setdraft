@@ -24,10 +24,12 @@ export async function buildAuthoringArchive(
 	};
 	program("reference", evidence.project.reference);
 	program("oracle", evidence.project.oracle);
+	if (evidence.project.queryLimitProbe) program("query-limit-probe", evidence.project.queryLimitProbe);
 	for (const [index, item] of evidence.project.wrongPrograms.entries()) program(`wrong-${index + 1}`, item.program);
 	add("generator.cc", evidence.project.generator);
 	add("validator.cc", evidence.project.validator);
 	if (evidence.project.checker) add("checker.cc", evidence.project.checker);
+	if (evidence.project.interactor) add("interactor.cc", evidence.project.interactor);
 	add("analysis.md", evidence.project.analysis);
 	if (context.source) add("original-statement.md", context.source);
 	add("project.json", JSON.stringify(evidence.project, null, 2));
@@ -62,7 +64,15 @@ export async function buildAuthoringArchive(
 			{
 				runId,
 				verificationId,
+				draftRevision: evidence.summary.revision,
+				problemType: evidence.project.type ?? "default",
 				model: context.model,
+				sourceSha256: context.source ? createHash("sha256").update(context.source).digest("hex") : undefined,
+				skillVersion: "hydro-problem-authoring/2",
+				toolchain: evidence.report.toolchain,
+				seeds: Object.fromEntries(
+					evidence.project.cases.filter((item) => item.generatorArgs).map((item) => [item.id, item.generatorArgs]),
+				),
 				testlibCommit: "1e4e8a24c79c6bad3becbdb5a332ffc352b7d5dd",
 				sha256: Object.fromEntries(
 					[...files].map(([name, bytes]) => [name, createHash("sha256").update(bytes).digest("hex")]),

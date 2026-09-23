@@ -171,7 +171,7 @@ export class DockerHydroSandbox implements HydroSandbox {
 		options: { mode?: HydroAuthoringVerificationMode; signal?: AbortSignal } = {},
 	): Promise<HydroAuthoringReport> {
 		validateAuthoringProject(project);
-		return JSON.parse(
+		const report = JSON.parse(
 			await this.execute(
 				authoringRunner,
 				{ ...project, verificationMode: options.mode ?? "full" },
@@ -179,6 +179,7 @@ export class DockerHydroSandbox implements HydroSandbox {
 				options.signal,
 			),
 		) as HydroAuthoringReport;
+		return { ...report, toolchain: { ...report.toolchain, sandboxImage: this.image } };
 	}
 
 	private async execute(runner: string, payload: unknown, timeoutMs: number, signal?: AbortSignal): Promise<string> {

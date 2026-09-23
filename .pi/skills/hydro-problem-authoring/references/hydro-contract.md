@@ -1,6 +1,6 @@
 # Hydro release contract
 
-This reference describes the platform's batch-problem and testlib SPJ target. The implementation and live test instance determine acceptance when they disagree with prose.
+This reference describes the common release contract. The platform also supports interactive and answer-submission modes. The implementation and live test instance determine acceptance when they disagree with prose.
 
 ## Release package
 
@@ -43,7 +43,7 @@ subtasks:
 ```
 
 - Scores across subtasks total exactly 100.
-- Use `sum` for point scoring and `min` for bundled subtasks.
+- Use `sum` for point scoring, `min` for bundled subtasks, or `max` for the best case.
 - Give every subtask an explicit positive integer `id`. Dependencies refer to those IDs and require live scoring verification.
 - Do not mix deprecated top-level `cases` with `subtasks`.
 - Every input and output reference exists exactly once.
@@ -57,6 +57,10 @@ and `checker: checker.cc`. The platform writes the verified C++ source to
 `testdata/checker.cc`; Hydro provides `testlib.h` automatically. Local execution
 uses the same argument order: checker input contestant-output reference-output.
 Source: https://hydro.js.org/zh/docs/Hydro/user/testdata .
+
+For interactive tasks set `type: interactive`, `interactor: interactor.cc`, and include the verified source in `testdata/`. The interactor exchanges data through standard input/output, using `registerInteraction(argc, argv)`. For 2–20 passes, set `multi_pass` and have the interactor write `nextpass.in` and optional `state.txt` after accepted passes. Local full verification checks bidirectional communication, timeout, query-limit probe when supplied, and state propagation.
+
+For answer submission set `type: submit_answer`. Omit `subType` for a single text file; use `subType: multi` for a ZIP. In multi mode each `.in` contains the target filename inside the ZIP. Public input material is exported to `additional_file/<caseId>.input.txt`; the `.out` contains the answer. Missing entries, corrupt ZIPs, wrong answers and partial scores are verified locally. The statement should link or explain the public files.
 
 Authoring sources use testlib pinned at
 `1e4e8a24c79c6bad3becbdb5a332ffc352b7d5dd` from

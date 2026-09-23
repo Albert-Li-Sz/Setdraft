@@ -15,6 +15,7 @@ interface Props {
 	liveBusy: boolean;
 	onContinuationMessageChange: (message: string) => void;
 	onContinue: (message: string) => Promise<boolean>;
+	onRetry: () => Promise<boolean>;
 	onCancel: () => void;
 	onEditProgram: () => void;
 	onLiveVerify: () => void;
@@ -35,6 +36,7 @@ export function ValidationTab(props: Props) {
 					message={props.continuationMessage}
 					onMessageChange={props.onContinuationMessageChange}
 					onContinue={props.onContinue}
+					onRetry={props.onRetry}
 					onCancel={props.onCancel}
 					onEditProgram={props.onEditProgram}
 					liveHydroConfigured={props.liveHydroConfigured}

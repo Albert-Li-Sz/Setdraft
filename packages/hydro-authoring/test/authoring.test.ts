@@ -105,6 +105,59 @@ describe("Hydro authoring contract", () => {
 		}
 	});
 
+	it("writes and validates single/multi-pass interactive configuration", async () => {
+		const root = await mkdtemp(join(tmpdir(), "hydro-interactive-format-"));
+		try {
+			const spec: HydroProblemSpec = {
+				...validSpec,
+				type: "interactive",
+				multiPass: 2,
+				interactor: '#include "testlib.h"\nint main(int argc,char**argv){registerInteraction(argc,argv);}',
+			};
+			const directory = await writeHydroProblemDirectory(spec, root);
+			const report = await validateHydroDirectory(directory);
+			expect(report.valid, JSON.stringify(report.issues)).toBe(true);
+			const archive = readStoredZipEntries(await buildHydroDirectoryArchive(directory));
+			expect(archive.get("a-plus-b/testdata/config.yaml")?.toString()).toContain("multi_pass: 2");
+			expect(archive.get("a-plus-b/testdata/interactor.cc")?.toString()).toBe(spec.interactor);
+			await rm(join(directory, "testdata/interactor.cc"));
+			expect(
+				(await validateHydroDirectory(directory)).issues.some((item) => item.code === "MISSING_INTERACTOR"),
+			).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("requires safe ZIP entry pointers for multi-file answer submissions", async () => {
+		const root = await mkdtemp(join(tmpdir(), "hydro-answer-format-"));
+		try {
+			const spec: HydroProblemSpec = {
+				...validSpec,
+				type: "submit_answer",
+				answerMode: "multi",
+				subtasks: [
+					{
+						...validSpec.subtasks[0],
+						type: "max",
+						cases: [
+							{ inputFile: "1.in", input: "first.ans\n", outputFile: "1.out", output: "3\n" },
+							{ inputFile: "2.in", input: "second.ans\n", outputFile: "2.out", output: "4\n" },
+						],
+					},
+				],
+			};
+			const directory = await writeHydroProblemDirectory(spec, root);
+			expect((await validateHydroDirectory(directory)).valid).toBe(true);
+			const archive = readStoredZipEntries(await buildHydroDirectoryArchive(directory));
+			expect(archive.get("a-plus-b/testdata/config.yaml")?.toString()).toContain("subType: multi");
+			await rm(join(directory, "testdata/2.in"));
+			expect((await validateHydroDirectory(directory)).valid).toBe(false);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("builds a deterministic Hydro import archive with one top-level problem directory", () => {
 		const first = buildHydroProblemArchive(validSpec);
 		const second = buildHydroProblemArchive(validSpec);

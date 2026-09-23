@@ -69,6 +69,30 @@ function validateDependencyGraph(spec: HydroProblemSpec, issues: ValidationIssue
 
 export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationReport {
 	const issues: ValidationIssue[] = [];
+	const problemType = spec.type ?? "default";
+	if (!["default", "interactive", "submit_answer"].includes(problemType))
+		addIssue(issues, "INVALID_PROBLEM_TYPE", "type", "Use default, interactive, or submit_answer.");
+	if (problemType === "interactive") {
+		if (!spec.interactor?.trim() || !spec.interactor.includes("registerInteraction("))
+			addIssue(issues, "MISSING_INTERACTOR", "interactor", "Provide a C++ testlib interactor.");
+	} else if (spec.interactor !== undefined)
+		addIssue(issues, "UNEXPECTED_INTERACTOR", "interactor", "Only interactive problems use an interactor.");
+	if (
+		spec.multiPass !== undefined &&
+		(!Number.isInteger(spec.multiPass) || spec.multiPass < 2 || spec.multiPass > 20 || problemType !== "interactive")
+	)
+		addIssue(
+			issues,
+			"INVALID_MULTI_PASS",
+			"multiPass",
+			"This local pipeline verifies 2–20 passes for interactive problems.",
+		);
+	if (problemType === "interactive" && spec.checker)
+		addIssue(issues, "UNEXPECTED_CHECKER", "checker", "Interactive problems are scored by the interactor.");
+	if (problemType === "submit_answer" && !["single", "multi"].includes(spec.answerMode ?? "single"))
+		addIssue(issues, "INVALID_ANSWER_MODE", "answerMode", "Use single or multi answer mode.");
+	if (problemType !== "submit_answer" && spec.answerMode !== undefined)
+		addIssue(issues, "UNEXPECTED_ANSWER_MODE", "answerMode", "Answer mode is only valid for submit_answer.");
 	if (spec.checker && (spec.checker.type !== "testlib" || !spec.checker.source.trim()))
 		addIssue(issues, "INVALID_CHECKER", "checker", "Provide the complete C++ testlib checker source.");
 	if (!isSafeFlatName(spec.slug)) {
@@ -103,7 +127,9 @@ export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationRepo
 	if (spec.subtasks.length === 0) addIssue(issues, "MISSING_SUBTASK", "subtasks", "At least one subtask is required.");
 	const subtaskIds = new Set<number>();
 	const testFiles = new Set<string>();
+	const answerFiles = new Set<string>();
 	let totalScore = 0;
+	let totalCases = 0;
 	for (const [subtaskIndex, subtask] of spec.subtasks.entries()) {
 		const subtaskPath = `subtasks[${subtaskIndex}]`;
 		if (!Number.isSafeInteger(subtask.id) || subtask.id <= 0) {
@@ -145,7 +171,29 @@ export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationRepo
 			);
 		}
 		for (const [caseIndex, testCase] of subtask.cases.entries()) {
+			totalCases += 1;
 			const casePath = `${subtaskPath}.cases[${caseIndex}]`;
+			if (problemType === "submit_answer") {
+				const input =
+					typeof testCase.input === "string" ? testCase.input : new TextDecoder().decode(testCase.input);
+				if (spec.answerMode === "multi") {
+					const answerFile = input.trim();
+					if (!isSafeFlatName(answerFile) || answerFiles.has(answerFile))
+						addIssue(
+							issues,
+							"INVALID_ANSWER_FILE",
+							`${casePath}.input`,
+							"Each multi-file case must name one unique flat ZIP entry.",
+						);
+					answerFiles.add(answerFile);
+				} else if (input.length > 0)
+					addIssue(
+						issues,
+						"INVALID_SINGLE_ANSWER_INPUT",
+						`${casePath}.input`,
+						"Single-file answer cases use an empty .in file.",
+					);
+			}
 			for (const [field, fileName] of [
 				["inputFile", testCase.inputFile],
 				["outputFile", testCase.outputFile],
@@ -199,6 +247,13 @@ export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationRepo
 			}
 		}
 	}
+	if (problemType === "submit_answer" && spec.answerMode !== "multi" && totalCases !== 1)
+		addIssue(
+			issues,
+			"INVALID_SINGLE_ANSWER_CASES",
+			"subtasks",
+			"Single-file answer submission requires exactly one complete answer case.",
+		);
 	if (totalScore !== 100)
 		addIssue(issues, "INVALID_TOTAL_SCORE", "subtasks", `Subtask scores total ${totalScore}; expected 100.`);
 

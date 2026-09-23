@@ -11,14 +11,24 @@ const cppSource = Type.String({
 });
 
 export const authoringProjectSchema = Type.Object({
+	type: Type.Optional(
+		Type.Union([Type.Literal("default"), Type.Literal("interactive"), Type.Literal("submit_answer")]),
+	),
+	multiPass: Type.Optional(Type.Integer({ minimum: 2, maximum: 20 })),
+	answerMode: Type.Optional(Type.Union([Type.Literal("single"), Type.Literal("multi")])),
 	reference: programSchema,
 	oracle: programSchema,
 	generator: cppSource,
 	validator: cppSource,
 	checker: Type.Optional(cppSource),
+	interactor: Type.Optional(cppSource),
+	queryLimitProbe: Type.Optional(programSchema),
 	cases: Type.Array(
 		Type.Object({
 			id: Type.String({ description: "Unique flat ASCII case ID, used later by build_hydro_problem" }),
+			submissionFile: Type.Optional(
+				Type.String({ description: "For multi-file submit_answer: required filename inside contestant ZIP" }),
+			),
 			purpose: Type.Union([
 				Type.Literal("sample"),
 				Type.Literal("boundary"),
@@ -56,6 +66,7 @@ export const authoringProjectSchema = Type.Object({
 				caseId: Type.String(),
 				output: Type.String(),
 				accept: Type.Boolean(),
+				score: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
 				description: Type.String(),
 			}),
 			{
@@ -64,10 +75,17 @@ export const authoringProjectSchema = Type.Object({
 			},
 		),
 	),
-	wrongPrograms: Type.Array(Type.Object({ name: Type.String(), program: programSchema }), {
-		minItems: 1,
-		maxItems: 10,
-	}),
+	wrongPrograms: Type.Array(
+		Type.Object({
+			name: Type.String(),
+			program: programSchema,
+			maxScore: Type.Optional(Type.Integer({ minimum: 0, maximum: 99 })),
+		}),
+		{
+			minItems: 1,
+			maxItems: 10,
+		},
+	),
 	timeLimitMs: Type.Integer({ minimum: 50, maximum: 10000 }),
 	memoryLimitMb: Type.Integer({ minimum: 32, maximum: 512 }),
 	analysis: Type.String({
@@ -79,11 +97,16 @@ export const authoringProjectSchema = Type.Object({
 
 export const authoringProjectPatchSchema = Type.Object(
 	{
+		type: Type.Optional(authoringProjectSchema.properties.type),
+		multiPass: Type.Optional(authoringProjectSchema.properties.multiPass),
+		answerMode: Type.Optional(authoringProjectSchema.properties.answerMode),
 		reference: Type.Optional(programSchema),
 		oracle: Type.Optional(programSchema),
 		generator: Type.Optional(cppSource),
 		validator: Type.Optional(cppSource),
 		checker: Type.Optional(Type.Union([cppSource, Type.Null()])),
+		interactor: Type.Optional(Type.Union([cppSource, Type.Null()])),
+		queryLimitProbe: Type.Optional(programSchema),
 		cases: Type.Optional(authoringProjectSchema.properties.cases),
 		invalidInputs: Type.Optional(authoringProjectSchema.properties.invalidInputs),
 		checkerProbes: Type.Optional(Type.Union([authoringProjectSchema.properties.checkerProbes, Type.Null()])),

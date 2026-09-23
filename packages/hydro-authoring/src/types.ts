@@ -1,4 +1,5 @@
-export type HydroSubtaskType = "sum" | "min";
+export type HydroSubtaskType = "sum" | "min" | "max";
+export type HydroProblemType = "default" | "interactive" | "submit_answer";
 
 export interface HydroTestCase {
 	inputFile: string;
@@ -25,6 +26,10 @@ export interface HydroAttachment {
 }
 
 export interface HydroProblemSpec {
+	type?: HydroProblemType;
+	multiPass?: number;
+	answerMode?: "single" | "multi";
+	interactor?: string;
 	slug: string;
 	title: string;
 	pid?: string;

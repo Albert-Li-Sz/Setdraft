@@ -30,6 +30,8 @@ export interface AgentRunSummary {
 	createdAt: string;
 	updatedAt: string;
 	model?: string;
+	modelSettings?: { contextWindow: number; maxTokens: number };
+	judgingType?: "default" | "interactive" | "submit_answer";
 	artifact?: {
 		slug: string;
 		report: ValidationReport;
@@ -41,6 +43,19 @@ export interface AgentRunSummary {
 	phaseMessage?: string;
 	phaseStartedAt?: string;
 	lastEventSequence: number;
+	metrics?: AgentMetrics;
+}
+
+export interface AgentMetrics {
+	modelTurns: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	modelWaitMs: number;
+	sandboxMs: number;
+	toolCalls: number;
+	quickVerifications: number;
+	fullVerifications: number;
 }
 
 export interface AgentRun extends AgentRunSummary {
@@ -54,6 +69,8 @@ export interface AgentRun extends AgentRunSummary {
 
 export interface AuthoringSummary {
 	verificationId: string;
+	revision?: number;
+	type?: "default" | "interactive" | "submit_answer";
 	success: boolean;
 	testCases: number;
 	generatedCases: number;

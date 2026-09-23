@@ -10,6 +10,42 @@ function fakeExecutor(execute: HydroAgentExecutor["execute"]): HydroAgentExecuto
 }
 
 describe("HydroRunManager", () => {
+	it("retries a failed task without requiring text and preserves the saved context", async () => {
+		const inputs: Array<Parameters<HydroAgentExecutor["execute"]>[0]> = [];
+		const manager = new HydroRunManager(
+			fakeExecutor(async (input) => {
+				inputs.push(input);
+				input.onEvent({
+					type: "metrics",
+					metrics: {
+						modelTurns: 2,
+						inputTokens: 100,
+						outputTokens: 50,
+						cacheReadTokens: 10,
+						modelWaitMs: 4000,
+						sandboxMs: 1000,
+						toolCalls: 3,
+						quickVerifications: 1,
+						fullVerifications: 0,
+					},
+				});
+				return {
+					status: "failed",
+					model: "fake/model",
+					assistantText: "validator failed",
+					failureReason: "invalid validator",
+				};
+			}),
+		);
+		const first = manager.create("# Retry");
+		await vi.waitFor(() => expect(manager.get(first.id)?.status).toBe("failed"));
+		expect(manager.get(first.id)?.metrics?.quickVerifications).toBe(1);
+		expect(manager.get(first.id)?.error).toBe("invalid validator");
+		const resumed = manager.retry(first.id);
+		expect(resumed.id).toBe(first.id);
+		await vi.waitFor(() => expect(inputs).toHaveLength(2));
+		expect(inputs[1].conversation).toEqual([{ role: "assistant", content: "validator failed" }]);
+	});
 	it("keeps the list index compact, stores details per run and drops streamed deltas after completion", async () => {
 		const root = await mkdtemp(join(tmpdir(), "hydro-compact-"));
 		try {

@@ -13,6 +13,7 @@ interface Props {
 	message: string;
 	onMessageChange: (message: string) => void;
 	onContinue: (message: string) => Promise<boolean>;
+	onRetry: () => Promise<boolean>;
 	onCancel: () => void;
 	onEditProgram: () => void;
 	liveHydroConfigured: boolean;
@@ -63,7 +64,12 @@ export function AgentRunPanel(props: Props) {
 		<section className={`agent-run-panel ${props.className}`}>
 			<div className="agent-run-heading">
 				<div>
-					<span>Pi Agent 任务</span>
+					<span>
+						Pi Agent 任务
+						{run.judgingType
+							? ` · ${{ default: "普通程序题", interactive: "交互题", submit_answer: "提交答案题" }[run.judgingType]}`
+							: ""}
+					</span>
 					<strong>{agentStatusLabel(run.status)}</strong>
 				</div>
 				<code>{run.id}</code>
@@ -74,6 +80,23 @@ export function AgentRunPanel(props: Props) {
 					<strong>{run.phaseMessage}</strong>
 					{elapsed && <time>{elapsed}</time>}
 				</output>
+			)}
+			{run.metrics && (
+				<section className="agent-metrics" aria-label="任务执行统计">
+					<span>
+						模型 {run.metrics.modelTurns} 轮 · 等待 {Math.round(run.metrics.modelWaitMs / 1000)} 秒
+					</span>
+					<span>
+						沙箱/工具 {Math.round(run.metrics.sandboxMs / 1000)} 秒 · {run.metrics.toolCalls} 次调用
+					</span>
+					<span>
+						验证 quick {run.metrics.quickVerifications} 次 / full {run.metrics.fullVerifications} 次
+					</span>
+					<span>
+						Token 输入 {run.metrics.inputTokens.toLocaleString()} / 输出{" "}
+						{run.metrics.outputTokens.toLocaleString()} / 缓存读取 {run.metrics.cacheReadTokens.toLocaleString()}
+					</span>
+				</section>
 			)}
 			{(run.conversation?.length ?? 0) > 0 && (
 				<details className="conversation-history">
@@ -105,6 +128,16 @@ export function AgentRunPanel(props: Props) {
 					}}
 				>
 					<label htmlFor="agent-clarification">补充信息，继续当前任务</label>
+					{run.status !== "needs_input" && (
+						<button
+							className="button primary"
+							type="button"
+							disabled={props.busy || !props.available}
+							onClick={() => void props.onRetry()}
+						>
+							{props.busy ? "继续中…" : "一键继续修复"}
+						</button>
+					)}
 					<p>补充题意或要求 Agent 修正后重试。标程可由 Agent 自动生成，原题面和此前对话会保留。</p>
 					<textarea
 						id="agent-clarification"

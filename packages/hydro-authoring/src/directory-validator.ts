@@ -149,14 +149,69 @@ function validateConfig(
 		addIssue(issues, "INVALID_CONFIG", "testdata/config.yaml", "Judge configuration must be a YAML mapping.");
 		return { testCases: 0, referencedFiles };
 	}
-	if (value.type !== "default") {
+	if (value.type !== "default" && value.type !== "interactive" && value.type !== "submit_answer") {
 		addIssue(
 			issues,
 			"UNSUPPORTED_PROBLEM_TYPE",
 			"testdata/config.yaml.type",
-			"The first release supports type: default.",
+			"Use type: default, interactive, or submit_answer.",
 		);
 	}
+	if (value.type === "interactive") {
+		if (
+			typeof value.interactor !== "string" ||
+			!isSafeFlatName(value.interactor) ||
+			!value.interactor.endsWith(".cc") ||
+			!testFiles.get(value.interactor)
+		)
+			addIssue(
+				issues,
+				"MISSING_INTERACTOR",
+				"testdata/config.yaml.interactor",
+				"Provide a referenced C++ interactor source.",
+			);
+		else referencedFiles.add(value.interactor);
+	} else if (value.interactor !== undefined)
+		addIssue(
+			issues,
+			"UNEXPECTED_INTERACTOR",
+			"testdata/config.yaml.interactor",
+			"Only interactive problems use an interactor.",
+		);
+	if (
+		value.multi_pass !== undefined &&
+		(!Number.isInteger(value.multi_pass) ||
+			(value.multi_pass as number) < 2 ||
+			(value.multi_pass as number) > 20 ||
+			value.type !== "interactive")
+	)
+		addIssue(
+			issues,
+			"INVALID_MULTI_PASS",
+			"testdata/config.yaml.multi_pass",
+			"This local pipeline verifies 2–20 passes for interactive problems.",
+		);
+	if (value.type === "interactive" && value.checker_type !== "default")
+		addIssue(
+			issues,
+			"UNEXPECTED_CHECKER",
+			"testdata/config.yaml.checker_type",
+			"Interactive problems are scored by the interactor.",
+		);
+	if (value.type === "submit_answer" && value.subType !== undefined && value.subType !== "multi")
+		addIssue(
+			issues,
+			"INVALID_ANSWER_MODE",
+			"testdata/config.yaml.subType",
+			"Use subType: multi or omit it for single-file answers.",
+		);
+	if (value.type !== "submit_answer" && value.subType !== undefined)
+		addIssue(
+			issues,
+			"UNEXPECTED_ANSWER_MODE",
+			"testdata/config.yaml.subType",
+			"Answer mode is only valid for submit_answer.",
+		);
 	if (value.checker_type !== "default" && value.checker_type !== "testlib") {
 		addIssue(
 			issues,
@@ -228,12 +283,12 @@ function validateConfig(
 		} else {
 			totalScore += subtask.score as number;
 		}
-		if (subtask.type !== "sum" && subtask.type !== "min") {
+		if (subtask.type !== "sum" && subtask.type !== "min" && subtask.type !== "max") {
 			addIssue(
 				issues,
 				"UNSUPPORTED_SUBTASK_TYPE",
 				`${subtaskPath}.type`,
-				"Use sum for point scoring or min for bundled scoring.",
+				"Use sum for point scoring, min for bundled scoring, or max for best-case scoring.",
 			);
 		}
 		if (subtask.if !== undefined) {
@@ -429,9 +484,51 @@ export async function validateHydroDirectory(
 			issues,
 		);
 		if (text !== undefined) {
-			const result = validateConfig(parseYaml(text, "testdata/config.yaml", issues), testdata.files, issues);
+			const parsed = parseYaml(text, "testdata/config.yaml", issues);
+			const result = validateConfig(parsed, testdata.files, issues);
 			testCases = result.testCases;
 			referencedTestFiles = result.referencedFiles;
+			if (isRecord(parsed) && parsed.type === "submit_answer" && Array.isArray(parsed.subtasks)) {
+				const answerFiles = new Set<string>();
+				for (const subtask of parsed.subtasks) {
+					if (!isRecord(subtask) || !Array.isArray(subtask.cases)) continue;
+					for (const item of subtask.cases) {
+						if (!isRecord(item) || typeof item.input !== "string" || !testdata.files.has(item.input)) continue;
+						const input = await readText(
+							join(root, "testdata", item.input),
+							`testdata/${item.input}`,
+							testdata.files.get(item.input) ?? 0,
+							maxTextFileBytes,
+							issues,
+						);
+						if (input === undefined) continue;
+						if (parsed.subType === "multi") {
+							const answerFile = input.trim();
+							if (!isSafeFlatName(answerFile) || answerFiles.has(answerFile))
+								addIssue(
+									issues,
+									"INVALID_ANSWER_FILE",
+									`testdata/${item.input}`,
+									"Each multi-file case must name one unique flat ZIP entry.",
+								);
+							answerFiles.add(answerFile);
+						} else if (input.length > 0)
+							addIssue(
+								issues,
+								"INVALID_SINGLE_ANSWER_INPUT",
+								`testdata/${item.input}`,
+								"Single-file answer cases use an empty .in file.",
+							);
+					}
+				}
+				if (parsed.subType !== "multi" && testCases !== 1)
+					addIssue(
+						issues,
+						"INVALID_SINGLE_ANSWER_CASES",
+						"testdata/config.yaml.subtasks",
+						"Single-file answer submission requires exactly one case.",
+					);
+			}
 		}
 	}
 	for (const fileName of testdata.files.keys()) {

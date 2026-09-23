@@ -3,11 +3,13 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import type { HydroProblemSpec } from "@hydro-problem-make/authoring";
 import { Type } from "typebox";
 import { decodeAgentAttachments, type HydroAgentAttachment } from "./attachments.ts";
-import { loadCompleteAuthoringProject, updateAuthoringDraft } from "./authoring-draft.ts";
+import { loadCompleteAuthoringProject, recordQuickFailure, updateAuthoringDraft } from "./authoring-draft.ts";
 import type { AuthoringSummary, HydroAuthoringReport, HydroAuthoringVerificationMode } from "./authoring-project.ts";
 import { authoringProjectPatchSchema, programSchema } from "./authoring-schema.ts";
+import { groupAuthoringFailures } from "./failure-summary.ts";
 import { cacheKey, readRunCache, writeRunCache } from "./run-cache.ts";
 import type { HydroReferenceProgram, HydroSandbox } from "./sandbox.ts";
+import { scoreHydroSubtasks } from "./scoring.ts";
 import { verifyReferenceProgram } from "./verification.ts";
 import {
 	buildProblemArtifact,
@@ -33,7 +35,7 @@ const testCaseSchema = Type.Object({
 
 const subtaskSchema = Type.Object({
 	id: Type.Integer({ minimum: 1 }),
-	type: Type.Union([Type.Literal("sum"), Type.Literal("min")]),
+	type: Type.Union([Type.Literal("sum"), Type.Literal("min"), Type.Literal("max")]),
 	score: Type.Integer({ minimum: 1, maximum: 100 }),
 	dependsOn: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }))),
 	timeLimit: Type.Optional(Type.String()),
@@ -42,6 +44,14 @@ const subtaskSchema = Type.Object({
 });
 
 const problemSchema = Type.Object({
+	type: Type.Optional(
+		Type.Union([Type.Literal("default"), Type.Literal("interactive"), Type.Literal("submit_answer")]),
+	),
+	multiPass: Type.Optional(Type.Integer({ minimum: 2, maximum: 20 })),
+	answerMode: Type.Optional(Type.Union([Type.Literal("single"), Type.Literal("multi")])),
+	interactor: Type.Optional(
+		Type.String({ description: "Manual packaging only; verified runs use the tested interactor" }),
+	),
 	slug: Type.String({ description: "Flat ASCII problem slug" }),
 	title: Type.String({ minLength: 1 }),
 	pid: Type.Optional(Type.String()),
@@ -63,6 +73,15 @@ const problemSchema = Type.Object({
 	),
 });
 
+const modeGuides = {
+	default:
+		"普通程序题：reference/oracle 用不同算法。testlib 生成器从 argv[1] 读固定种子；validator 使用严格分隔符、边界及 inf.readEof()。多解或部分分数需 checker，调用 registerTestlibCmd；负例探针必须得 0 分。",
+	interactive:
+		"交互题：另写 interactor.cc，调用 registerInteraction(argc,argv)，通过 stdout 向选手发题、stdin 读回复，及时 flush；用 quitf(_ok/_wa) 给判定。多轮时按 HYDRO_MULTI_PASS 写 nextpass.in/state.txt，最多 20 轮；wrongPrograms 至少覆盖错误应答，另提供查询上限或超时反例。",
+	submit_answer:
+		"提答题：reference/oracle 是离线答案生成器。单文件模式仅一个完整答案点；多文件模式每个 case 指定 submissionFile，发布时 .in 写入 ZIP 内答案文件名，公开输入自动放 additional_file/<caseId>.input.txt。用错误或缺失文件探针、必要时 testlib 部分分数 checker。",
+} as const;
+
 export function createHydroAuthoringTools(
 	workspaceRoot: string,
 	runId: string,
@@ -74,6 +93,78 @@ export function createHydroAuthoringTools(
 ): ToolDefinition[] {
 	let referenceProgram = options.referenceProgram;
 	const uploadedAttachments = decodeAgentAttachments(options.attachments ?? []);
+	const selectModeTool = defineTool({
+		name: "select_hydro_judging",
+		label: "选择 Hydro 题型",
+		description:
+			"Call once after reading the current statement. Returns a concise mode-specific authoring guide; do not ask the user to classify a complete statement.",
+		parameters: Type.Object({
+			type: Type.Union([Type.Literal("default"), Type.Literal("interactive"), Type.Literal("submit_answer")]),
+		}),
+		executionMode: "sequential",
+		async execute(_id, params) {
+			return { content: [{ type: "text", text: modeGuides[params.type] }], details: { type: params.type } };
+		},
+	});
+	async function verifyDraft(mode: HydroAuthoringVerificationMode, signal?: AbortSignal) {
+		if (!options.sandbox?.verifyProject) throw new Error("当前沙箱未启用 testlib 制题，请更新沙箱镜像。");
+		const { revision, project } = await loadCompleteAuthoringProject(workspaceRoot, runId);
+		const key = cacheKey({ mode, project });
+		let report = await readRunCache<HydroAuthoringReport>(workspaceRoot, runId, "authoring", key);
+		const cacheHit = report !== undefined;
+		if (!report) {
+			try {
+				report = await options.sandbox.verifyProject(project, { mode, signal });
+			} catch (error) {
+				report = {
+					success: false,
+					mode,
+					checks: [
+						{ stage: "project", passed: false, message: error instanceof Error ? error.message : String(error) },
+					],
+					cases: [],
+				};
+			}
+			await writeRunCache(workspaceRoot, runId, "authoring", key, report);
+		}
+		const verificationId = mode === "full" && report.success ? randomUUID() : undefined;
+		const summary: AuthoringSummary = {
+			verificationId: verificationId ?? "",
+			revision,
+			type: project.type ?? "default",
+			success: report.success,
+			testCases: report.cases.length,
+			generatedCases: report.checks.filter((item) => item.stage === "generator" && item.passed).length,
+			oracleCases: report.checks.filter((item) => item.stage === "oracle" && item.passed).length,
+			validatorNegativeCases: report.checks.filter((item) => item.stage === "validator-negative" && item.passed)
+				.length,
+			checker: project.checker ? "testlib" : "default",
+			checkerProbes: report.checks.filter((item) => item.stage === "checker-probe" && item.passed).length,
+			wrongPrograms: report.checks.filter((item) => item.stage === "wrong-program-killed" && item.passed).length,
+		};
+		if (verificationId) await saveAuthoringEvidence(workspaceRoot, runId, { project, report, summary });
+		const failures = groupAuthoringFailures(report.checks);
+		const streak =
+			mode === "quick"
+				? await recordQuickFailure(workspaceRoot, runId, revision, failures)
+				: { stalled: false, repeatedRevisions: 0 };
+		return {
+			...summary,
+			verificationId,
+			mode,
+			revision,
+			cacheHit,
+			failures,
+			stalled: streak.stalled,
+			repeatedRevisions: streak.repeatedRevisions,
+			cases: report.cases.map(({ id, input, output, durationMs }) => ({
+				id,
+				inputBytes: Buffer.byteLength(input),
+				outputBytes: Buffer.byteLength(output),
+				durationMs,
+			})),
+		};
+	}
 	const buildTool = defineTool({
 		name: "build_hydro_problem",
 		label: "Build Hydro problem",
@@ -101,12 +192,42 @@ export function createHydroAuthoringTools(
 			const evidence = params.verificationId
 				? await loadAuthoringEvidence(workspaceRoot, runId, params.verificationId)
 				: undefined;
-			if (evidence && (!evidence.report.success || !evidence.summary.success))
+			if (evidence && (!evidence.report.success || !evidence.summary.success || evidence.report.mode !== "full"))
 				throw new Error("制题验证尚未通过，请修复失败项后重新验证。");
+			if (evidence) {
+				const current = await loadCompleteAuthoringProject(workspaceRoot, runId);
+				if (
+					evidence.summary.revision !== current.revision ||
+					cacheKey(evidence.project) !== cacheKey(current.project)
+				)
+					throw new Error("草稿在完整验证后已修改，请重新运行 full 验证。");
+				for (const wrong of evidence.project.wrongPrograms) {
+					if (wrong.maxScore === undefined) continue;
+					const actualScore = scoreHydroSubtasks(
+						params.problem.subtasks,
+						evidence.report.wrongScores?.[wrong.name] ?? {},
+					);
+					if (actualScore > wrong.maxScore)
+						throw new Error(`${wrong.name} 预计得 ${actualScore} 分，超过预期上限 ${wrong.maxScore} 分。`);
+				}
+			}
 			const usedIds = new Set<string>();
 			const attachmentNames = new Set<string>();
 			const attachments: Array<NonNullable<HydroProblemSpec["attachments"]>[number]> = [];
-			for (const attachment of [...(params.problem.attachments ?? []), ...uploadedAttachments]) {
+			if (
+				evidence &&
+				((params.problem.type ?? "default") !== (evidence.project.type ?? "default") ||
+					params.problem.multiPass !== evidence.project.multiPass ||
+					params.problem.answerMode !== evidence.project.answerMode)
+			)
+				throw new Error("发布题型、多轮配置或提答模式与已验证工程不一致。");
+			const publicInputs =
+				evidence?.project.type === "submit_answer"
+					? evidence.report.cases
+							.filter((item) => item.input.length > 0)
+							.map((item) => ({ name: `${item.id}.input.txt`, content: item.input }))
+					: [];
+			for (const attachment of [...(params.problem.attachments ?? []), ...uploadedAttachments, ...publicInputs]) {
 				if (attachmentNames.has(attachment.name)) throw new Error(`附件名称重复：${attachment.name}`);
 				attachmentNames.add(attachment.name);
 				attachments.push(attachment);
@@ -115,6 +236,7 @@ export function createHydroAuthoringTools(
 				...params.problem,
 				attachments: attachments.length ? attachments : undefined,
 				checker: evidence?.project.checker ? { type: "testlib", source: evidence.project.checker } : undefined,
+				interactor: evidence?.project.interactor ?? params.problem.interactor,
 				subtasks: params.problem.subtasks.map((subtask) => ({
 					...subtask,
 					cases: subtask.cases.map((item) => {
@@ -136,12 +258,18 @@ export function createHydroAuthoringTools(
 						);
 						if (timeMs !== verified.timeLimitMs || memoryMb !== verified.memoryLimitMb)
 							throw new Error(`测试点 ${verified.id} 的发布限制须与验证限制一致，请重新验证或使用原限制。`);
+						const releaseInput =
+							evidence.project.type === "submit_answer"
+								? evidence.project.answerMode === "multi"
+									? `${evidence.project.cases.find((entry) => entry.id === verified.id)?.submissionFile ?? ""}\n`
+									: ""
+								: verified.input;
 						if (
-							(item.input !== undefined && item.input !== verified.input) ||
+							(item.input !== undefined && item.input !== releaseInput) ||
 							(item.output !== undefined && item.output !== verified.output)
 						)
 							throw new Error("不能修改已验证的数据；只需提供 caseId，平台自动读取输入输出。");
-						return { ...item, input: verified.input, output: verified.output };
+						return { ...item, input: releaseInput, output: verified.output };
 					}),
 				})),
 			};
@@ -230,21 +358,23 @@ export function createHydroAuthoringTools(
 		},
 	});
 
-	if (!options.sandbox) return [buildTool, validateTool, clarificationTool];
+	if (!options.sandbox) return [selectModeTool, buildTool, validateTool, clarificationTool];
 	const sandbox = options.sandbox;
 	const updateTool = defineTool({
 		name: "update_hydro_authoring",
 		label: "更新制题工程",
 		description:
-			"Create or patch the persistent authoring draft. Submit logical sections in several small calls. Arrays replace their previous value; checker/checkerProbes accept null to remove them. Subsequent verification reads the saved draft.",
+			"Create or patch the persistent authoring draft. Submit logical sections in several small calls. Arrays replace their previous value. When complete, the same call automatically runs quick sandbox verification and returns grouped failures; patch only failed fields.",
 		promptSnippet: "Stage or repair one part of the persistent Hydro authoring project",
 		parameters: Type.Object({ patch: authoringProjectPatchSchema }),
 		executionMode: "sequential",
-		async execute(_id, params) {
+		async execute(_id, params, signal) {
 			const result = await updateAuthoringDraft(workspaceRoot, runId, params.patch);
+			const quick = result.complete ? await verifyDraft("quick", signal) : undefined;
+			const details = { ...result, quick, stalled: quick?.stalled === true };
 			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				details: result,
+				content: [{ type: "text", text: JSON.stringify(details) }],
+				details,
 			};
 		},
 	});
@@ -259,49 +389,63 @@ export function createHydroAuthoringTools(
 		}),
 		executionMode: "sequential",
 		async execute(_id, params, signal) {
-			if (!sandbox.verifyProject) throw new Error("当前沙箱未启用 testlib 制题，请更新沙箱镜像。");
-			const { revision, project } = await loadCompleteAuthoringProject(workspaceRoot, runId);
-			const mode: HydroAuthoringVerificationMode = params.mode ?? "quick";
-			const key = cacheKey({ mode, project });
-			let report = await readRunCache<HydroAuthoringReport>(workspaceRoot, runId, "authoring", key);
-			const cacheHit = report !== undefined;
-			if (!report) {
-				report = await sandbox.verifyProject(project, { mode, signal });
-				await writeRunCache(workspaceRoot, runId, "authoring", key, report);
-			}
-			const verificationId = mode === "full" && report.success ? randomUUID() : undefined;
-			const summary: AuthoringSummary = {
-				verificationId: verificationId ?? "",
-				success: report.success,
-				testCases: report.cases.length,
-				generatedCases: report.checks.filter((item) => item.stage === "generator" && item.passed).length,
-				oracleCases: report.checks.filter((item) => item.stage === "oracle" && item.passed).length,
-				validatorNegativeCases: report.checks.filter((item) => item.stage === "validator-negative" && item.passed)
-					.length,
-				checker: project.checker ? "testlib" : "default",
-				checkerProbes: report.checks.filter((item) => item.stage === "checker-probe" && item.passed).length,
-				wrongPrograms: report.checks.filter((item) => item.stage === "wrong-program-killed" && item.passed).length,
-			};
-			if (verificationId) await saveAuthoringEvidence(workspaceRoot, runId, { project, report, summary });
-			const failures = report.checks.filter((item) => !item.passed);
-			const result = {
-				...summary,
-				verificationId,
-				mode,
-				revision,
-				cacheHit,
-				checks: failures.slice(0, 30),
-				omittedFailures: Math.max(0, failures.length - 30),
-				cases: report.cases.map(({ id, input, output, durationMs }) => ({
-					id,
-					inputBytes: Buffer.byteLength(input),
-					outputBytes: Buffer.byteLength(output),
-					durationMs,
-				})),
-			};
+			const result = await verifyDraft(params.mode ?? "quick", signal);
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
 				details: result,
+			};
+		},
+	});
+	const finalizeParameters = Type.Object({ problem: problemSchema });
+	const finalizeTool = defineTool<typeof finalizeParameters, unknown>({
+		name: "finalize_hydro_authoring",
+		label: "完整验收并打包",
+		description:
+			"Run full sandbox verification, build the Hydro release, then validate its directory in one call. Only success provides a downloadable artifact. Use after the last automatic quick check succeeds.",
+		promptSnippet: "Finalize the current draft with full verification, Hydro packaging and directory validation",
+		parameters: finalizeParameters,
+		executionMode: "sequential",
+		async execute(_id, params, signal) {
+			const full = await verifyDraft("full", signal);
+			if (!full.success || !full.verificationId)
+				return {
+					content: [
+						{ type: "text", text: JSON.stringify({ success: false, stage: "full", failures: full.failures }) },
+					],
+					details: { success: false, stage: "full", failures: full.failures },
+				};
+			const built = await buildTool.execute(
+				_id,
+				{ problem: params.problem, verificationId: full.verificationId },
+				signal,
+				undefined,
+				undefined as never,
+			);
+			const artifact = built.details as { directory: string; report: { valid: boolean } };
+			const directoryReport = await validateProblemArtifact(workspaceRoot, runId, params.problem.slug);
+			if (!directoryReport.valid || !artifact.report.valid)
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({ success: false, stage: "directory", report: directoryReport }),
+						},
+					],
+					details: { success: false, stage: "directory", report: directoryReport },
+				};
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							success: true,
+							verificationId: full.verificationId,
+							directory: artifact.directory,
+							report: directoryReport,
+						}),
+					},
+				],
+				details: { ...built.details, success: true, verificationId: full.verificationId },
 			};
 		},
 	});
@@ -346,5 +490,5 @@ export function createHydroAuthoringTools(
 			return { content: [{ type: "text", text: JSON.stringify(details) }], details };
 		},
 	});
-	return [runTool, updateTool, verifyTool, buildTool, validateTool, clarificationTool];
+	return [selectModeTool, runTool, updateTool, verifyTool, finalizeTool, buildTool, validateTool, clarificationTool];
 }

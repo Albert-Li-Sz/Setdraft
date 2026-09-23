@@ -20,6 +20,8 @@ export type {
 	HydroAgentExecutionInput,
 	HydroAgentExecutionOutcome,
 	HydroAgentExecutor,
+	HydroAgentMetrics,
+	HydroAgentModelSettings,
 	HydroAgentPhase,
 	HydroAgentProgressEvent,
 	HydroAgentReadiness,

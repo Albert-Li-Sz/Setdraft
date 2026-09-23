@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
 	type HydroProblemSpec,
@@ -99,9 +99,15 @@ export async function buildProblemArtifact(
 	await assertSafeDirectoryChain(root, ["artifacts", runId, "hydro"]);
 	const hydroRoot = join(root, "artifacts", runId, "hydro");
 	const directory = await writeHydroProblemDirectory(spec, hydroRoot);
-	const report = await validateHydroDirectory(directory);
-	if (!report.valid) throw new Error(`Generated Hydro artifact failed validation: ${JSON.stringify(report.issues)}`);
-	return { directory, report };
+	try {
+		const report = await validateHydroDirectory(directory);
+		if (!report.valid)
+			throw new Error(`Generated Hydro artifact failed validation: ${JSON.stringify(report.issues)}`);
+		return { directory, report };
+	} catch (error) {
+		await rm(directory, { recursive: true, force: true });
+		throw error;
+	}
 }
 
 export async function validateProblemArtifact(

@@ -784,6 +784,17 @@ button:disabled {
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	color: #82909b;
 }
+.agent-metrics {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 6px 18px;
+	margin-top: 10px;
+	padding: 10px 12px;
+	border: 1px solid #e2e8ec;
+	background: #fff;
+	color: #65747f;
+	font-size: 11px;
+}
 .report-actions {
 	display: flex;
 	align-items: center;
