@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { type AiConfiguration, apiUrl, readAiConfiguration } from "./platform.ts";
+import { useCallback, useEffect, useState } from "react";
+import { type AiConfiguration, type AiProfile, apiUrl, readAiConfiguration } from "./platform.ts";
 
 type ConfigurationStatus = "loading" | "ready" | "saving" | "error";
 
@@ -21,9 +21,6 @@ function responseMessage(value: unknown): string {
 }
 
 function initialProvider(configuration: AiConfiguration): string {
-	if (configuration.provider && configuration.providers.some((provider) => provider.id === configuration.provider)) {
-		return configuration.provider;
-	}
 	return (
 		configuration.providers.find((provider) => provider.id === "openai-completions")?.id ??
 		configuration.providers[0]?.id ??
@@ -44,18 +41,31 @@ function parseTokenLength(value: string, label: string, minimum: number, maximum
 export function AiApiSettings(props: AiApiSettingsProps) {
 	const [configuration, setConfiguration] = useState<AiConfiguration>();
 	const [status, setStatus] = useState<ConfigurationStatus>("loading");
+	const [selectedId, setSelectedId] = useState("");
+	const [profileName, setProfileName] = useState("");
 	const [providerId, setProviderId] = useState("");
 	const [modelId, setModelId] = useState("");
 	const [apiKey, setApiKey] = useState("");
 	const [baseUrl, setBaseUrl] = useState("");
 	const [contextWindow, setContextWindow] = useState(String(DEFAULT_CONTEXT_WINDOW));
 	const [maxTokens, setMaxTokens] = useState(String(DEFAULT_MAX_TOKENS));
-	const [message, setMessage] = useState("正在读取 Pi Agent 配置……");
+	const [message, setMessage] = useState("正在读取 AI 对话配置……");
+
+	const selectProfile = useCallback((current: AiConfiguration, profile?: AiProfile): void => {
+		setSelectedId(profile?.id ?? "");
+		setProfileName(profile?.name ?? "");
+		setProviderId(profile?.provider ?? initialProvider(current));
+		setModelId(profile?.modelId ?? "");
+		setApiKey("");
+		setBaseUrl(profile?.baseUrl ?? "");
+		setContextWindow(String(profile?.contextWindow ?? DEFAULT_CONTEXT_WINDOW));
+		setMaxTokens(String(profile?.maxTokens ?? DEFAULT_MAX_TOKENS));
+	}, []);
 
 	useEffect(() => {
 		const controller = new AbortController();
 		setStatus("loading");
-		setMessage("正在读取 Pi Agent 配置……");
+		setMessage("正在读取 AI 对话配置……");
 		void (async () => {
 			try {
 				const response = await fetch(apiUrl(props.apiOrigin, "/ai/config"), { signal: controller.signal });
@@ -63,19 +73,17 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 				if (!response.ok) throw new Error(responseMessage(body));
 				const parsed = readAiConfiguration(body);
 				if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
-				const nextProvider = initialProvider(parsed);
 				setConfiguration(parsed);
-				setProviderId(nextProvider);
-				setModelId(parsed.modelId ?? "");
-				setBaseUrl(parsed.baseUrl ?? "");
-				setContextWindow(String(parsed.contextWindow ?? DEFAULT_CONTEXT_WINDOW));
-				setMaxTokens(String(parsed.maxTokens ?? DEFAULT_MAX_TOKENS));
+				selectProfile(
+					parsed,
+					parsed.profiles.find((item) => item.id === parsed.defaultProfileId) ?? parsed.profiles[0],
+				);
 				setStatus("ready");
 				setMessage(
 					parsed.error ??
 						(parsed.configured
-							? `Pi Agent 已使用 ${parsed.provider}/${parsed.modelId}。`
-							: "选择 API 协议，手动填写模型名称、Base URL 和 API Key。"),
+							? `已保存 ${parsed.profiles.length} 套 AI 配置，可在同一对话中切换。`
+							: "新建配置并填写 API 协议、模型名称和 API Key。"),
 				);
 			} catch (error) {
 				if (controller.signal.aborted) return;
@@ -84,17 +92,19 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 			}
 		})();
 		return () => controller.abort();
-	}, [props.apiOrigin]);
+	}, [props.apiOrigin, selectProfile]);
 
-	const hasStoredConfiguration =
-		configuration?.configured === true ||
-		configuration?.apiKeyConfigured === true ||
-		configuration?.error !== undefined;
+	const selectedProfile = configuration?.profiles.find((item) => item.id === selectedId);
 
 	async function save(): Promise<void> {
-		if (!providerId || !modelId.trim()) {
+		if (!profileName.trim() || !providerId || !modelId.trim()) {
 			setStatus("error");
-			setMessage("请选择 API 协议并填写模型名称。");
+			setMessage("请填写配置名称、API 协议和模型名称。");
+			return;
+		}
+		if (!selectedId && !apiKey.trim()) {
+			setStatus("error");
+			setMessage("新增配置时请填写 API Key。");
 			return;
 		}
 		let parsedContextWindow: number;
@@ -109,12 +119,14 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 			return;
 		}
 		setStatus("saving");
-		setMessage("正在保存并启用 Pi Agent 配置……");
+		setMessage("正在保存 AI 对话配置……");
 		try {
 			const response = await fetch(apiUrl(props.apiOrigin, "/ai/config"), {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
+					id: selectedId || undefined,
+					name: profileName,
 					provider: providerId,
 					modelId,
 					apiKey,
@@ -128,12 +140,10 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 			const parsed = readAiConfiguration(body);
 			if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
 			setConfiguration(parsed);
-			setApiKey("");
-			setBaseUrl(parsed.baseUrl ?? "");
-			setContextWindow(String(parsed.contextWindow ?? DEFAULT_CONTEXT_WINDOW));
-			setMaxTokens(String(parsed.maxTokens ?? DEFAULT_MAX_TOKENS));
+			const saved = selectedId ? parsed.profiles.find((item) => item.id === selectedId) : parsed.profiles.at(-1);
+			selectProfile(parsed, saved);
 			setStatus("ready");
-			setMessage(`已保存并启用 ${parsed.provider}/${parsed.modelId}，现在可以运行 Pi Agent。`);
+			setMessage(`已保存“${saved?.name ?? profileName}”。对话页可选择该配置。`);
 			props.onConfigurationChanged();
 		} catch (error) {
 			setStatus("error");
@@ -141,25 +151,25 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		}
 	}
 
-	async function clear(): Promise<void> {
+	async function removeProfile(): Promise<void> {
+		if (!selectedProfile || !window.confirm(`删除 AI 配置“${selectedProfile.name}”？已有对话和消息会保留。`)) return;
 		setStatus("saving");
-		setMessage("正在删除本地 AI 配置……");
+		setMessage("正在删除 AI 配置……");
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, "/ai/config"), { method: "DELETE" });
+			const response = await fetch(apiUrl(props.apiOrigin, `/ai/config/${encodeURIComponent(selectedProfile.id)}`), {
+				method: "DELETE",
+			});
 			const body = (await response.json()) as unknown;
 			if (!response.ok) throw new Error(responseMessage(body));
 			const parsed = readAiConfiguration(body);
 			if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
-			const nextProvider = initialProvider(parsed);
 			setConfiguration(parsed);
-			setProviderId(nextProvider);
-			setModelId(parsed.modelId ?? "");
-			setApiKey("");
-			setBaseUrl("");
-			setContextWindow(String(DEFAULT_CONTEXT_WINDOW));
-			setMaxTokens(String(DEFAULT_MAX_TOKENS));
+			selectProfile(
+				parsed,
+				parsed.profiles.find((item) => item.id === parsed.defaultProfileId) ?? parsed.profiles[0],
+			);
 			setStatus("ready");
-			setMessage("本地 AI 配置已删除，Pi Agent 已停用。");
+			setMessage(`已删除“${selectedProfile.name}”；对话记录仍保留。`);
 			props.onConfigurationChanged();
 		} catch (error) {
 			setStatus("error");
@@ -167,12 +177,34 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		}
 	}
 
+	async function setDefault(): Promise<void> {
+		if (!selectedProfile) return;
+		setStatus("saving");
+		try {
+			const response = await fetch(apiUrl(props.apiOrigin, "/ai/config/default"), {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ profileId: selectedProfile.id }),
+			});
+			const body = (await response.json()) as unknown;
+			if (!response.ok) throw new Error(responseMessage(body));
+			const parsed = readAiConfiguration(body);
+			if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
+			setConfiguration(parsed);
+			setStatus("ready");
+			setMessage(`“${selectedProfile.name}”已设为新对话默认配置。`);
+		} catch (error) {
+			setStatus("error");
+			setMessage(error instanceof Error ? error.message : "设置默认配置失败。");
+		}
+	}
+
 	return (
 		<section className="card settings-card ai-settings-card">
 			<div className="settings-card-heading">
 				<div>
-					<h2>Pi Agent · AI API</h2>
-					<p>配置网页生成题目时使用的模型；保存后立即生效，无需重启。</p>
+					<h2>AI 对话 · API</h2>
+					<p>配置独立对话使用的模型；保存后立即生效，无需重启。</p>
 				</div>
 				<span className={`status-badge ${configuration?.configured === true ? "online" : "offline"}`}>
 					{configuration?.configured === true ? "已启用" : "未配置"}
@@ -186,6 +218,47 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 					void save();
 				}}
 			>
+				<div className="ai-profile-toolbar">
+					<label className="field settings-field">
+						<span>已保存的 API / 模型配置</span>
+						<select
+							aria-label="AI 配置列表"
+							value={selectedId}
+							disabled={status === "loading" || status === "saving"}
+							onChange={(event) => {
+								const profile = configuration?.profiles.find((item) => item.id === event.target.value);
+								if (configuration) selectProfile(configuration, profile);
+							}}
+						>
+							<option value="">新建配置</option>
+							{configuration?.profiles.map((profile) => (
+								<option value={profile.id} key={profile.id}>
+									{profile.name}
+									{profile.id === configuration.defaultProfileId ? " · 默认" : ""}
+								</option>
+							))}
+						</select>
+					</label>
+					<button
+						className="button secondary"
+						type="button"
+						disabled={status === "loading" || status === "saving"}
+						onClick={() => configuration && selectProfile(configuration)}
+					>
+						新增配置
+					</button>
+				</div>
+				<label className="field settings-field">
+					<span>配置名称</span>
+					<input
+						aria-label="AI 配置名称"
+						value={profileName}
+						disabled={status === "loading" || status === "saving"}
+						onChange={(event) => setProfileName(event.target.value)}
+						placeholder="例如：主力模型、备用 API"
+						maxLength={80}
+					/>
+				</label>
 				<div className="ai-form-grid ai-identity-grid">
 					<label className="field settings-field">
 						<span>API 协议</span>
@@ -232,7 +305,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 							disabled={status === "loading" || status === "saving"}
 							onChange={(event) => setContextWindow(event.target.value)}
 						/>
-						<small>输入、工具历史和本次输出共享此窗口。</small>
+						<small>对话历史和本次输出共享此窗口。</small>
 					</label>
 					<label className="field settings-field">
 						<span>最大输出长度（tokens）</span>
@@ -260,7 +333,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 							value={apiKey}
 							disabled={status === "loading" || status === "saving"}
 							onChange={(event) => setApiKey(event.target.value)}
-							placeholder={configuration?.apiKeyConfigured === true ? "已保存；留空可继续使用" : "粘贴 API Key"}
+							placeholder={selectedProfile?.apiKeyConfigured ? "该配置已保存；留空可继续使用" : "粘贴 API Key"}
 							autoComplete="off"
 							spellCheck={false}
 						/>
@@ -280,20 +353,33 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 					</label>
 				</div>
 				<p className="settings-help">
-					模型名称直接传给 API，不受内置列表限制。长度配置会同时用于 Pi 的上下文管理和模型请求。Base URL
-					留空使用所选协议的官方地址。API Key 保存在运行 API 服务的本机配置文件中；留空再次保存会沿用已有 Key。
+					每套配置可使用不同协议、API、模型和长度限制。对话页可切换配置，历史消息继续作为上下文；超过当前模型窗口时仅裁剪模型请求中的较早消息。Base
+					URL 留空使用协议默认地址。API Key 保存在本机，编辑现有配置时留空可沿用该配置的 Key。
 				</p>
 				<div className="settings-actions">
 					<button className="button primary" type="submit" disabled={status === "loading" || status === "saving"}>
-						{status === "saving" ? "正在处理……" : "保存并启用"}
+						{status === "saving" ? "正在处理……" : selectedId ? "保存配置" : "添加配置"}
+					</button>
+					<button
+						className="button secondary"
+						type="button"
+						disabled={
+							status === "loading" ||
+							status === "saving" ||
+							!selectedProfile ||
+							selectedId === configuration?.defaultProfileId
+						}
+						onClick={() => void setDefault()}
+					>
+						设为默认
 					</button>
 					<button
 						className="button secondary danger-button"
 						type="button"
-						disabled={status === "loading" || status === "saving" || !hasStoredConfiguration}
-						onClick={() => void clear()}
+						disabled={status === "loading" || status === "saving" || !selectedProfile}
+						onClick={() => void removeProfile()}
 					>
-						删除配置
+						删除当前配置
 					</button>
 				</div>
 				<output

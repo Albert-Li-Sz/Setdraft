@@ -16,6 +16,7 @@
 	"sideEffects": false,
 	"files": [
 		"dist",
+		"sandbox",
 		"README.md"
 	],
 	"scripts": {
@@ -30,7 +31,7 @@
 	},
 	"license": "UNLICENSED",
 	"dependencies": {
-		"@hydro-problem-make/agent": "0.1.0",
+		"@earendil-works/pi-ai": "^0.87.0",
 		"@hydro-problem-make/authoring": "0.1.0"
 	},
 	"devDependencies": {

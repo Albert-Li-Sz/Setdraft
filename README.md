@@ -1,35 +1,59 @@
 # Hydro Problem Make
 
-This fork adds a Hydro-compatible problem authoring platform to the Pi agent harness. The current vertical slice provides a Hydro-style desktop workspace, a validation/download API, deterministic ZIP generation, a fixed authoring Skill, and a restricted Pi SDK adapter.
+基于 [Pi](https://github.com/earendil-works/pi) 的本地 Hydro 制题工作台。网页中编写题面与样例，手动上传测试数据或用 Gen 生成数据，经 Docker 沙箱验证后下载 Hydro 题目 ZIP；另提供独立的 AI 对话，不会自动修改草稿。上游基线见 [UPSTREAM.md](UPSTREAM.md)。
 
-The project is pinned to the upstream source recorded in [`UPSTREAM.md`](UPSTREAM.md). Existing Pi packages remain upstream code unless a platform change explicitly touches them.
+## 快速安装与管理
 
-## Hydro Problem Make development
-
-Install dependencies without lifecycle scripts, then start the API and web app in separate terminals:
+需要 Git、Node.js **22.19+**、npm，以及已启动的 Docker Desktop / Docker Engine。主机无需安装 GCC：沙箱镜像内提供 GCC 15.2、Python 3、Java 21 和 `testlib.h`。当前脚本支持 macOS、Linux 和 Windows 的 WSL，默认只监听本机 `127.0.0.1` 的 4321 与 5173 端口。
 
 ```bash
-npm install --ignore-scripts
-npm run dev:hydro-api
-npm run dev:hydro-web
+git clone https://github.com/Albert-Li-Sz/Hydro-Problem-Maker-Agent.git
+cd Hydro-Problem-Maker-Agent
+./install.sh
 ```
 
-Open `http://127.0.0.1:5173`. The current UI accepts a Markdown statement, test input/output pairs, limits, tags, and attachments; it validates the normalized problem and downloads a reproducible Hydro ZIP. A green format result does not claim that the algorithm, test strength, or a real Hydro import has passed.
+安装脚本以 `npm ci --ignore-scripts` 安装锁定依赖，构建本地沙箱镜像，并在后台启动 API 和网页。完成后打开 **http://127.0.0.1:5173/**。日志与进程信息保存在 `.hydro-problem-make/runtime/`。端口若已被其他程序占用，脚本会报错，不会结束那个程序。
 
-Open **设置 → Pi Agent · AI API** to select OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages. Enter the model ID freely, an API key, an optional Base URL, and the model's context/output token limits. The API service stores this local configuration in `.hydro-problem-make/ai-config.json` and applies it immediately. No model request is made while saving the configuration.
+```bash
+./upgrade.sh                  # 仅在干净的 main 工作区快进到 origin/main，然后重装、重建并重启
+./uninstall.sh                # 停止托管服务，删除沙箱镜像及运行日志；保留制题数据
+node scripts/hydro-local.mjs status
+node scripts/hydro-local.mjs stop
+node scripts/hydro-local.mjs start
+```
 
-Paste a complete statement and run Pi Agent to generate a standard solution, independent oracle, testlib generator and validator, data, and a C++ testlib SPJ when needed. Build the [Docker sandbox](packages/hydro-agent/README.md) first. The Agent writes the project in small persistent patches, uses cached quick checks while repairing it, and requires a complete verification before releasing a Hydro ZIP and a separate source/evidence ZIP. Uploaded code can be corrected or replaced automatically, and uploaded attachments flow through Agent packaging. **重制 / 下一题** clears the draft without cancelling saved tasks; history supports continuation, downloading and deleting records.
+三个脚本均支持 `--dry-run` 查看将执行的操作。升级不会暂存、覆盖或合并本地改动。卸载默认保留 `.hydro-problem-make/` 中的草稿、测试文件、发布包、聊天记录和 API 配置；`./uninstall.sh --purge-data` **永久删除这些数据**，`--remove-deps` 还会删除根目录的共享 `node_modules`。脚本不会删除仓库源码。修改过存储目录时，请另外管理自定义目录。
 
-For existing Pi credentials, `HYDRO_ENABLE_AGENT=1` enables ambient credentials; `HYDRO_MODEL_PROVIDER` and `HYDRO_MODEL_ID` select the model. Two Agent workflows run concurrently by default, with SSE phase progress, elapsed time and cancellation; `HYDRO_MAX_CONCURRENT_RUNS` changes the limit. Local validation covers ordinary batch problems and testlib SPJ. A configured [live Hydro adapter](packages/hydro-server/README.md) can additionally import the package, submit the reference, and confirm that known-wrong programs are rejected.
+需要手动开发时，可分别运行 `npm run dev:hydro-api` 和 `npm run dev:hydro-web`；先用 `docker build -t hydro-problem-make/sandbox:local packages/hydro-server/sandbox` 准备沙箱。不要同时启动脚本托管服务和手动服务，以免端口冲突。
 
-| Package | Current responsibility |
+## 制题流程
+
+1. 在**题面与样例**中编辑 Markdown 题面、公开样例和附件；题面预览与导出包共用同一份内容。
+2. 在**测试数据**中直接填写空输入或任意自定义输入，可选填期望输出；也可批量上传 `.in`、`.out`、`.ans`。未给出的输出由标准程序生成，已上传的输出会与标准程序核对。
+3. 在 **Gen 生成**中粘贴或上传 C++ `testlib.h` 生成器和脚本。脚本每行一条 `gen ...` 命令；生成点接在手动点之后，重复运行会核对可复现性。
+4. 在**程序与 SPJ**中填写必需的标准程序；可选填第二标准程序、testlib 输入校验器和 C++ testlib SPJ。各 C++ 源文件可选择 C++11、14、17、20、23 或实验性 C++26；标准程序和第二标准程序也支持 Python 3、Java。
+5. 点击**验证并打包**。全部本地校验通过后才能下载 Hydro ZIP 和包含源码、数据、验证报告的私有制题工程 ZIP。**制题记录**可重新打开草稿并下载历史包；真实 Hydro 导入检查是单独的可选步骤。
+
+当前手工流程支持普通程序题和 C++ testlib SPJ，尚不支持交互题或提交答案题。详细接口和限制见 [服务端说明](packages/hydro-server/README.md)。
+
+## AI 对话
+
+在**设置**中添加多个 API / 模型配置，协议可选 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages，并设置模型 ID、上下文长度、输出长度和密钥。对话按流式 Markdown 显示，可上传或粘贴图片；只在主动勾选时附带当前题面与标程的只读快照。配置和聊天记录只保存在本地。
+
+| 目录 | 职责 |
 | --- | --- |
-| [`packages/hydro-authoring`](packages/hydro-authoring) | Typed problem contract, directory inspection, default-checker model, and deterministic ZIP |
-| [`packages/hydro-agent`](packages/hydro-agent) | Fixed Skill loading and restricted Pi tools |
-| [`packages/hydro-server`](packages/hydro-server) | Validation and archive HTTP API |
-| [`packages/hydro-web`](packages/hydro-web) | Hydro-style React/Vite authoring workspace |
+| [`packages/hydro-authoring`](packages/hydro-authoring) | Hydro 包结构、验证与 ZIP 生成 |
+| [`packages/hydro-server`](packages/hydro-server) | 草稿持久化、Docker 验证、发布包与 AI 对话接口 |
+| [`packages/hydro-web`](packages/hydro-web) | React/Vite 制题工作台与对话界面 |
 
-Run the focused checks with `npm run test:hydro`, and run the full repository check with `npm run check`.
+运行 `npm run check` 检查代码；需要定向测试时参见各包说明。
+
+## 致谢
+
+- 感谢 [Hydro](https://github.com/hydro-dev/Hydro) 提供题目格式和评测行为参考。本项目的前端样式独立实现，与 Hydro 官方项目无隶属关系。
+- 感谢 [Mike Mirzayanov 的 Testlib](https://github.com/MikeMirzayanov/testlib) 提供生成器、输入校验器和 checker 能力；沙箱中附带的版本与许可信息见 [testlib 说明](packages/hydro-server/sandbox/testlib/README.md)。
+- 感谢 [Codeforces Polygon](https://polygon.codeforces.com/) 的制题流程为 Gen 脚本、数据验证和打包设计提供思路。
+- 感谢 [Pi](https://github.com/earendil-works/pi) 提供本项目的代码基础与 `pi-ai`。
 
 <p align="center">
   <a href="https://pi.dev">

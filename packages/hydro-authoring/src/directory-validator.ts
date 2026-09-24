@@ -2,8 +2,15 @@ import type { Dirent } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
-import type { DirectoryValidationOptions, HydroPackageStats, ValidationIssue, ValidationReport } from "./types.ts";
-import { extractAttachmentReferences, isSafeFlatName } from "./validation.ts";
+import { assertHydroJudgeLimits, DEFAULT_HYDRO_JUDGE_LIMITS, parseHydroTimeLimitMs } from "./judge-limits.ts";
+import type {
+	DirectoryValidationOptions,
+	HydroJudgeLimits,
+	HydroPackageStats,
+	ValidationIssue,
+	ValidationReport,
+} from "./types.ts";
+import { extractAttachmentReferences, isSafeFlatName, isValidHydroLimit } from "./validation.ts";
 
 const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -143,6 +150,7 @@ function validateConfig(
 	value: unknown,
 	testFiles: ReadonlyMap<string, number>,
 	issues: ValidationIssue[],
+	judgeLimits: HydroJudgeLimits,
 ): { testCases: number; referencedFiles: Set<string> } {
 	const referencedFiles = new Set<string>();
 	if (!isRecord(value)) {
@@ -232,16 +240,14 @@ function validateConfig(
 			);
 		} else referencedFiles.add(value.checker);
 	}
-	if (typeof value.time !== "string" || value.time.trim().length === 0) {
-		addIssue(issues, "MISSING_TIME_LIMIT", "testdata/config.yaml.time", "An explicit global time limit is required.");
-	}
-	if (typeof value.memory !== "string" || value.memory.trim().length === 0) {
-		addIssue(
-			issues,
-			"MISSING_MEMORY_LIMIT",
-			"testdata/config.yaml.memory",
-			"An explicit global memory limit is required.",
-		);
+	for (const kind of ["time", "memory"] as const) {
+		if (!isValidHydroLimit(value[kind], kind))
+			addIssue(
+				issues,
+				"INVALID_LIMIT",
+				`testdata/config.yaml.${kind}`,
+				`Use an explicit positive ${kind} with Hydro units.`,
+			);
 	}
 	if (value.cases !== undefined) {
 		addIssue(
@@ -265,11 +271,16 @@ function validateConfig(
 	const dependencies: Array<{ path: string; ids: number[] }> = [];
 	let totalScore = 0;
 	let testCases = 0;
+	let totalTimeMs = 0;
 	for (const [subtaskIndex, subtask] of value.subtasks.entries()) {
 		const subtaskPath = `testdata/config.yaml.subtasks[${subtaskIndex}]`;
 		if (!isRecord(subtask)) {
 			addIssue(issues, "INVALID_SUBTASK", subtaskPath, "Subtask entries must be YAML mappings.");
 			continue;
+		}
+		for (const kind of ["time", "memory"] as const) {
+			if (subtask[kind] !== undefined && !isValidHydroLimit(subtask[kind], kind))
+				addIssue(issues, "INVALID_LIMIT", `${subtaskPath}.${kind}`, `Use a positive ${kind} with Hydro units.`);
 		}
 		if (!Number.isSafeInteger(subtask.id) || (subtask.id as number) <= 0) {
 			addIssue(issues, "INVALID_SUBTASK_ID", `${subtaskPath}.id`, "Use an explicit positive integer ID.");
@@ -318,6 +329,12 @@ function validateConfig(
 				addIssue(issues, "INVALID_TEST_CASE", casePath, "Test case entries must be YAML mappings.");
 				continue;
 			}
+			const effectiveTime = parseHydroTimeLimitMs(testCase.time ?? subtask.time ?? value.time);
+			if (effectiveTime !== undefined) totalTimeMs += effectiveTime;
+			for (const kind of ["time", "memory"] as const) {
+				if (testCase[kind] !== undefined && !isValidHydroLimit(testCase[kind], kind))
+					addIssue(issues, "INVALID_LIMIT", `${casePath}.${kind}`, `Use a positive ${kind} with Hydro units.`);
+			}
 			let completeCase = true;
 			for (const field of ["input", "output"] as const) {
 				const fileName = testCase[field];
@@ -342,6 +359,20 @@ function validateConfig(
 			if (completeCase) testCases += 1;
 		}
 	}
+	if (testCases > judgeLimits.maxTestCases)
+		addIssue(
+			issues,
+			"TOO_MANY_TEST_CASES",
+			"testdata/config.yaml.subtasks",
+			`Hydro judge accepts at most ${judgeLimits.maxTestCases} test cases; found ${testCases}.`,
+		);
+	if (totalTimeMs > judgeLimits.totalTimeLimitMs)
+		addIssue(
+			issues,
+			"TOTAL_TIME_LIMIT_EXCEEDED",
+			"testdata/config.yaml.subtasks",
+			`Hydro judge total time limit is ${judgeLimits.totalTimeLimitMs} ms; cases sum to ${totalTimeMs} ms.`,
+		);
 	if (totalScore !== 100) {
 		addIssue(
 			issues,
@@ -369,6 +400,8 @@ export async function validateHydroDirectory(
 	const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
 	const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
 	const maxTextFileBytes = options.maxTextFileBytes ?? DEFAULT_MAX_TEXT_FILE_BYTES;
+	const judgeLimits = options.judgeLimits ?? DEFAULT_HYDRO_JUDGE_LIMITS;
+	assertHydroJudgeLimits(judgeLimits);
 
 	let rootEntries: Dirent[];
 	try {
@@ -485,7 +518,7 @@ export async function validateHydroDirectory(
 		);
 		if (text !== undefined) {
 			const parsed = parseYaml(text, "testdata/config.yaml", issues);
-			const result = validateConfig(parsed, testdata.files, issues);
+			const result = validateConfig(parsed, testdata.files, issues, judgeLimits);
 			testCases = result.testCases;
 			referencedTestFiles = result.referencedFiles;
 			if (isRecord(parsed) && parsed.type === "submit_answer" && Array.isArray(parsed.subtasks)) {

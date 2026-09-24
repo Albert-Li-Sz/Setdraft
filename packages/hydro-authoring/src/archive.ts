@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { buildHydroProblemFiles } from "./builder.ts";
 import { validateHydroDirectory } from "./directory-validator.ts";
-import type { HydroProblemSpec, ValidationReport } from "./types.ts";
+import type { DirectoryValidationOptions, HydroJudgeLimits, HydroProblemSpec, ValidationReport } from "./types.ts";
 import { isSafeFlatName } from "./validation.ts";
 
 const UTF8_FLAG = 0x0800;
@@ -152,14 +152,17 @@ export class HydroDirectoryArchiveError extends Error {
 }
 
 /** Build a byte-for-byte reproducible ZIP accepted by Hydro's problem importer. */
-export function buildHydroProblemArchive(spec: HydroProblemSpec): Uint8Array {
-	return buildStoredArchive(spec.slug, buildHydroProblemFiles(spec));
+export function buildHydroProblemArchive(spec: HydroProblemSpec, judgeLimits?: HydroJudgeLimits): Uint8Array {
+	return buildStoredArchive(spec.slug, buildHydroProblemFiles(spec, judgeLimits));
 }
 
 /** Revalidate and archive a generated Hydro release directory. */
-export async function buildHydroDirectoryArchive(problemDirectory: string): Promise<Uint8Array> {
+export async function buildHydroDirectoryArchive(
+	problemDirectory: string,
+	options: DirectoryValidationOptions = {},
+): Promise<Uint8Array> {
 	const root = resolve(problemDirectory);
-	const report = await validateHydroDirectory(root);
+	const report = await validateHydroDirectory(root, options);
 	if (!report.valid) throw new HydroDirectoryArchiveError(report);
 	const rootName = basename(root);
 	if (!isSafeFlatName(rootName)) throw new Error("Problem directory name must be a flat ASCII name.");

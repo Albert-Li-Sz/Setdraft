@@ -11,6 +11,10 @@
 			"source": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./statement": {
+			"types": "./src/statement.ts",
+			"import": "./src/statement.ts"
 		}
 	},
 	"bin": {

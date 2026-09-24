@@ -1,14 +1,16 @@
 # Hydro web
 
-React workspace styled from Hydro's public visual conventions. The implementation is original CSS and does not copy Hydro UI source files.
-
-Run the API and web development servers in separate terminals:
+The desktop React workspace uses Hydro-like visual conventions. It is original CSS and does not copy Hydro UI source files.
 
 ```bash
 npm run dev:hydro-api
 npm run dev:hydro-web
 ```
 
-Open `http://127.0.0.1:5173`.
+Open `http://127.0.0.1:5173`. The workbench has five tabs: statement and public samples, private test files, Gen source/script, standard programs/validator/SPJ, and verification/release. Edits automatically save to the local API. In the test-data tab, enter custom input or leave it blank for a zero-byte input; optionally provide an expected output, including an explicitly empty one. A blank filename is numbered automatically after existing manual and Gen cases. You can also upload `.in`, `.out`, and `.ans` files in one selection; matching stems pair them. An output can be omitted for the standard program to create it. Each C++ source has its own standard selector (C++11/14/17/20/23/26) and is compiled locally with GCC 15.2; C++26 is experimental. The Gen and program editors provide editable syntax highlighting. Short files show visual-only line numbers below the last real line; these are never saved as source. In the programs tab, select the standard program, optional second standard program, SPJ, or validator from the left menu. The second program runs independently against the same data to check answer consistency. The SPJ section has editable testlib checker presets (`ncmp`, `wcmp`, `rcmp4/6/9`, `yesno`); importing into a nonempty checker requires confirmation. Presets still pass through the normal sandbox validation before release.
 
-Use the settings page to configure the Pi Agent protocol, model ID, API key, optional Base URL, context window, and maximum output length. Once enabled, the workspace starts the Hydro authoring Skill as a background task. It shows model wait, tool execution, validation counts and token usage. On a repeated failure, use “一键继续修复” to resume the saved draft without typing a message. Use “重制 / 下一题” to start another workflow while earlier tasks continue. Task history downloads the full-verified Hydro import ZIP and its private authoring project.
+The statement preview and Hydro package use the same Markdown source. The independent preview supports common Markdown, tables, footnotes, math, fenced sample blocks, and `file://` attachments while ignoring raw statement HTML. It follows Hydro's layout conventions without copying Hydro UI code.
+
+The **AI 对话** page sits next to the workbench in the top navigation. The settings page stores multiple named API/model profiles using any of three supported protocols, with an individual API key, URL and token limits for each profile. A conversation selects a saved profile; switching it keeps earlier turns in context, and saved replies show which model produced them. User turns appear when the server accepts them; assistant text and Markdown render as SSE deltas arrive. The renderer supports GFM tables and code blocks plus LaTeX math. Enter sends; Shift+Enter inserts a newline, and IME composition does not send. The page follows new output unless the reader scrolls away, and a running response can be stopped. Chat is saved locally and only receives the current statement/reference snapshot when explicitly selected. It cannot modify the draft. **制题记录** reopens drafts and downloads earlier Hydro and authoring ZIPs; deleting a project asks for confirmation and removes its releases.
+
+Each text message has a copy action that copies its Markdown source. Chat users can paste an image into the composer or upload up to four PNG, JPEG, WebP or GIF images, preview and remove them before sending, and send an image without text. Images are stored with the conversation and included in later model context. Individual images may be up to 5 MiB, with a 12 MiB total per message; the chosen model must accept image input.

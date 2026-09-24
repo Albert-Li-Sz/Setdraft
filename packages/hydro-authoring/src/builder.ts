@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { stringify } from "yaml";
-import type { HydroProblemSpec } from "./types.ts";
+import type { HydroJudgeLimits, HydroProblemSpec } from "./types.ts";
 import { assertValidHydroProblemSpec } from "./validation.ts";
 
 function ensureTrailingNewline(value: string): string {
@@ -20,8 +20,11 @@ function comparePath(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0;
 }
 
-export function buildHydroProblemFiles(spec: HydroProblemSpec): ReadonlyMap<string, Uint8Array> {
-	assertValidHydroProblemSpec(spec);
+export function buildHydroProblemFiles(
+	spec: HydroProblemSpec,
+	judgeLimits?: HydroJudgeLimits,
+): ReadonlyMap<string, Uint8Array> {
+	assertValidHydroProblemSpec(spec, judgeLimits);
 	const files = new Map<string, Uint8Array>();
 	const metadata: Record<string, unknown> = { title: spec.title };
 	if (spec.pid !== undefined) metadata.pid = spec.pid;
@@ -74,13 +77,17 @@ export function buildHydroProblemFiles(spec: HydroProblemSpec): ReadonlyMap<stri
 	return files;
 }
 
-export async function writeHydroProblemDirectory(spec: HydroProblemSpec, destination: string): Promise<string> {
+export async function writeHydroProblemDirectory(
+	spec: HydroProblemSpec,
+	destination: string,
+	judgeLimits?: HydroJudgeLimits,
+): Promise<string> {
 	const destinationRoot = resolve(destination);
 	await mkdir(destinationRoot, { recursive: true });
 	const stagingRoot = await mkdtemp(join(destinationRoot, `.${spec.slug}-`));
 	const targetRoot = join(destinationRoot, spec.slug);
 	try {
-		for (const [relativePath, content] of [...buildHydroProblemFiles(spec)].sort(([left], [right]) =>
+		for (const [relativePath, content] of [...buildHydroProblemFiles(spec, judgeLimits)].sort(([left], [right]) =>
 			comparePath(left, right),
 		)) {
 			const outputPath = join(stagingRoot, relativePath);

@@ -12,8 +12,8 @@
 		"packages/coding-agent/examples/extensions/gondolin"
 	],
 	"scripts": {
-		"build:hydro": "npm run build --workspace=@hydro-problem-make/authoring && npm run build --workspace=@hydro-problem-make/agent && npm run build --workspace=@hydro-problem-make/server",
-		"test:hydro": "npm run test --workspace=@hydro-problem-make/authoring && npm run test --workspace=@hydro-problem-make/agent && npm run test --workspace=@hydro-problem-make/server && npm run test --workspace=@hydro-problem-make/web",
+		"build:hydro": "npm run build --workspace=@hydro-problem-make/authoring && npm run build --workspace=@hydro-problem-make/server",
+		"test:hydro": "npm run test --workspace=@hydro-problem-make/authoring && npm run test --workspace=@hydro-problem-make/server && npm run test --workspace=@hydro-problem-make/web",
 		"dev:hydro-api": "npm run dev --workspace=@hydro-problem-make/server",
 		"dev:hydro-web": "npm run dev --workspace=@hydro-problem-make/web",
 		"hydro:validate:fixture": "tsx packages/hydro-authoring/src/cli.ts validate fixtures/hydro/a-plus-b/hydro/a-plus-b",

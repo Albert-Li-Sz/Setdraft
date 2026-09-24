@@ -1,17 +1,12 @@
 import { spawn } from "node:child_process";
-import type { HydroAuthoringProject } from "@hydro-problem-make/agent";
+import type { ManualProgram } from "./manual-sandbox.ts";
 
 export interface HydroLiveVerificationRequest {
-	runId: string;
+	releaseId: string;
 	slug: string;
 	packageDirectory: string;
-	authoringProject: HydroAuthoringProject;
-	/** Answer-only tasks submit these text files (or a ZIP of them), not program source. */
-	answerSubmission?: {
-		mode: "single" | "multi";
-		correctFiles: Array<{ name: string; content: string }>;
-		wrongSubmissions: Array<{ name: string; files: Array<{ name: string; content: string }> }>;
-	};
+	reference: ManualProgram;
+	wrongPrograms: Array<{ name: string; program: ManualProgram }>;
 }
 
 export interface HydroLiveSubmissionResult {
@@ -68,9 +63,7 @@ function normalizeAdapterOutput(
 		throw new Error("Hydro 实测导入结果格式无效。");
 	const reference = submission(value.reference, "reference");
 	if (!Array.isArray(value.wrongPrograms)) throw new Error("Hydro 实测适配器未返回错误程序结果。");
-	const expectedWrongNames = request.answerSubmission
-		? request.answerSubmission.wrongSubmissions.map((item) => item.name)
-		: request.authoringProject.wrongPrograms.map((item) => item.name);
+	const expectedWrongNames = request.wrongPrograms.map((item) => item.name);
 	const wrongPrograms = value.wrongPrograms.map((item, index) =>
 		submission(item, expectedWrongNames[index] ?? `wrong-${index + 1}`),
 	);
@@ -145,7 +138,7 @@ export class CommandHydroLiveVerifier implements HydroLiveVerifier {
 					reject(error);
 				}
 			});
-			child.stdin.end(JSON.stringify({ version: request.answerSubmission ? 2 : 1, ...request }));
+			child.stdin.end(JSON.stringify({ version: 3, ...request }));
 		});
 	}
 }

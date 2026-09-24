@@ -65,8 +65,14 @@ export interface ValidationReport {
 	stats?: HydroPackageStats;
 }
 
+export interface HydroJudgeLimits {
+	maxTestCases: number;
+	totalTimeLimitMs: number;
+}
+
 export interface DirectoryValidationOptions {
 	maxFiles?: number;
 	maxTotalBytes?: number;
 	maxTextFileBytes?: number;
+	judgeLimits?: HydroJudgeLimits;
 }

@@ -7,7 +7,6 @@
 		"paths": {
 			"*": ["./*"],
 			"@hydro-problem-make/authoring": ["./packages/hydro-authoring/src/index.ts"],
-			"@hydro-problem-make/agent": ["./packages/hydro-agent/src/index.ts"],
 			"@hydro-problem-make/server": ["./packages/hydro-server/src/index.ts"],
 			"@earendil-works/chord": ["./packages/chord/src/index.ts"],
 			"@earendil-works/chord/bundler": ["./packages/chord/src/bundler.ts"],

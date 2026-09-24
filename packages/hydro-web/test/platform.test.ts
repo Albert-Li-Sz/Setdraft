@@ -1,120 +1,43 @@
 import { describe, expect, it } from "vitest";
-import {
-	algorithmValidationPresentation,
-	apiUrl,
-	normalizeApiOrigin,
-	pageFromHash,
-	readAgentRunList,
-	readAiConfiguration,
-	runDisplayTitle,
-} from "../src/platform.ts";
+import { apiUrl, normalizeApiOrigin, pageFromHash, readAiConfiguration } from "../src/platform.ts";
 
-describe("platform navigation and API configuration", () => {
-	it("maps every header destination to a real page", () => {
+describe("manual authoring navigation", () => {
+	it("maps the workspace, AI chat, records and settings", () => {
 		expect(pageFromHash("#workspace")).toBe("workspace");
-		expect(pageFromHash("#runs")).toBe("runs");
+		expect(pageFromHash("#chat")).toBe("chat");
+		expect(pageFromHash("#records")).toBe("records");
 		expect(pageFromHash("#settings")).toBe("settings");
 		expect(pageFromHash("#unknown")).toBe("workspace");
 	});
 
-	it("builds same-origin and configured API URLs", () => {
-		expect(apiUrl("", "/health")).toBe("/api/health");
-		expect(apiUrl("http://127.0.0.1:4321/", "/runs")).toBe("http://127.0.0.1:4321/api/runs");
+	it("builds same-origin and explicit API URLs", () => {
+		expect(apiUrl("", "/projects")).toBe("/api/projects");
+		expect(apiUrl("http://127.0.0.1:4321/", "/releases")).toBe("http://127.0.0.1:4321/api/releases");
 		expect(normalizeApiOrigin(" https://api.example.com/ ")).toBe("https://api.example.com");
-		expect(() => normalizeApiOrigin("https://user:secret@example.com")).toThrow("不能包含用户名或密码");
+		expect(() => normalizeApiOrigin("https://user:secret@example.com")).toThrow();
 	});
 
-	it("parses task history and extracts the requested problem title", () => {
-		const runs = readAgentRunList({
-			runs: [
-				{
-					id: "run-1",
-					status: "succeeded",
-					title: "A + B",
-					sourcePreview: "制题请求 A + B",
-					createdAt: "2026-09-22T07:00:00.000Z",
-					updatedAt: "2026-09-22T07:01:00.000Z",
-					lastEventSequence: 3,
-				},
-			],
-		});
-		expect(runs).toHaveLength(1);
-		expect(runDisplayTitle(runs[0])).toBe("A + B");
-		expect(
-			runDisplayTitle({
-				...runs[0],
-				source: "- 建议题目名称：A + B\n\n## 用户提供的题面\n\n# 三连击\n",
-			}),
-		).toBe("三连击");
-		expect(readAgentRunList({ runs: [{ id: 42 }] })).toEqual([]);
-	});
-
-	it("parses AI configuration metadata without accepting a returned API key", () => {
+	it("accepts protocol metadata without exposing an API key", () => {
 		const configuration = readAiConfiguration({
 			configured: true,
-			provider: "openai",
-			modelId: "gpt-test",
-			contextWindow: 262_144,
-			maxTokens: 32_768,
-			apiKeyConfigured: true,
-			providers: [{ id: "openai", name: "OpenAI", models: [{ id: "gpt-test", name: "GPT Test" }] }],
-		});
-		expect(configuration).toMatchObject({
-			configured: true,
-			provider: "openai",
-			modelId: "gpt-test",
-			contextWindow: 262_144,
-			maxTokens: 32_768,
-		});
-		expect(readAiConfiguration({ ...configuration, apiKey: "must-not-be-here" })).toBeUndefined();
-		expect(readAiConfiguration({ ...configuration, contextWindow: 1.5 })).toBeUndefined();
-	});
-
-	it("marks algorithm and data validation as passed from verified authoring evidence", () => {
-		const run = readAgentRunList({
-			runs: [
+			defaultProfileId: "profile-1",
+			profiles: [
 				{
-					id: "verified-run",
-					status: "succeeded",
-					title: "Verified",
-					sourcePreview: "Verified",
-					createdAt: "2026-09-22T07:00:00.000Z",
-					updatedAt: "2026-09-22T07:01:00.000Z",
-					lastEventSequence: 4,
-					artifact: {
-						slug: "verified",
-						report: { valid: true, issues: [] },
-						authoring: {
-							verificationId: "evidence-1",
-							success: true,
-							testCases: 12,
-							generatedCases: 8,
-							oracleCases: 12,
-							validatorNegativeCases: 4,
-							checker: "default",
-							checkerProbes: 0,
-							wrongPrograms: 2,
-						},
-					},
+					id: "profile-1",
+					name: "主模型",
+					provider: "openai-completions",
+					modelId: "model-id",
+					contextWindow: 128_000,
+					maxTokens: 16_384,
+					apiKeyConfigured: true,
 				},
 			],
-		})[0];
-		const presentation = algorithmValidationPresentation(run, {
-			available: true,
-			image: "sandbox",
-			message: "Linux 沙箱已就绪",
+			providers: [{ id: "openai-completions", name: "OpenAI Chat Completions", models: [] }],
 		});
-		expect(presentation.className).toBe("passed");
-		expect(presentation.message).toContain("12 个测试点验证通过");
+		expect(configuration?.profiles[0].modelId).toBe("model-id");
+		expect(readAiConfiguration({ ...configuration, apiKey: "secret" })).toBeUndefined();
 		expect(
-			algorithmValidationPresentation(undefined, {
-				available: true,
-				image: "sandbox",
-				message: "Linux 沙箱已就绪",
-			}),
-		).toEqual({
-			className: "pending",
-			message: "Linux 沙箱已就绪，运行 Pi Agent 后开始验证",
-		});
+			readAiConfiguration({ ...configuration, profiles: [{ ...configuration?.profiles[0], apiKey: "secret" }] }),
+		).toBeUndefined();
 	});
 });

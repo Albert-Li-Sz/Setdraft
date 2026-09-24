@@ -1,10 +1,17 @@
-import type { HydroProblemSpec, ValidationIssue, ValidationReport } from "./types.ts";
+import { assertHydroJudgeLimits, DEFAULT_HYDRO_JUDGE_LIMITS, parseHydroTimeLimitMs } from "./judge-limits.ts";
+import type { HydroJudgeLimits, HydroProblemSpec, ValidationIssue, ValidationReport } from "./types.ts";
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_LANGUAGE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const HYDRO_PID = /^(?![0-9]+$)[A-Za-z0-9]+$/;
 const TIME_LIMIT = /^(?:[1-9][0-9]*|0\.[0-9]+|[1-9][0-9]*\.[0-9]+)(?:ms|s)$/;
 const MEMORY_LIMIT = /^(?:[1-9][0-9]*|0\.[0-9]+|[1-9][0-9]*\.[0-9]+)(?:k|m|g|kb|mb|gb)$/i;
+
+export function isValidHydroLimit(value: unknown, kind: "time" | "memory"): boolean {
+	if (typeof value !== "string") return false;
+	const amount = Number.parseFloat(value);
+	return (kind === "time" ? TIME_LIMIT : MEMORY_LIMIT).test(value) && Number.isFinite(amount) && amount > 0;
+}
 
 export function isSafeFlatName(name: string): boolean {
 	return SAFE_NAME.test(name) && name !== "." && name !== "..";
@@ -35,7 +42,9 @@ function validateLimit(
 	pattern: RegExp,
 	description: string,
 ): void {
-	if (!pattern.test(value)) addIssue(issues, "INVALID_LIMIT", path, description);
+	const amount = Number.parseFloat(value);
+	if (!pattern.test(value) || !Number.isFinite(amount) || amount <= 0)
+		addIssue(issues, "INVALID_LIMIT", path, description);
 }
 
 function validateDependencyGraph(spec: HydroProblemSpec, issues: ValidationIssue[]): void {
@@ -67,7 +76,11 @@ function validateDependencyGraph(spec: HydroProblemSpec, issues: ValidationIssue
 	}
 }
 
-export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationReport {
+export function validateHydroProblemSpec(
+	spec: HydroProblemSpec,
+	judgeLimits: HydroJudgeLimits = DEFAULT_HYDRO_JUDGE_LIMITS,
+): ValidationReport {
+	assertHydroJudgeLimits(judgeLimits);
 	const issues: ValidationIssue[] = [];
 	const problemType = spec.type ?? "default";
 	if (!["default", "interactive", "submit_answer"].includes(problemType))
@@ -130,6 +143,7 @@ export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationRepo
 	const answerFiles = new Set<string>();
 	let totalScore = 0;
 	let totalCases = 0;
+	let totalTimeMs = 0;
 	for (const [subtaskIndex, subtask] of spec.subtasks.entries()) {
 		const subtaskPath = `subtasks[${subtaskIndex}]`;
 		if (!Number.isSafeInteger(subtask.id) || subtask.id <= 0) {
@@ -172,6 +186,8 @@ export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationRepo
 		}
 		for (const [caseIndex, testCase] of subtask.cases.entries()) {
 			totalCases += 1;
+			const effectiveTime = parseHydroTimeLimitMs(testCase.timeLimit ?? subtask.timeLimit ?? spec.timeLimit);
+			if (effectiveTime !== undefined) totalTimeMs += effectiveTime;
 			const casePath = `${subtaskPath}.cases[${caseIndex}]`;
 			if (problemType === "submit_answer") {
 				const input =
@@ -247,6 +263,20 @@ export function validateHydroProblemSpec(spec: HydroProblemSpec): ValidationRepo
 			}
 		}
 	}
+	if (totalCases > judgeLimits.maxTestCases)
+		addIssue(
+			issues,
+			"TOO_MANY_TEST_CASES",
+			"subtasks",
+			`Hydro judge accepts at most ${judgeLimits.maxTestCases} test cases; found ${totalCases}.`,
+		);
+	if (totalTimeMs > judgeLimits.totalTimeLimitMs)
+		addIssue(
+			issues,
+			"TOTAL_TIME_LIMIT_EXCEEDED",
+			"subtasks",
+			`Hydro judge total time limit is ${judgeLimits.totalTimeLimitMs} ms; cases sum to ${totalTimeMs} ms.`,
+		);
 	if (problemType === "submit_answer" && spec.answerMode !== "multi" && totalCases !== 1)
 		addIssue(
 			issues,
@@ -323,7 +353,10 @@ export class HydroProblemValidationError extends Error {
 	}
 }
 
-export function assertValidHydroProblemSpec(spec: HydroProblemSpec): void {
-	const report = validateHydroProblemSpec(spec);
+export function assertValidHydroProblemSpec(
+	spec: HydroProblemSpec,
+	judgeLimits: HydroJudgeLimits = DEFAULT_HYDRO_JUDGE_LIMITS,
+): void {
+	const report = validateHydroProblemSpec(spec, judgeLimits);
 	if (!report.valid) throw new HydroProblemValidationError(report);
 }

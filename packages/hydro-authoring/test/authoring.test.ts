@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,6 +80,35 @@ describe("Hydro authoring contract", () => {
 			expect(await buildHydroDirectoryArchive(outputRoot)).toEqual(buildHydroProblemArchive(validSpec));
 		} finally {
 			await rm(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects malformed global, subtask and case limits in an existing Hydro directory", async () => {
+		const root = await mkdtemp(join(tmpdir(), "hydro-bad-limits-"));
+		try {
+			const directory = await writeHydroProblemDirectory(validSpec, root);
+			const path = join(directory, "testdata/config.yaml");
+			const config = await readFile(path, "utf8");
+			await writeFile(
+				path,
+				config
+					.replace("time: 1s", "time: forever")
+					.replace("memory: 256m", "memory: 256")
+					.replace("score: 100", "score: 100\n    time: 2\n    memory: unlimited")
+					.replace("output: 1.out", "output: 1.out\n        time: bad\n        memory: 0"),
+			);
+			const report = await validateHydroDirectory(directory);
+			expect(report.valid).toBe(false);
+			expect(report.issues.filter((issue) => issue.code === "INVALID_LIMIT").map((issue) => issue.path)).toEqual([
+				"testdata/config.yaml.time",
+				"testdata/config.yaml.memory",
+				"testdata/config.yaml.subtasks[0].time",
+				"testdata/config.yaml.subtasks[0].memory",
+				"testdata/config.yaml.subtasks[0].cases[0].time",
+				"testdata/config.yaml.subtasks[0].cases[0].memory",
+			]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
 		}
 	});
 
@@ -189,6 +218,69 @@ describe("Hydro authoring contract", () => {
 			expect.arrayContaining(["INVALID_TOTAL_SCORE", "MISSING_ATTACHMENT"]),
 		);
 		expect(() => buildHydroProblemFiles(invalidSpec)).toThrow(HydroProblemValidationError);
+	});
+
+	it("rejects zero-valued limits even when units are present", () => {
+		const spec = { ...validSpec, timeLimit: "0.0s", memoryLimit: "0.0m" };
+		const report = validateHydroProblemSpec(spec);
+		expect(report.issues.filter((issue) => issue.code === "INVALID_LIMIT").map((issue) => issue.path)).toEqual([
+			"timeLimit",
+			"memoryLimit",
+		]);
+	});
+
+	it("enforces the target judge's case count and cumulative time on specs and directories", async () => {
+		const manyCases: HydroProblemSpec = {
+			...validSpec,
+			timeLimit: "100ms",
+			subtasks: [
+				{
+					...validSpec.subtasks[0],
+					cases: Array.from({ length: 101 }, (_, index) => ({
+						inputFile: `${index}.in`,
+						input: "",
+						outputFile: `${index}.out`,
+						output: "0\n",
+					})),
+				},
+			],
+		};
+		const longCases: HydroProblemSpec = {
+			...validSpec,
+			subtasks: [
+				{
+					...validSpec.subtasks[0],
+					cases: Array.from({ length: 61 }, (_, index) => ({
+						inputFile: `${index}.in`,
+						input: "",
+						outputFile: `${index}.out`,
+						output: "0\n",
+					})),
+				},
+			],
+		};
+		expect(validateHydroProblemSpec(manyCases).issues.map((issue) => issue.code)).toContain("TOO_MANY_TEST_CASES");
+		expect(validateHydroProblemSpec(longCases).issues.map((issue) => issue.code)).toContain(
+			"TOTAL_TIME_LIMIT_EXCEEDED",
+		);
+		expect(validateHydroProblemSpec(manyCases, { maxTestCases: 120, totalTimeLimitMs: 120000 }).valid).toBe(true);
+		const root = await mkdtemp(join(tmpdir(), "hydro-profile-"));
+		try {
+			const directory = await writeHydroProblemDirectory(longCases, root, {
+				maxTestCases: 120,
+				totalTimeLimitMs: 120000,
+			});
+			expect((await validateHydroDirectory(directory)).issues.map((issue) => issue.code)).toContain(
+				"TOTAL_TIME_LIMIT_EXCEEDED",
+			);
+			await expect(buildHydroDirectoryArchive(directory)).rejects.toThrow("validation");
+			expect(
+				(await validateHydroDirectory(directory, { judgeLimits: { maxTestCases: 120, totalTimeLimitMs: 120000 } }))
+					.valid,
+			).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("validates the checked-in Hydro import fixture", async () => {
