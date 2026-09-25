@@ -1,19 +1,19 @@
 import type { OAuthCredentials } from "../auth/types.ts";
 
-/** Legacy extension OAuth prompt. */
+/** OAuth prompt shown by an optional provider integration. */
 export interface OAuthPrompt {
 	message: string;
 	placeholder?: string;
 	allowEmpty?: boolean;
 }
 
-/** Legacy extension OAuth authorization link. */
+/** OAuth authorization link shown by an optional provider integration. */
 export interface OAuthAuthInfo {
 	url: string;
 	instructions?: string;
 }
 
-/** Legacy extension OAuth device-code notification. */
+/** OAuth device-code notification shown by an optional provider integration. */
 export interface OAuthDeviceCodeInfo {
 	userCode: string;
 	verificationUri: string;
@@ -31,7 +31,7 @@ export interface OAuthSelectPrompt {
 	options: OAuthSelectOption[];
 }
 
-/** Callback surface retained only for coding-agent extension compatibility. */
+/** Callback surface shared by optional OAuth integrations. */
 export interface OAuthLoginCallbacks {
 	onAuth(info: OAuthAuthInfo): void;
 	onDeviceCode(info: OAuthDeviceCodeInfo): void;

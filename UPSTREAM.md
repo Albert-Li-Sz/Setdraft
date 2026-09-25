@@ -1,8 +1,10 @@
-# Upstream baseline
+# 依赖来源
 
-- Repository: <https://github.com/earendil-works/pi>
-- Commit: [`1a584a7a56eb5e7b4ff8ccbd46430f1533282eed`](https://github.com/earendil-works/pi/commit/1a584a7a56eb5e7b4ff8ccbd46430f1533282eed)
-- Coding agent version: `0.87.0`
-- Integrated: 2026-09-23
+本项目保留 `@earendil-works/pi-ai` 和 `@earendil-works/pi-telemetry` 作为 AI 对话的
+底层库。它们提供模型协议、流式事件和遥测类型；项目没有 Pi Agent、终端 UI、远程
+会话或 Agent 工具运行时。
 
-The `main` branch descends from this exact upstream commit. Before merging a later upstream version, compare from this baseline and run the Hydro package contract tests.
+题目格式和界面行为参考 [Hydro](https://github.com/hydro-dev/Hydro)，生成与校验使用
+[Testlib](https://github.com/MikeMirzayanov/testlib)。AI 底层库的上游来源是
+[pi](https://github.com/earendil-works/pi)；同步上游代码时只保留本项目实际需要的
+AI 与遥测依赖，并运行 Hydro 的检查和测试。

@@ -26,7 +26,6 @@ const projects = new ManualProjectStore({
 	maxFileBytes: Number(process.env.HYDRO_CASE_MAX_BYTES ?? 64 * 1024 * 1024),
 	maxProjectBytes: Number(process.env.HYDRO_PROJECT_MAX_BYTES ?? 512 * 1024 * 1024),
 });
-await projects.cleanLegacyAgentData();
 const chat = new ChatService({
 	root: workspaceRoot,
 	configPath: resolve(projectRoot, process.env.HYDRO_AI_CONFIG_PATH ?? ".hydro-problem-make/ai-config.json"),

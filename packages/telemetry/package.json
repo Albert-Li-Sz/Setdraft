@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-telemetry",
 	"version": "0.87.0",
-	"description": "Vendor-neutral telemetry contracts and typed schema utilities for pi",
+	"description": "Vendor-neutral telemetry contracts used by Hydro's AI runtime",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -34,7 +34,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/Albert-Li-Sz/Hydro-Problem-Maker-Agent.git",
 		"directory": "packages/telemetry"
 	},
 	"engines": {

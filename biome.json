@@ -32,14 +32,9 @@
 			"packages/hydro-web/vite.config.ts",
 			"packages/hydro-web/src/**/*.css",
 			"packages/hydro-web/index.html",
-			"packages/session-backends/*/src/**/*.ts",
-			"packages/session-backends/*/test/**/*.ts",
-			"packages/coding-agent/examples/**/*.ts",
 			"!**/node_modules/**/*",
-			"!**/test-sessions.ts",
 			"!**/models.generated.ts",
 			"!**/*.models.ts",
-			"!packages/mom/data/**/*",
 			"!!**/node_modules"
 		]
 	}

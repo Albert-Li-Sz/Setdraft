@@ -4,7 +4,6 @@ dist/
 *.log
 .DS_Store
 *.tsbuildinfo
-# packages/*/node_modules/
 packages/*/dist/
 packages/*/dist-chrome/
 packages/*/dist-firefox/
@@ -24,23 +23,7 @@ packages/ai/src/providers/.model-generation-*/
 *.swo
 *~
 
-# Package specific
-.npm/
+# Generated output
 coverage/
 .nyc_output/
-.pi_config/
-tui-debug.log
-compaction-results/
-.opencode/
-syntax.jsonl
-out.jsonl
-pi-*.html
-out.html
-packages/coding-agent/binaries/
-todo.md
-plans/
-.pi/hf-sessions/
-.pi/hf-sessions-backup/
 .hydro-problem-make/
-collect.sh
-packages/agent/docs/extensions/pi-server-artifact/index.md

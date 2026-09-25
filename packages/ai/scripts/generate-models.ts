@@ -400,7 +400,7 @@ const OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS = new Set([
 	"gpt-6-astra",
 ]);
 
-// Keep the generated default no less restrictive than coding-agent's historical
+// Keep the generated default no less restrictive than the historical catalog
 // image preprocessing. Provider limits can narrow this profile, but unknown
 // providers retain the cache-safe 2000px / 4.5 MiB behavior.
 const DEFAULT_IMAGE_RESIZE = {
@@ -1118,7 +1118,7 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		// Mercury 2 in instant mode (reasoning_effort: "none") disables tool calling.
 		// Mark "off" unsupported so the openai-completions provider omits the reasoning param
 		// instead of defaulting to {reasoning:{effort:"none"}} (see openai-completions.ts:575).
-		// Pi's low/medium/high pass through verbatim; OpenRouter normalizes to Mercury's vocabulary.
+		// The shared low/medium/high values pass through verbatim; OpenRouter normalizes to Mercury's vocabulary.
 		mergeThinkingLevelMap(model, { off: null });
 	}
 	if (model.provider === "openrouter" && model.id === "z-ai/glm-5.2") {

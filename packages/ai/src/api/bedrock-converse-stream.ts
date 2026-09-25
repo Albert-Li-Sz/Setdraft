@@ -152,7 +152,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
 		const blocks = output.content as Block[];
 
-		// A profile explicitly configured through pi's auth flow (the `profile`
+		// A profile explicitly configured through the auth flow (the `profile`
 		// option or scoped `AWS_PROFILE` on the stored credential's env) must win
 		// over ambient AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY. The SDK default
 		// chain already prefers a configured profile over env keys, but only when

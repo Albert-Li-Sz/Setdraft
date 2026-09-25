@@ -313,21 +313,6 @@ export class ManualProjectStore {
 		return join(this.root, "releases", id);
 	}
 
-	async cleanLegacyAgentData(): Promise<void> {
-		const marker = join(this.root, ".legacy-agent-cleaned");
-		try {
-			await stat(marker);
-			return;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-		await mkdir(this.root, { recursive: true });
-		for (const name of ["runs.json", "runs.json.legacy.json", "run-records", "sessions", "artifacts", "agent"]) {
-			await rm(join(this.root, name), { recursive: true, force: true });
-		}
-		await writeFile(marker, "Legacy Agent records removed; ai-config.json preserved.\n");
-	}
-
 	async create(scoringMode: "acm" | "oi"): Promise<ManualProjectSnapshot> {
 		const id = randomUUID();
 		const now = new Date().toISOString();

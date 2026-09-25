@@ -25,6 +25,8 @@ function usage() {
   ./upgrade.sh [--dry-run]                 从 origin/main 快进升级并重启
   ./uninstall.sh [--purge-data] [--remove-deps] [--dry-run]
                                           停止服务并移除沙箱镜像
+  ./install.ps1 / ./upgrade.ps1 / ./uninstall.ps1
+                                          Windows PowerShell 等价入口
   node scripts/hydro-local.mjs start|stop|status
 
 卸载默认保留 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
@@ -34,7 +36,6 @@ function usage() {
 function requireRuntime() {
 	const [major, minor] = process.versions.node.split(".").map(Number);
 	if (major < 22 || (major === 22 && minor < 19)) throw new Error("需要 Node.js 22.19 或更新版本。");
-	if (process.platform === "win32") throw new Error("请在 macOS、Linux 或 Windows 的 WSL 中运行。");
 }
 
 function run(command, args) {
@@ -72,9 +73,12 @@ async function readManagedPid(name) {
 		return undefined;
 	}
 	if (!Number.isSafeInteger(value?.pid) || value.pid < 1) return undefined;
-	const result = spawnSync("ps", ["-p", String(value.pid), "-o", "command="], { encoding: "utf8" });
-	if (result.status !== 0 || !result.stdout.includes(`hydro-local.mjs service ${name}`)) return undefined;
-	return value.pid;
+	try {
+		process.kill(value.pid, 0);
+		return value.pid;
+	} catch {
+		return undefined;
+	}
 }
 
 async function portInUse(port) {
@@ -161,23 +165,33 @@ async function stopService(name) {
 		await rm(pidPath(name), { force: true });
 		return;
 	}
-	try {
-		process.kill(-pid, "SIGTERM");
-	} catch (error) {
-		if (error?.code !== "ESRCH") throw error;
-	}
+	stopPid(pid, false);
 	for (let attempt = 0; attempt < 50 && (await readManagedPid(name)); attempt++) {
 		await new Promise((resolveWait) => setTimeout(resolveWait, 100));
 	}
 	if (await readManagedPid(name)) {
-		try {
-			process.kill(-pid, "SIGKILL");
-		} catch (error) {
-			if (error?.code !== "ESRCH") throw error;
-		}
+		stopPid(pid, true);
 	}
 	await rm(pidPath(name), { force: true });
 	console.log(`${name} 已停止。`);
+}
+
+function stopPid(pid, force) {
+	if (process.platform === "win32") {
+		const result = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { cwd: root, stdio: "ignore" });
+		if (result.status !== 0 && !force) throw new Error(`无法停止进程 ${pid}。`);
+		return;
+	}
+	try {
+		process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
+	} catch (error) {
+		if (error?.code !== "ESRCH") throw error;
+		try {
+			process.kill(pid, force ? "SIGKILL" : "SIGTERM");
+		} catch (fallbackError) {
+			if (fallbackError?.code !== "ESRCH") throw fallbackError;
+		}
+	}
 }
 
 async function stopAll() {
@@ -208,7 +222,7 @@ async function startAll() {
 }
 
 function installDependencies() {
-	run(npm, ["ci", "--ignore-scripts"]);
+	run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
 	run("docker", ["build", "-t", image, "packages/hydro-server/sandbox"]);
 }
 
@@ -225,7 +239,7 @@ function checkUpgrade() {
 function printDryRun(command, options) {
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
-		console.log(`将执行 npm ci --ignore-scripts、docker build -t ${image} packages/hydro-server/sandbox，然后启动 API 与网页。`);
+		console.log(`将执行 npm ci --ignore-scripts --no-audit --no-fund、docker build -t ${image} packages/hydro-server/sandbox，然后启动 API 与网页。`);
 	} else if (command === "uninstall") {
 		console.log(`将停止托管服务、删除 ${image} 镜像及 ${runtimeRoot}。`);
 		if (options.has("--purge-data")) console.log(`还将永久删除 ${dataRoot}。`);

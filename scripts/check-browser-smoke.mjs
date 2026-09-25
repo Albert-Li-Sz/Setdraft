@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { build } from "esbuild";
 
-const outputPath = join(tmpdir(), "pi-browser-smoke.js");
-const agentTreeshakeOutputPath = join(tmpdir(), "pi-agent-treeshake-smoke.js");
-const errorLogPath = join(tmpdir(), "pi-browser-smoke-errors.log");
+const outputPath = join(tmpdir(), "hydro-ai-browser-smoke.js");
+const aiTreeshakeOutputPath = join(tmpdir(), "hydro-ai-treeshake-smoke.js");
+const errorLogPath = join(tmpdir(), "hydro-ai-browser-smoke-errors.log");
 const generatedCatalogDataDir = join(process.cwd(), "packages/ai/src/providers/data");
 
 // Fresh checkouts do not materialize provider JSON until model data is hydrated.
@@ -51,18 +51,18 @@ try {
 		plugins: [generatedCatalogDataPlugin],
 	});
 
-	const agentTreeshakeBuild = await build({
-		entryPoints: ["scripts/agent-treeshake-smoke-entry.ts"],
+	const aiTreeshakeBuild = await build({
+		entryPoints: ["scripts/ai-treeshake-smoke-entry.ts"],
 		bundle: true,
 		platform: "browser",
 		format: "esm",
 		logLevel: "silent",
 		metafile: true,
-		outfile: agentTreeshakeOutputPath,
+		outfile: aiTreeshakeOutputPath,
 		plugins: [generatedCatalogDataPlugin],
 		write: false,
 	});
-	const inputs = agentTreeshakeBuild.metafile.inputs;
+	const inputs = aiTreeshakeBuild.metafile.inputs;
 	for (const forbiddenInput of [
 		"packages/ai/src/compat.ts",
 		"packages/ai/src/models.generated.ts",
@@ -70,12 +70,12 @@ try {
 	]) {
 		const includedInput = findInput(inputs, forbiddenInput);
 		if (includedInput) {
-			throw new Error(`Agent selective-provider bundle unexpectedly includes ${includedInput}`);
+			throw new Error(`AI selective-provider bundle unexpectedly includes ${includedInput}`);
 		}
 	}
 
 	const contributingInputs = new Set(
-		Object.values(agentTreeshakeBuild.metafile.outputs).flatMap((output) =>
+		Object.values(aiTreeshakeBuild.metafile.outputs).flatMap((output) =>
 			Object.entries(output.inputs)
 				.filter(([, contribution]) => contribution.bytesInOutput > 0)
 				.map(([input]) => input),
@@ -86,7 +86,7 @@ try {
 	);
 	if (catalogInputs.length !== 1 || !normalizePath(catalogInputs[0]).endsWith("/anthropic.json")) {
 		throw new Error(
-			`Agent selective-provider bundle catalogs: expected only anthropic.json, found ${catalogInputs.join(", ") || "none"}`,
+			`AI selective-provider bundle catalogs: expected only anthropic.json, found ${catalogInputs.join(", ") || "none"}`,
 		);
 	}
 
@@ -103,7 +103,7 @@ try {
 		includedAiSdkPackages[0] !== "@anthropic-ai/sdk"
 	) {
 		throw new Error(
-			`Agent selective-provider bundle SDKs: expected only @anthropic-ai/sdk, found ${includedAiSdkPackages.join(", ") || "none"}`,
+			`AI selective-provider bundle SDKs: expected only @anthropic-ai/sdk, found ${includedAiSdkPackages.join(", ") || "none"}`,
 		);
 	}
 

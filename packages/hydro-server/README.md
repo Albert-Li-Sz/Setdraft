@@ -41,7 +41,7 @@ The selected standard controls local compilation. If a SPJ uses features newer t
 
 The default size limits are 64 MiB per data file and 512 MiB per project. Set `HYDRO_CASE_MAX_BYTES` and `HYDRO_PROJECT_MAX_BYTES` to positive integer byte limits. The target Hydro judge profile defaults to 100 cases and 60,000 ms combined time; set `HYDRO_TESTCASES_MAX` and `HYDRO_TOTAL_TIME_LIMIT_MS` to match your instance. The local sandbox accepts 50–10,000 ms and 32–512 MiB per case. All data files and archives are streamed or copied without embedding data in JSON.
 
-Drafts, chats and releases are stored under `.hydro-problem-make/projects`, `chats`, and `releases`; set `HYDRO_WORKSPACE_ROOT` to choose another root. On the first start of the new API, old Agent `runs.json`, `run-records/`, `sessions/`, and `artifacts/` are deleted once. `ai-config.json` is preserved.
+Drafts, chats and releases are stored under `.hydro-problem-make/projects`, `chats`, and `releases`; set `HYDRO_WORKSPACE_ROOT` to choose another root. AI profiles are stored in `ai-config.json` and are never returned with their keys.
 
 ## AI chat
 

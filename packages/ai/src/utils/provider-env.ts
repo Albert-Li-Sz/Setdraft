@@ -7,10 +7,8 @@ let procEnvCache: Map<string, string> | null = null;
  * Bun compiled binaries can expose an empty process.env inside Linux sandboxes
  * even though /proc/self/environ contains the environment.
  *
- * This intentionally duplicates restoreSandboxEnv() in
- * packages/coding-agent/src/bun/restore-sandbox-env.ts. The ai package can be
- * used directly, without going through that entrypoint, so provider env lookup
- * must not depend on process.env having been patched.
+ * The AI package can be used without another runtime, so provider lookup must
+ * not depend on a caller patching `process.env` first.
  */
 function getBunSandboxEnvValue(name: string): string | undefined {
 	if (typeof process === "undefined" || !process.versions?.bun || Object.keys(process.env).length > 0) {

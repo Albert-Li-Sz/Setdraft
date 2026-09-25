@@ -19,12 +19,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Workspace package name -> its source root, so cross-package imports are followed. */
 const WORKSPACE = {
-	"@earendil-works/chord": "packages/chord/src",
 	"@earendil-works/pi-ai": "packages/ai/src",
-	"@earendil-works/pi-durable": "packages/durable/src",
-	"@earendil-works/pi-agent-core": "packages/agent/src",
 	"@earendil-works/pi-telemetry": "packages/telemetry/src",
-	"@earendil-works/pi-tui": "packages/tui/src",
 };
 
 /**
@@ -34,12 +30,6 @@ const WORKSPACE = {
 const BUDGETS = {
 	"packages/ai": {
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
-	},
-	"packages/agent": {
-		"./harness/runtime/reducer": { maxFiles: 1 },
-		"./harness/context": { maxFiles: 6, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/"] },
-		"./harness/env/nodejs": { maxFiles: 5, forbid: ["packages/ai/", "harness/runtime/"] },
-		"./harness/session": { maxFiles: 25, forbid: ["harness/runtime/", "harness/execution/", "packages/ai/src/index.ts"] },
 	},
 };
 

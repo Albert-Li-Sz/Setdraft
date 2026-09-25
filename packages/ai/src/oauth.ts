@@ -1,4 +1,4 @@
-/** Type-only compatibility entry point for coding-agent extension OAuth declarations. */
+/** Type-only entry point for optional OAuth integrations. */
 export type {
 	OAuthAuthInfo,
 	OAuthCredentials,

@@ -1,10 +1,12 @@
 # Hydro Problem Make
 
-一个面向桌面的本地 [Hydro](https://github.com/hydro-dev/Hydro) 制题工作台。它基于 [Pi 仓库](https://github.com/earendil-works/pi) 二次开发，但**制题流程不使用 Pi Agent**；只有独立的 AI 对话使用 `pi-ai`，且不会自动修改题目草稿。
+Hydro Problem Make 是面向桌面的本地制题工作台：编辑题面、管理测试数据、运行 GCC 16
+沙箱验证，并下载可导入 Hydro 的题目包。它还提供独立的 AI 对话页面；AI 只能回答
+问题，不会修改草稿，也没有 Pi Agent 的工具运行时。
 
-## 快速开始
+## 安装
 
-需要 Git、Node.js 22.19+、npm 和已启动的 Docker。安装脚本支持 macOS、Linux 与 Windows WSL。
+环境要求：Node.js 22.19+、npm、Docker（Linux、macOS 或 Windows WSL）。
 
 ```bash
 git clone https://github.com/Albert-Li-Sz/Hydro-Problem-Maker-Agent.git
@@ -12,39 +14,56 @@ cd Hydro-Problem-Maker-Agent
 ./install.sh
 ```
 
-脚本安装依赖、构建 GCC 16.2 沙箱并启动本地服务。打开 **http://127.0.0.1:5173/**；API 默认位于 `127.0.0.1:4321`。
-
-## 制题流程
-
-1. 新建题目前选择 **ACM** 或 **OI** 赛制；编写 Markdown 题面、公开样例，并按需添加附件。赛制在创建后固定。
-2. 手动填写或上传 `.in/.out/.ans` 测试数据；也可上传 C++ Gen 源码，用每行一条 `gen ...` 命令批量生成。未提供的答案由标准程序生成。
-3. 填写标准程序；每题默认使用文本比对 Checker，也可改为自定义 C++ testlib SPJ。第二标准程序和 testlib 输入校验器可选。C++ 可选 C++11/14/17/20/23 与实验性 C++26。
-4. 点击“验证并打包”。通过本地沙箱检查后，可下载 Hydro 题目 ZIP 和包含源码、数据与报告的制题工程 ZIP。ACM 题还可导出 DOMjudge、FPS 和 QDUOJ 单题格式；DOMjudge 包默认没有题面，手动上传 PDF 后才附带 `problem.pdf`。
-
-“竞赛”页面按题序组合已验证的题目版本。Hydro 多题包可包含 ACM 与 OI 题，提供逐题 ZIP 和顺序清单；DOMjudge 竞赛包只接受 ACM 题，提供 `problems.yaml`、气球颜色和逐题 ZIP。竞赛时间、队伍等信息仍在目标平台配置。DOMjudge 按[官方导入流程](https://www.domjudge.org/docs/manual/8.3/import.html)先导入 `problems.yaml`，再上传各题 ZIP。当前不支持交互题或提交答案题；真实 Hydro 导入测试是可选的独立步骤。详见 [服务端说明](packages/hydro-server/README.md)。
-
-AI 对话支持多组 API / 模型配置、流式 Markdown 与图片，可选择附带当前题面和标程的只读快照；聊天记录保存在本地。
-
-## 更新与卸载
+安装脚本执行 `npm ci --ignore-scripts`、构建 GCC 16.2 沙箱并启动服务。网页地址是
+`http://127.0.0.1:5173/`，API 地址是 `http://127.0.0.1:4321/`。
 
 ```bash
-./upgrade.sh                  # 在干净的 main 分支快进更新并重启
-./uninstall.sh                # 停止服务并删除沙箱镜像，保留题目与配置
+./upgrade.sh                 # 检查干净的 main 分支后快进更新并重启
+./uninstall.sh               # 停止服务并删除沙箱镜像，保留数据
+./uninstall.sh --purge-data  # 同时删除草稿、发布包、聊天和 AI 配置
 node scripts/hydro-local.mjs status
 ```
 
-也可用 `node scripts/hydro-local.mjs start` 或 `stop` 单独管理服务。三个脚本均支持 `--dry-run`。默认数据目录为 `.hydro-problem-make/`；`./uninstall.sh --purge-data` 才会永久删除草稿、发布包、聊天记录和 AI 配置。升级不会覆盖未提交改动。手动开发方式见 [网页说明](packages/hydro-web/README.md)；代码检查使用 `npm run check`。
+Windows PowerShell 使用 `./install.ps1`、`./upgrade.ps1` 和 `./uninstall.ps1`。
+三个 Unix 脚本和三个 PowerShell 脚本都支持 dry-run。默认数据目录是 `.hydro-problem-make/`，也可用
+`HYDRO_WORKSPACE_ROOT` 指定其他目录。
+
+## 制题流程
+
+1. 新建题目时选择 ACM 或 OI 赛制，然后编辑 Markdown 题面、样例和附件。
+2. 手动填写或上传 `.in/.out/.ans` 测试点，或上传 C++ Gen 和逐行 `gen ...` 脚本。
+   缺少输出时由标准程序生成，生成数据会排在手动数据之后。
+3. 编写标准程序；可选第二标准程序、testlib Validator 和 C++ testlib Checker。默认
+   Checker 是文本比较，支持 C++11/14/17/20/23/26。
+4. 点击“验证并打包”。沙箱会编译、运行、复现数据并检查 Hydro 目录，全部通过后才
+   生成 Hydro ZIP 和包含源码、数据、参数及报告的制题工程 ZIP。
+
+已通过验证的题目可以组成竞赛草稿。Hydro 竞赛包按题序包含多题；DOMjudge 竞赛包
+只接受 ACM 题，包含 `problems.yaml`、气球颜色和逐题 ZIP，不包含题面。为 DOMjudge
+题目单独上传 PDF 后，PDF 才会写入题目包。OI 题目只可导出到 Hydro。
+
+## AI 对话
+
+设置页支持三种协议：OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。
+每套配置可保存模型名、API Key、Base URL、上下文长度和最大输出长度。对话支持 SSE
+流式 Markdown、GFM、LaTeX、图片粘贴和上传；Enter 发送，Shift+Enter 换行。聊天记录
+只保存在本地。
 
 ## 项目结构
 
 | 目录 | 用途 |
 | --- | --- |
-| [`packages/hydro-web`](packages/hydro-web) | 制题工作台与 AI 对话网页 |
-| [`packages/hydro-server`](packages/hydro-server) | 草稿、Docker 验证、发布包与对话接口 |
-| [`packages/hydro-authoring`](packages/hydro-authoring) | Hydro 格式验证与 ZIP 生成 |
+| `packages/hydro-authoring` | Hydro 题面、目录和 ZIP 的验证与生成 |
+| `packages/hydro-server` | 草稿、Docker 沙箱、发布包、竞赛包和 AI API |
+| `packages/hydro-web` | 制题工作台、题面预览、记录页和 AI 对话 |
+| `packages/ai`、`packages/telemetry` | AI 协议、流式事件和遥测类型 |
+
+代码检查使用 `npm run check`。更多 API 和环境变量见各包 README。
 
 ## 致谢
 
-感谢 [Hydro](https://github.com/hydro-dev/Hydro) 提供题目格式参考、[Testlib](https://github.com/MikeMirzayanov/testlib) 提供生成与校验能力、[Codeforces Polygon](https://polygon.codeforces.com/) 提供制题流程思路，以及 [Pi](https://github.com/earendil-works/pi) 提供代码基础与 `pi-ai`。本项目的前端独立实现，与这些项目没有官方隶属关系。上游基线见 [UPSTREAM.md](UPSTREAM.md)，随沙箱附带的 Testlib 许可见 [LICENSE](packages/hydro-server/sandbox/testlib/LICENSE)。
-
-本项目采用 [MIT 许可](LICENSE)。
+感谢 [Hydro](https://github.com/hydro-dev/Hydro) 的题目格式与界面思路、
+[Testlib](https://github.com/MikeMirzayanov/testlib) 的生成和校验能力，以及
+[Codeforces Polygon](https://polygon.codeforces.com/) 的制题流程思路。AI 底层协议来自
+[pi](https://github.com/earendil-works/pi) 的 `pi-ai` 和 telemetry 库。本项目与这些
+项目没有官方隶属关系，采用 [MIT 许可](LICENSE)。

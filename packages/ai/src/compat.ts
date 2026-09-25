@@ -1,13 +1,6 @@
 /**
- * Temporary compatibility entrypoint preserving the old global pi-ai API
- * surface: api-dispatch `stream()`/`complete()` with env API key injection,
- * the api-registry, generated catalog reads (`getModel`/`getModels`/
- * `getProviders`), per-API lazy stream wrappers, and image generation.
- *
- * Existing apps switch imports from "@earendil-works/pi-ai" to
- * "@earendil-works/pi-ai/compat" unchanged; new code uses `createModels()`
- * and the provider factories. This module is deleted with the coding-agent
- * ModelManager migration.
+ * Compatibility entrypoint used by the Hydro chat service. It exposes the
+ * protocol adapters and catalog helpers needed to stream a configured model.
  */
 
 export * from "./api/anthropic-messages.lazy.ts";
