@@ -12,16 +12,16 @@ cd Hydro-Problem-Maker-Agent
 ./install.sh
 ```
 
-脚本安装依赖、构建 GCC 15.2 沙箱并启动本地服务。打开 **http://127.0.0.1:5173/**；API 默认位于 `127.0.0.1:4321`。
+脚本安装依赖、构建 GCC 16.2 沙箱并启动本地服务。打开 **http://127.0.0.1:5173/**；API 默认位于 `127.0.0.1:4321`。
 
 ## 制题流程
 
-1. 编写 Markdown 题面、公开样例，并按需添加附件。
+1. 新建题目前选择 **ACM** 或 **OI** 赛制；编写 Markdown 题面、公开样例，并按需添加附件。赛制在创建后固定。
 2. 手动填写或上传 `.in/.out/.ans` 测试数据；也可上传 C++ Gen 源码，用每行一条 `gen ...` 命令批量生成。未提供的答案由标准程序生成。
-3. 填写标准程序；可选填第二标准程序、testlib 输入校验器和 C++ testlib SPJ。C++ 可选 C++11/14/17/20/23 与实验性 C++26。
-4. 点击“验证并打包”。通过本地沙箱检查后，下载 Hydro 题目 ZIP 或包含源码、数据和报告的制题工程 ZIP。历史记录可重新打开和下载。
+3. 填写标准程序；每题默认使用文本比对 Checker，也可改为自定义 C++ testlib SPJ。第二标准程序和 testlib 输入校验器可选。C++ 可选 C++11/14/17/20/23 与实验性 C++26。
+4. 点击“验证并打包”。通过本地沙箱检查后，可下载 Hydro 题目 ZIP 和包含源码、数据与报告的制题工程 ZIP。ACM 题还可导出 DOMjudge、FPS 和 QDUOJ 单题格式；DOMjudge 包默认没有题面，手动上传 PDF 后才附带 `problem.pdf`。
 
-当前支持普通程序题和 C++ testlib SPJ；交互题、提交答案题尚不支持。真实 Hydro 导入测试是可选的独立步骤。详见 [服务端说明](packages/hydro-server/README.md)。
+“竞赛”页面按题序组合已验证的题目版本。Hydro 多题包可包含 ACM 与 OI 题，提供逐题 ZIP 和顺序清单；DOMjudge 竞赛包只接受 ACM 题，提供 `problems.yaml`、气球颜色和逐题 ZIP。竞赛时间、队伍等信息仍在目标平台配置。DOMjudge 按[官方导入流程](https://www.domjudge.org/docs/manual/8.3/import.html)先导入 `problems.yaml`，再上传各题 ZIP。当前不支持交互题或提交答案题；真实 Hydro 导入测试是可选的独立步骤。详见 [服务端说明](packages/hydro-server/README.md)。
 
 AI 对话支持多组 API / 模型配置、流式 Markdown 与图片，可选择附带当前题面和标程的只读快照；聊天记录保存在本地。
 

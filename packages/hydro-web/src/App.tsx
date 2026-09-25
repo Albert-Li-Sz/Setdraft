@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AiChatPage } from "./AiChatPage.tsx";
+import { ContestsPage } from "./ContestsPage.tsx";
 import { ManualWorkspace } from "./ManualWorkspace.tsx";
 import {
-	type ApiStatus,
-	apiStatusLabel,
 	apiUrl,
 	type ManualRelease,
 	type ManualReport,
-	normalizeApiOrigin,
 	type PageRoute,
 	type ProjectSnapshot,
 	pageFromHash,
@@ -18,17 +16,7 @@ import { editableProject, projectContextSnapshot } from "./problem.ts";
 import { RecordsPage } from "./RecordsPage.tsx";
 import { SettingsPage } from "./SettingsPage.tsx";
 
-const originKey = "hydro-problem-make.api-origin";
 const currentProjectKey = "hydro-problem-make.project-id";
-
-function storedApiOrigin(): string {
-	try {
-		return normalizeApiOrigin(localStorage.getItem(originKey) ?? "");
-	} catch {
-		localStorage.removeItem(originKey);
-		return "";
-	}
-}
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(url, init);
@@ -39,14 +27,12 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function App() {
 	const [page, setPage] = useState<PageRoute>(() => pageFromHash(window.location.hash));
-	const [apiOrigin, setApiOrigin] = useState(storedApiOrigin);
-	const [apiOriginDraft, setApiOriginDraft] = useState(apiOrigin);
-	const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
+	const apiOrigin = "";
 	const [sandbox, setSandbox] = useState<SandboxStatus>();
 	const [aiConfigured, setAiConfigured] = useState(false);
 	const [liveHydroConfigured, setLiveHydroConfigured] = useState(false);
-	const [connectionMessage, setConnectionMessage] = useState("正在连接本地 API…");
 	const [project, setProject] = useState<ProjectSnapshot>();
+	const [choosingScoringMode, setChoosingScoringMode] = useState(false);
 	const projectRef = useRef<ProjectSnapshot | undefined>(undefined);
 	const [projects, setProjects] = useState<ProjectSnapshot[]>([]);
 	const [releases, setReleases] = useState<ManualRelease[]>([]);
@@ -75,23 +61,25 @@ export function App() {
 		localStorage.setItem(currentProjectKey, snapshot.id);
 	}, []);
 
-	const checkApiConnection = useCallback(async (origin: string, signal?: AbortSignal): Promise<void> => {
-		setApiStatus("checking");
+	const checkApiConnection = useCallback(async (signal?: AbortSignal): Promise<void> => {
 		try {
 			const health = await requestJson<{
 				sandbox: SandboxStatus;
 				capabilities: { aiChat: boolean; liveHydro?: { configured: boolean } };
-			}>(apiUrl(origin, "/health"), { signal });
+			}>(apiUrl(apiOrigin, "/health"), { signal });
 			if (signal?.aborted) return;
-			setApiStatus("online");
 			setSandbox(health.sandbox);
 			setAiConfigured(health.capabilities.aiChat);
 			setLiveHydroConfigured(health.capabilities.liveHydro?.configured === true);
-			setConnectionMessage("本地制题 API 已连接。");
 		} catch (error) {
 			if (signal?.aborted) return;
-			setApiStatus("offline");
-			setConnectionMessage(error instanceof Error ? error.message : "本地 API 连接失败。");
+			setAiConfigured(false);
+			setLiveHydroConfigured(false);
+			setSandbox({
+				available: false,
+				image: "",
+				message: error instanceof Error ? error.message : "本地制题 API 连接失败。",
+			});
 		}
 	}, []);
 
@@ -111,7 +99,7 @@ export function App() {
 		} finally {
 			setRecordsLoading(false);
 		}
-	}, [apiOrigin]);
+	}, []);
 
 	useEffect(() => {
 		const updatePage = (): void => setPage(pageFromHash(window.location.hash));
@@ -121,7 +109,7 @@ export function App() {
 
 	useEffect(() => {
 		const controller = new AbortController();
-		void checkApiConnection(apiOrigin, controller.signal);
+		void checkApiConnection(controller.signal);
 		void (async () => {
 			try {
 				const list = await requestJson<{ projects: ProjectSnapshot[] }>(apiUrl(apiOrigin, "/projects"), {
@@ -129,31 +117,13 @@ export function App() {
 				});
 				if (controller.signal.aborted) return;
 				setProjects(list.projects);
-				const selectedId = localStorage.getItem(currentProjectKey);
-				const selected =
-					list.projects.find((item) => item.id === selectedId) ??
-					list.projects[0] ??
-					(await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, "/projects"), {
-						method: "POST",
-						signal: controller.signal,
-					}));
-				if (controller.signal.aborted) return;
-				setCurrentProject(selected);
-				setReport(selected.lastReport);
-				if (selected.latestReleaseId) {
-					const response = await requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, "/releases"), {
-						signal: controller.signal,
-					});
-					if (!controller.signal.aborted)
-						setRelease(response.releases.find((item) => item.id === selected.latestReleaseId));
-				}
 			} catch (error) {
 				if (!controller.signal.aborted)
 					showNotice(error instanceof Error ? error.message : "草稿读取失败。", "failed");
 			}
 		})();
 		return () => controller.abort();
-	}, [apiOrigin, checkApiConnection, setCurrentProject, showNotice]);
+	}, [checkApiConnection, showNotice]);
 
 	useEffect(() => {
 		if (page === "records") void refreshRecords();
@@ -222,11 +192,16 @@ export function App() {
 		}, 650);
 	}
 
-	async function newProject(): Promise<void> {
+	async function newProject(scoringMode: "acm" | "oi"): Promise<void> {
 		try {
 			await saveNow();
-			const created = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, "/projects"), { method: "POST" });
+			const created = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, "/projects"), {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ scoringMode }),
+			});
 			setCurrentProject(created);
+			setChoosingScoringMode(false);
 			editVersion.current = 0;
 			savedVersion.current = 0;
 			setReport(undefined);
@@ -363,6 +338,49 @@ export function App() {
 		}
 	}
 
+	async function uploadDomjudgePdf(file: File): Promise<void> {
+		const current = projectRef.current;
+		if (!current) return;
+		setBusy("upload");
+		try {
+			await saveNow();
+			const snapshot = await requestJson<ProjectSnapshot>(
+				apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
+				{
+					method: "PUT",
+					headers: { "content-type": "application/pdf" },
+					body: file,
+				},
+			);
+			setCurrentProject(snapshot);
+			setReport(undefined);
+			showNotice("DOMjudge PDF 已上传；重新验证后会进入新发布包。", "passed");
+		} catch (error) {
+			showNotice(error instanceof Error ? error.message : "PDF 上传失败。", "failed");
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	async function deleteDomjudgePdf(): Promise<void> {
+		const current = projectRef.current;
+		if (!current) return;
+		try {
+			await saveNow();
+			const snapshot = await requestJson<ProjectSnapshot>(
+				apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
+				{
+					method: "DELETE",
+				},
+			);
+			setCurrentProject(snapshot);
+			setReport(undefined);
+			showNotice("已移除 DOMjudge PDF；重新验证后生效。", "passed");
+		} catch (error) {
+			showNotice(error instanceof Error ? error.message : "移除 PDF 失败。", "failed");
+		}
+	}
+
 	async function deleteFile(name: string): Promise<void> {
 		const current = projectRef.current;
 		if (!current) return;
@@ -460,19 +478,6 @@ export function App() {
 		}
 	}
 
-	function saveApiConfiguration(): void {
-		try {
-			const origin = normalizeApiOrigin(apiOriginDraft);
-			if (origin) localStorage.setItem(originKey, origin);
-			else localStorage.removeItem(originKey);
-			setApiOriginDraft(origin);
-			if (origin === apiOrigin) void checkApiConnection(origin);
-			else setApiOrigin(origin);
-		} catch (error) {
-			setConnectionMessage(error instanceof Error ? error.message : "API 地址无效。");
-		}
-	}
-
 	return (
 		<>
 			<header className="site-header">
@@ -491,19 +496,13 @@ export function App() {
 						<a className={page === "records" ? "active" : ""} href="#records">
 							制题记录
 						</a>
+						<a className={page === "contests" ? "active" : ""} href="#contests">
+							竞赛
+						</a>
 						<a className={page === "settings" ? "active" : ""} href="#settings">
 							设置
 						</a>
 					</nav>
-					<button
-						className={`api-pill ${apiStatus}`}
-						type="button"
-						onClick={() => {
-							window.location.hash = "settings";
-						}}
-					>
-						{apiStatusLabel(apiStatus)}
-					</button>
 				</div>
 			</header>
 			{page === "workspace" &&
@@ -524,20 +523,24 @@ export function App() {
 						onUpload={uploadFiles}
 						onAddCase={addTextCase}
 						onUploadAttachments={uploadAttachments}
+						onUploadDomjudgePdf={uploadDomjudgePdf}
+						onDeleteDomjudgePdf={deleteDomjudgePdf}
 						onDeleteFile={deleteFile}
 						onGenerate={generate}
 						onFinalize={finalize}
-						onNew={newProject}
+						onNew={async () => setChoosingScoringMode(true)}
 						onLiveVerify={liveVerify}
 					/>
 				) : (
-					<main className="page">
-						<output className={`notice ${noticeTone}`} aria-live="polite">
-							正在读取草稿… {notice}
-						</output>
-						<button className="button primary" type="button" onClick={() => void newProject()}>
-							新建题目
-						</button>
+					<main className="page workspace-empty">
+						<section className="card workspace-empty-card">
+							<div className="eyebrow">Hydro Problem Make</div>
+							<h1>开始创建题目</h1>
+							<p>选择赛制后进入制题工作台。已有草稿请从“制题记录”中打开。</p>
+							<button className="button primary" type="button" onClick={() => setChoosingScoringMode(true)}>
+								新建题目
+							</button>
+						</section>
 					</main>
 				))}
 			{page === "chat" && (
@@ -560,22 +563,40 @@ export function App() {
 					onDelete={deleteProject}
 				/>
 			)}
+			{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
 			{page === "settings" && (
 				<SettingsPage
 					apiOrigin={apiOrigin}
-					apiOriginDraft={apiOriginDraft}
-					apiStatus={apiStatus}
 					sandbox={sandbox}
-					connectionMessage={connectionMessage}
-					onApiOriginChange={setApiOriginDraft}
-					onSave={saveApiConfiguration}
-					onReset={() => {
-						localStorage.removeItem(originKey);
-						setApiOriginDraft("");
-						setApiOrigin("");
-					}}
-					onAiConfigurationChanged={() => void checkApiConnection(apiOrigin)}
+					onAiConfigurationChanged={() => void checkApiConnection()}
 				/>
+			)}
+			{choosingScoringMode && (
+				<div className="confirmation-backdrop" role="presentation">
+					<div
+						className="card confirmation-dialog"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="scoring-mode-title"
+					>
+						<div className="confirmation-heading">
+							<span>新建题目</span>
+							<h2 id="scoring-mode-title">选择赛制</h2>
+						</div>
+						<p>ACM 须全部测试点通过，可导出 DOMjudge；OI 按子任务计分，仅进入 Hydro 竞赛包。创建后赛制固定。</p>
+						<div className="confirmation-actions">
+							<button className="button secondary" type="button" onClick={() => setChoosingScoringMode(false)}>
+								取消
+							</button>
+							<button className="button secondary" type="button" onClick={() => void newProject("oi")}>
+								OI
+							</button>
+							<button className="button primary" type="button" onClick={() => void newProject("acm")}>
+								ACM
+							</button>
+						</div>
+					</div>
+				</div>
 			)}
 			<footer>Hydro Problem Make · 文件式数据流水线 · C++ testlib SPJ</footer>
 		</>

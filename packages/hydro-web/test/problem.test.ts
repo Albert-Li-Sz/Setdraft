@@ -4,6 +4,7 @@ import { editableProject, parseTags, projectContextSnapshot, statementWithSample
 
 const project: ProjectSnapshot = {
 	id: "project",
+	scoringMode: "oi",
 	revision: 1,
 	createdAt: "",
 	updatedAt: "",

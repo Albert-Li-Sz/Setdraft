@@ -19,13 +19,14 @@ interface ZipEntry {
 	crc: number;
 	offset: number;
 	path: string;
+	mode: number;
 }
 
 function encodedName(rootName: string, relativePath: string): Buffer {
-	if (!isSafeFlatName(rootName) || !relativePath.split("/").every(isSafeFlatName)) {
+	if ((rootName && !isSafeFlatName(rootName)) || !relativePath.split("/").every(isSafeFlatName)) {
 		throw new Error(`Unsafe archive path: ${relativePath}`);
 	}
-	const name = Buffer.from(`${rootName}/${relativePath}`);
+	const name = Buffer.from(rootName ? `${rootName}/${relativePath}` : relativePath);
 	if (name.byteLength > 0xffff) throw new Error("Archive path exceeds ZIP32 limit.");
 	return name;
 }
@@ -47,6 +48,7 @@ export async function writeStoredArchiveFromFiles(
 	destination: string,
 	rootName: string,
 	files: ReadonlyMap<string, string>,
+	modes: ReadonlyMap<string, number> = new Map(),
 ): Promise<void> {
 	if (files.size > 0xffff) throw new Error("Archive has too many entries for ZIP32.");
 	const handle = await open(destination, "wx");
@@ -66,7 +68,7 @@ export async function writeStoredArchiveFromFiles(
 		for (const [relativePath, path] of [...files].sort(([left], [right]) => left.localeCompare(right, "en"))) {
 			const name = encodedName(rootName, relativePath);
 			const { size, crc } = await fileCrc(path);
-			const entry: ZipEntry = { name, size, crc, offset, path };
+			const entry: ZipEntry = { name, size, crc, offset, path, mode: modes.get(relativePath) ?? 0o644 };
 			const header = Buffer.alloc(30);
 			header.writeUInt32LE(0x04034b50, 0);
 			header.writeUInt16LE(20, 4);
@@ -103,7 +105,7 @@ export async function writeStoredArchiveFromFiles(
 			header.writeUInt32LE(entry.size, 20);
 			header.writeUInt32LE(entry.size, 24);
 			header.writeUInt16LE(entry.name.byteLength, 28);
-			header.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+			header.writeUInt32LE(((0o100000 | entry.mode) << 16) >>> 0, 38);
 			header.writeUInt32LE(entry.offset, 42);
 			await write(header);
 			await write(entry.name);

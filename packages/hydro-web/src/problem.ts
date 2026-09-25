@@ -29,6 +29,7 @@ export function editableProject(project: ProjectSnapshot) {
 		generatorStandard: project.generatorStandard,
 		generatorScript: project.generatorScript,
 		checkerSource: project.checkerSource,
+		checkerMode: project.checkerMode,
 		checkerStandard: project.checkerStandard,
 		validatorSource: project.validatorSource,
 		validatorStandard: project.validatorStandard,

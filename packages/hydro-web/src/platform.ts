@@ -1,4 +1,4 @@
-export type PageRoute = "workspace" | "chat" | "records" | "settings";
+export type PageRoute = "workspace" | "chat" | "records" | "contests" | "settings";
 export type ApiStatus = "checking" | "online" | "offline";
 export type CppLanguage = "cpp11" | "cpp14" | "cpp17" | "cpp20" | "cpp23" | "cpp26";
 export type ProgramLanguage = CppLanguage | "python3" | "java";
@@ -51,6 +51,7 @@ export interface ManualReport {
 
 export interface ProjectSnapshot {
 	id: string;
+	scoringMode: "acm" | "oi";
 	revision: number;
 	createdAt: string;
 	updatedAt: string;
@@ -67,12 +68,14 @@ export interface ProjectSnapshot {
 	generatorStandard: CppLanguage;
 	generatorScript: string;
 	checkerSource: string;
+	checkerMode?: "text" | "custom";
 	checkerStandard: CppLanguage;
 	validatorSource: string;
 	validatorStandard: CppLanguage;
 	subtasks: Array<{ id: number; type: "sum" | "min" | "max"; score: number }>;
 	caseSubtasks: Record<string, number>;
 	attachments: Array<{ name: string; contentBase64: string }>;
+	domjudgePdf?: { size: number; sha256: string };
 	generatedFromHash?: string;
 	latestReleaseId?: string;
 	lastReport?: ManualReport;
@@ -82,6 +85,7 @@ export interface ProjectSnapshot {
 
 export interface ManualRelease {
 	id: string;
+	scoringMode?: "acm" | "oi";
 	projectId: string;
 	revision: number;
 	projectHash: string;
@@ -89,12 +93,52 @@ export interface ManualRelease {
 	title: string;
 	createdAt: string;
 	report: ManualReport;
+	checkerMode?: "text" | "custom";
+	domjudgePdf?: boolean;
 	liveVerification?: {
 		success: boolean;
 		message: string;
 		problemUrl?: string;
 		reference: { verdict: string; score?: number; accepted: boolean };
 	};
+}
+
+export function isContestReadyRelease(release: ManualRelease): boolean {
+	return (
+		release.report.success &&
+		release.report.mode === "finalize" &&
+		release.report.checkerUsed &&
+		(release.checkerMode === "text" || release.checkerMode === "custom") &&
+		(release.scoringMode === "acm" || release.scoringMode === "oi")
+	);
+}
+
+export interface ContestDraft {
+	id: string;
+	title: string;
+	slug: string;
+	releaseIds: string[];
+	colors: Record<string, string>;
+	colorNames: Record<string, string>;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface ContestRelease {
+	id: string;
+	contestId: string;
+	title: string;
+	slug: string;
+	format: "hydro" | "domjudge";
+	problems: Array<{
+		label: string;
+		releaseId: string;
+		projectHash: string;
+		title: string;
+		color?: string;
+		colorName?: string;
+	}>;
+	createdAt: string;
 }
 
 export interface SandboxStatus {
@@ -164,6 +208,7 @@ export interface ChatConversation {
 export function pageFromHash(hash: string): PageRoute {
 	if (hash === "#chat") return "chat";
 	if (hash === "#records") return "records";
+	if (hash === "#contests") return "contests";
 	if (hash === "#settings") return "settings";
 	return "workspace";
 }

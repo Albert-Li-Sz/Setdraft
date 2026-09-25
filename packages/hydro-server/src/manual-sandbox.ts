@@ -68,7 +68,7 @@ commands = {}
 languages = {}
 file_limit = payload['maxFileBytes']
 cpp_standards = {'cpp11':'c++11', 'cpp14':'c++14', 'cpp17':'c++17',
-                 'cpp20':'c++20', 'cpp23':'c++23', 'cpp26':'c++2c'}
+                 'cpp20':'c++20', 'cpp23':'c++23', 'cpp26':'c++26'}
 
 def check(stage, passed, message, case_id=None):
     checks.append({'stage': stage, 'caseId': case_id, 'passed': bool(passed), 'message': str(message)[:3000]})

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { apiUrl, type ManualRelease, type ProjectSnapshot } from "./platform.ts";
+import { apiUrl, isContestReadyRelease, type ManualRelease, type ProjectSnapshot } from "./platform.ts";
 
 interface Props {
 	apiOrigin: string;
@@ -15,6 +15,26 @@ interface Props {
 
 export function RecordsPage(props: Props) {
 	const [pendingDelete, setPendingDelete] = useState<ProjectSnapshot>();
+	const [exporting, setExporting] = useState("");
+	const [exportMessage, setExportMessage] = useState("");
+	async function exportOne(release: ManualRelease, format: "domjudge" | "fps" | "qduoj"): Promise<void> {
+		setExporting(`${release.id}:${format}`);
+		try {
+			const response = await fetch(apiUrl(props.apiOrigin, `/releases/${release.id}/exports/${format}`), {
+				method: "POST",
+			});
+			const result = (await response.json()) as { message?: string; download?: string };
+			if (!response.ok || !result.download) throw new Error(result.message ?? "导出失败。");
+			setExportMessage(`“${release.title}”的 ${format.toUpperCase()} 包已生成，正在下载。`);
+			window.location.href = apiUrl(props.apiOrigin, result.download.replace(/^\/api/u, ""));
+		} catch (error) {
+			setExportMessage(
+				`“${release.title}”导出 ${format.toUpperCase()} 失败：${error instanceof Error ? error.message : "导出失败。"}`,
+			);
+		} finally {
+			setExporting("");
+		}
+	}
 	return (
 		<main className="page" id="records">
 			<div className="breadcrumb">题库 / 制题记录</div>
@@ -37,6 +57,12 @@ export function RecordsPage(props: Props) {
 				<output className={`notice ${props.loading ? "pending" : props.tone}`} aria-live="polite">
 					<span className="notice-dot" />
 					{props.loading ? "正在读取制题记录…" : props.message}
+				</output>
+			)}
+			{exportMessage && (
+				<output className="notice pending" aria-live="polite">
+					<span className="notice-dot" />
+					{exportMessage}
 				</output>
 			)}
 			<section className="card manual-record-card">
@@ -81,7 +107,7 @@ export function RecordsPage(props: Props) {
 							))}
 						</tbody>
 					</table>
-					{props.projects.length === 0 && <p className="manual-muted">暂无草稿。</p>}
+					{props.projects.length === 0 && <p className="manual-muted history-empty">暂无草稿。</p>}
 				</div>
 			</section>
 			<section className="card manual-record-card">
@@ -98,6 +124,7 @@ export function RecordsPage(props: Props) {
 								<th>题目</th>
 								<th>草稿版本</th>
 								<th>测试点</th>
+								<th>赛制 / Checker</th>
 								<th>发布时间</th>
 								<th>真实 Hydro</th>
 								<th>下载</th>
@@ -114,6 +141,16 @@ export function RecordsPage(props: Props) {
 									</td>
 									<td>{item.revision}</td>
 									<td>{item.report.caseCount}</td>
+									<td>
+										{item.scoringMode?.toUpperCase() ?? "旧版"} ·{" "}
+										{item.report.checkerUsed
+											? item.checkerMode === "text"
+												? "文本"
+												: item.checkerMode === "custom"
+													? "自定义"
+													: "旧版 Checker"
+											: "未验证 Checker"}
+									</td>
 									<td>{new Date(item.createdAt).toLocaleString("zh-CN")}</td>
 									<td>
 										{item.liveVerification
@@ -134,6 +171,40 @@ export function RecordsPage(props: Props) {
 											>
 												制题工程
 											</a>
+											{isContestReadyRelease(item) && item.scoringMode === "acm" && (
+												<>
+													<button
+														type="button"
+														disabled={!!exporting}
+														onClick={() => void exportOne(item, "domjudge")}
+													>
+														{exporting === `${item.id}:domjudge` ? "导出中…" : "DOMjudge"}
+													</button>
+													{item.checkerMode === "text" && (
+														<>
+															<button
+																type="button"
+																disabled={!!exporting}
+																onClick={() => void exportOne(item, "fps")}
+															>
+																FPS
+															</button>
+															<button
+																type="button"
+																disabled={!!exporting}
+																onClick={() => void exportOne(item, "qduoj")}
+															>
+																QDUOJ
+															</button>
+														</>
+													)}
+												</>
+											)}
+											{!isContestReadyRelease(item) && <span>旧版需重新验证后导出新格式</span>}
+											{isContestReadyRelease(item) && item.scoringMode === "oi" && <span>竞赛仅 Hydro</span>}
+											{isContestReadyRelease(item) &&
+												item.scoringMode === "acm" &&
+												item.checkerMode === "custom" && <span>FPS / QDUOJ 不支持自定义 Checker</span>}
 											<a
 												href={apiUrl(props.apiOrigin, `/releases/${item.id}/report`)}
 												target="_blank"
@@ -147,7 +218,7 @@ export function RecordsPage(props: Props) {
 							))}
 						</tbody>
 					</table>
-					{props.releases.length === 0 && <p className="manual-muted">暂无通过完整验证的发布包。</p>}
+					{props.releases.length === 0 && <p className="manual-muted history-empty">暂无通过完整验证的发布包。</p>}
 				</div>
 			</section>
 			{pendingDelete && (
@@ -162,7 +233,7 @@ export function RecordsPage(props: Props) {
 							<span>删除确认</span>
 							<h2 id="delete-project-title">删除“{pendingDelete.title || "未命名题目"}”？</h2>
 						</div>
-						<p>这会删除草稿、测试数据与该项目的所有发布包，无法撤销。</p>
+						<p>这会删除草稿、测试数据与该项目的所有发布包，无法撤销；被竞赛草稿引用时须先移出。</p>
 						<code>{pendingDelete.id}</code>
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setPendingDelete(undefined)}>

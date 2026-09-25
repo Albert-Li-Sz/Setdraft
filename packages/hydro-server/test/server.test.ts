@@ -1,12 +1,13 @@
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatService } from "../src/chat.ts";
-import { ManualProjectStore, parseGeneratorScript } from "../src/manual-projects.ts";
+import { ManualProjectStore, type ManualRelease, parseGeneratorScript } from "../src/manual-projects.ts";
 import { cppLanguages, runManualSandbox } from "../src/manual-sandbox.ts";
 import { createHydroServer } from "../src/server.ts";
 
@@ -30,10 +31,49 @@ async function json<T>(path: string, init?: RequestInit): Promise<{ status: numb
 	return { status: response.status, body: (await response.json()) as T };
 }
 
-async function createProject(): Promise<{ id: string }> {
-	const result = await json<{ id: string }>("/projects", { method: "POST" });
+async function createProject(scoringMode: "acm" | "oi" = "acm"): Promise<{ id: string }> {
+	const result = await json<{ id: string }>("/projects", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ scoringMode }),
+	});
 	expect(result.status).toBe(201);
 	return result.body;
+}
+
+async function seedRelease(projectId: string, overrides: Partial<ManualRelease> = {}): Promise<ManualRelease> {
+	const id = randomUUID();
+	const release: ManualRelease = {
+		id,
+		projectId,
+		scoringMode: "acm",
+		revision: 0,
+		projectHash: "verified-hash",
+		slug: "verified-problem",
+		title: "Verified Problem",
+		createdAt: new Date().toISOString(),
+		checkerMode: "text",
+		report: {
+			mode: "finalize",
+			success: true,
+			checks: [],
+			caseCount: 1,
+			generatedCount: 0,
+			oracleCount: 0,
+			validatorUsed: false,
+			checkerUsed: true,
+			revision: 0,
+			projectHash: "verified-hash",
+			issues: [],
+			verifiedAt: new Date().toISOString(),
+		},
+		...overrides,
+	};
+	const directory = join(root, "releases", id);
+	await mkdir(directory, { recursive: true });
+	await writeFile(join(directory, "release.json"), JSON.stringify(release));
+	await writeFile(join(directory, "hydro.zip"), "historical Hydro package");
+	return release;
 }
 
 beforeEach(async () => {
@@ -58,6 +98,120 @@ afterEach(async () => {
 });
 
 describe("manual project API", () => {
+	it("requires a scoring mode before editing and keeps the selected mode immutable", async () => {
+		for (const body of ["{}", '{"scoringMode":"icpc"}']) {
+			const created = await json<{ message: string }>("/projects", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body,
+			});
+			expect(created.status).toBe(400);
+			expect(created.body.message).toContain("选择 ACM 或 OI");
+		}
+		const project = await createProject("oi");
+		const changed = await json<{ message: string }>(`/projects/${project.id}`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ scoringMode: "acm" }),
+		});
+		expect(changed.status).toBe(422);
+		expect((await json<{ scoringMode: string }>(`/projects/${project.id}`)).body.scoringMode).toBe("oi");
+		const pdf = await fetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
+			method: "PUT",
+			headers: { "content-type": "application/pdf" },
+			body: "%PDF-1.4\n",
+		});
+		expect(pdf.status).toBe(422);
+	});
+
+	it("validates balloon names and protects releases used by contest drafts", async () => {
+		const project = await createProject();
+		const release = await seedRelease(project.id);
+		const contest = await json<{ id: string }>("/contests", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ title: "Practice", slug: "practice" }),
+		});
+		expect(contest.status).toBe(201);
+		const path = `/contests/${contest.body.id}`;
+		const update = (colors: unknown, colorNames: unknown, releaseIds = [release.id]) =>
+			json<{ colors?: Record<string, string>; colorNames?: Record<string, string>; message?: string }>(path, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ title: "Practice", slug: "practice", releaseIds, colors, colorNames }),
+			});
+		const saved = await update({ [release.id]: "#12ab34" }, { [release.id]: " Jade Green " });
+		expect(saved.status).toBe(200);
+		expect(saved.body).toMatchObject({
+			colors: { [release.id]: "#12AB34" },
+			colorNames: { [release.id]: "Jade Green" },
+		});
+		for (const colorNames of [null, { [release.id]: "" }, { [release.id]: "Blue\nGreen" }]) {
+			expect((await update({ [release.id]: "#12AB34" }, colorNames)).status).toBe(422);
+		}
+		expect((await update({ [release.id]: "#12345Z" }, { [release.id]: "Green" })).status).toBe(422);
+		expect((await fetch(`${origin}/api/projects/${project.id}`, { method: "DELETE" })).status).toBe(409);
+		expect((await json<{ releaseIds: string[] }>(path)).body.releaseIds).toEqual([release.id]);
+		const removed = await json<{ colorNames: Record<string, string> }>(path, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ title: "Practice", slug: "practice", releaseIds: [], colors: {} }),
+		});
+		expect(removed.status).toBe(200);
+		expect(removed.body.colorNames).toEqual({});
+		expect((await fetch(`${origin}/api/projects/${project.id}`, { method: "DELETE" })).status).toBe(204);
+		expect((await json(path)).status).toBe(200);
+	});
+
+	it("keeps an old Hydro package downloadable but excludes it from new contests", async () => {
+		const project = await createProject();
+		const release = await seedRelease(project.id, { scoringMode: undefined, checkerMode: undefined });
+		const historical = await fetch(`${origin}/api/releases/${release.id}/hydro`);
+		expect(historical.status).toBe(200);
+		expect(await historical.text()).toBe("historical Hydro package");
+		const contest = await json<{ id: string }>("/contests", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ title: "Practice", slug: "practice" }),
+		});
+		const added = await json<{ message: string }>(`/contests/${contest.body.id}`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				title: "Practice",
+				slug: "practice",
+				releaseIds: [release.id],
+				colors: {},
+				colorNames: {},
+			}),
+		});
+		expect(added.status).toBe(422);
+		expect(added.body.message).toContain("旧题请重新验证");
+	});
+
+	it("rejects duplicate releases and two releases from the same problem", async () => {
+		const project = await createProject();
+		const first = await seedRelease(project.id);
+		const second = await seedRelease(project.id);
+		const contest = await json<{ id: string }>("/contests", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ title: "Practice", slug: "practice" }),
+		});
+		for (const releaseIds of [
+			[first.id, first.id],
+			[first.id, second.id],
+		]) {
+			const added = await json<{ message: string }>(`/contests/${contest.body.id}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ title: "Practice", slug: "practice", releaseIds, colors: {} }),
+			});
+			expect(added.status).toBe(422);
+		}
+		expect((await json<{ releaseIds: string[] }>(`/contests/${contest.body.id}`)).body.releaseIds).toEqual([]);
+	});
+
 	it("accepts quoted Gen arguments but rejects shell execution syntax", () => {
 		expect(parseGeneratorScript("# seed\ngen large 1000000 100\ngen 'two words' 7 # comment")).toEqual([
 			["large", "1000000", "100"],
@@ -164,7 +318,7 @@ describe("manual project API", () => {
 	});
 
 	it("adds exact text cases with optional empty output and numbers after uploaded files", async () => {
-		const project = await createProject();
+		const project = await createProject("oi");
 		await json(`/projects/${project.id}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
@@ -251,6 +405,46 @@ describe("manual project API", () => {
 			revision: 0,
 			cases: [],
 		});
+	});
+
+	it("preserves OI mode and text Checker when loading an older draft", async () => {
+		const project = await createProject("oi");
+		const path = join(root, "projects", project.id, "project.json");
+		const stored = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+		delete stored.scoringMode;
+		delete stored.checkerMode;
+		stored.subtasks = [{ id: 1, type: "min", score: 100 }];
+		await writeFile(path, JSON.stringify(stored));
+		expect(await store.get(project.id)).toMatchObject({ scoringMode: "oi", checkerMode: "text" });
+	});
+
+	it("restores the previous DOMjudge PDF when replacement cannot be saved", async () => {
+		const project = await createProject();
+		const pdfPath = `/projects/${project.id}/domjudge-pdf`;
+		const original = "%PDF-1.4\noriginal\n";
+		const uploaded = await fetch(`${origin}/api${pdfPath}`, {
+			method: "PUT",
+			headers: { "content-type": "application/pdf" },
+			body: original,
+		});
+		expect(uploaded.status).toBe(200);
+		const revision = (await json<{ revision: number }>(`/projects/${project.id}`)).body.revision;
+		const save = Reflect.get(store, "save") as (value: unknown) => Promise<void>;
+		Reflect.set(store, "save", async () => {
+			throw new Error("simulated save failure");
+		});
+		try {
+			const failed = await fetch(`${origin}/api${pdfPath}`, {
+				method: "PUT",
+				headers: { "content-type": "application/pdf" },
+				body: "%PDF-1.7\nreplacement\n",
+			});
+			expect(failed.status).toBe(500);
+		} finally {
+			Reflect.set(store, "save", save);
+		}
+		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
+		expect(await (await fetch(`${origin}/api${pdfPath}`)).text()).toBe(original);
 	});
 
 	it("streams faux-provider AI replies and persists the conversation", async () => {
@@ -405,8 +599,13 @@ describe("manual project API", () => {
 	});
 
 	it.skipIf(!dockerAvailable)(
-		"compiles reference, oracle, Gen, SPJ and validator with their selected GCC 15.2 standards",
+		"compiles reference, oracle, Gen, SPJ and validator with their selected GCC 16.2 standards",
 		async () => {
+			expect(
+				execFileSync("docker", ["run", "--rm", "hydro-problem-make/sandbox:local", "g++", "-dumpfullversion"])
+					.toString("utf8")
+					.trim(),
+			).toBe("16.2.0");
 			const generated = await runManualSandbox({
 				mode: "generate",
 				stage: join(root, "cpp-standards-generate"),
@@ -491,7 +690,7 @@ describe("manual project API", () => {
 				{ method: "POST" },
 			);
 			expect(finished.status).toBe(200);
-			expect(finished.body.report.success).toBe(true);
+			expect(finished.body.report.success, JSON.stringify(finished.body.report)).toBe(true);
 			const releaseId = finished.body.release?.id;
 			expect(releaseId).toBeTruthy();
 			const hydro = await fetch(`${origin}/api/releases/${releaseId}/hydro`);
@@ -503,6 +702,14 @@ describe("manual project API", () => {
 			const sourcePath = (await store.releaseFile(releaseId!, "source")).path;
 			expect(() => execFileSync("unzip", ["-t", hydroPath], { stdio: "ignore" })).not.toThrow();
 			expect(() => execFileSync("unzip", ["-t", sourcePath], { stdio: "ignore" })).not.toThrow();
+			const hydroConfig = execFileSync("unzip", ["-p", hydroPath, "a-plus-b/testdata/config.yaml"], {
+				encoding: "utf8",
+			});
+			expect(hydroConfig).toContain("checker_type: testlib");
+			expect(hydroConfig).toContain("checker: checker.cc");
+			expect(execFileSync("unzip", ["-Z1", hydroPath], { encoding: "utf8" })).toContain(
+				"a-plus-b/testdata/checker.cc",
+			);
 			expect(execFileSync("unzip", ["-p", hydroPath, "a-plus-b/problem_zh.md"]).toString("utf8")).toBe(
 				formatHydroStatement({ statement: "# A + B\n\n计算和。", samples: [{ input: "1 2\n", output: "3\n" }] }),
 			);
@@ -510,7 +717,7 @@ describe("manual project API", () => {
 				execFileSync("unzip", ["-p", sourcePath, "a-plus-b.authoring/manifest.json"]).toString("utf8"),
 			) as { testlibCommit: string; toolchain: { cpp: string }; languages: { reference: string } };
 			expect(manifest.testlibCommit).toBeTruthy();
-			expect(manifest.toolchain.cpp).toBe("GCC 15.2.0");
+			expect(manifest.toolchain.cpp).toBe("GCC 16.2.0");
 			expect(manifest.languages.reference).toBe("cpp23");
 			expect(
 				(await json<{ releases: Array<{ id: string }> }>("/releases")).body.releases.map((item) => item.id),
@@ -625,7 +832,7 @@ describe("manual project API", () => {
 				report: { success: boolean; generatedCount: number; oracleCount: number };
 			}>(`/projects/${project.id}/generate`, { method: "POST" });
 			expect(generated.status, JSON.stringify(generated.body)).toBe(200);
-			expect(generated.body.report).toMatchObject({
+			expect(generated.body.report, JSON.stringify(generated.body.report)).toMatchObject({
 				mode: "generate",
 				success: true,
 				generatedCount: 2,
@@ -714,6 +921,7 @@ describe("manual project API", () => {
 					slug: "sum-spj",
 					statement: "# Sum SPJ\n\n求和。",
 					reference: { language: "python3", code: "a,b=map(int,input().split());print(a+b)" },
+					checkerMode: "custom",
 					checkerSource: checker,
 				}),
 			});
@@ -743,6 +951,14 @@ describe("manual project API", () => {
 				]),
 			);
 			expect(passed.body.release?.id).toBeTruthy();
+			for (const format of ["fps", "qduoj"]) {
+				const unsupported = await json<{ message: string }>(
+					`/releases/${passed.body.release?.id}/exports/${format}`,
+					{ method: "POST" },
+				);
+				expect(unsupported.status).toBe(422);
+				expect(unsupported.body.message).toContain("自定义 testlib Checker");
+			}
 			await json(`/projects/${project.id}`, {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
@@ -788,7 +1004,7 @@ describe("manual project API", () => {
 				project: { cases: Array<{ inputBytes: number }> };
 			}>(`/projects/${project.id}/generate`, { method: "POST" });
 			expect(generated.status, JSON.stringify(generated.body)).toBe(200);
-			expect(generated.body.report.success).toBe(true);
+			expect(generated.body.report.success, JSON.stringify(generated.body.report)).toBe(true);
 			expect(generated.body.project.cases[0].inputBytes).toBeGreaterThan(1024 * 1024);
 			const finished = await json<{ report: { success: boolean }; release?: { id: string } }>(
 				`/projects/${project.id}/finalize`,
@@ -796,6 +1012,268 @@ describe("manual project API", () => {
 			);
 			expect(finished.body.report.success).toBe(true);
 			expect(finished.body.release?.id).toBeTruthy();
+		},
+		120_000,
+	);
+
+	it.skipIf(!dockerAvailable)(
+		"exports verified ACM releases without a statement unless a PDF was uploaded",
+		async () => {
+			const project = await createProject();
+			await json(`/projects/${project.id}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					title: "A + B",
+					slug: "sum-export",
+					statement: "# A + B\n\n求两个数的和。",
+					reference: {
+						language: "cpp17",
+						code: "#include <iostream>\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b<<'\\n';}",
+					},
+				}),
+			});
+			await json(`/projects/${project.id}/cases`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ input: "1 2\n" }),
+			});
+			const first = await json<{ release?: { id: string }; report: { success: boolean } }>(
+				`/projects/${project.id}/finalize`,
+				{ method: "POST" },
+			);
+			expect(first.body.report.success, JSON.stringify(first.body.report)).toBe(true);
+			const releaseId = first.body.release?.id ?? "";
+			const domjudge = await json<{ download: string }>(`/releases/${releaseId}/exports/domjudge`, {
+				method: "POST",
+			});
+			expect(domjudge.status, JSON.stringify(domjudge.body)).toBe(200);
+			const domjudgePath = (await store.releaseFile(releaseId, "domjudge")).path;
+			expect(() => execFileSync("unzip", ["-t", domjudgePath], { stdio: "ignore" })).not.toThrow();
+			const entries = execFileSync("unzip", ["-Z1", domjudgePath], { encoding: "utf8" }).trim().split("\n");
+			expect(entries).toContain("problem.yaml");
+			expect(entries).toContain("output_validators/checker/run");
+			expect(entries).not.toContain("problem.pdf");
+			expect(entries.some((name) => name.includes("problem_zh.md"))).toBe(false);
+			const qduojExports = await Promise.all(
+				Array.from({ length: 2 }, () =>
+					json<{ download: string }>(`/releases/${releaseId}/exports/qduoj`, { method: "POST" }),
+				),
+			);
+			for (const qduoj of qduojExports) expect(qduoj.status, JSON.stringify(qduoj.body)).toBe(200);
+			const qduojPath = (await store.releaseFile(releaseId, "qduoj")).path;
+			const document = JSON.parse(
+				execFileSync("unzip", ["-p", qduojPath, "1/problem.json"], { encoding: "utf8" }),
+			) as {
+				rule_type: string;
+				spj: { code: string };
+			};
+			expect(document.rule_type).toBe("ACM");
+			expect(document.spj.code).toContain("int main(int argc, char** argv)");
+			const checkerDirectory = join(root, "native-spj");
+			await mkdir(checkerDirectory);
+			await writeFile(join(checkerDirectory, "checker.cc"), document.spj.code);
+			await writeFile(join(checkerDirectory, "1.in"), "1 2\n");
+			await writeFile(join(checkerDirectory, "correct.out"), "3 \r\n");
+			await writeFile(join(checkerDirectory, "wrong.out"), "4\n");
+			const dockerArgs = [
+				"run",
+				"--rm",
+				"--network",
+				"none",
+				"--mount",
+				`type=bind,source=${checkerDirectory},target=/work`,
+				"--workdir",
+				"/work",
+				"hydro-problem-make/sandbox:local",
+				"sh",
+				"-c",
+			];
+			const accepted = spawnSync(
+				"docker",
+				[...dockerArgs, "g++ -std=c++20 checker.cc -o checker && ./checker 1.in correct.out"],
+				{ encoding: "utf8" },
+			);
+			expect(accepted.status, accepted.stderr).toBe(0);
+			const rejected = spawnSync("docker", [...dockerArgs, "./checker 1.in wrong.out"], { encoding: "utf8" });
+			expect(rejected.status, rejected.stderr).toBe(1);
+			const fps = await json<{ download: string }>(`/releases/${releaseId}/exports/fps`, { method: "POST" });
+			expect(fps.status, JSON.stringify(fps.body)).toBe(200);
+			expect(await readFile((await store.releaseFile(releaseId, "fps")).path, "utf8")).toContain(
+				'<spj language="C++">',
+			);
+			const pdfUpload = await fetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
+				method: "PUT",
+				headers: { "content-type": "application/pdf" },
+				body: "%PDF-1.4\nexample\n",
+			});
+			expect(pdfUpload.status).toBe(200);
+			const second = await json<{ release?: { id: string }; report: { success: boolean } }>(
+				`/projects/${project.id}/finalize`,
+				{ method: "POST" },
+			);
+			expect(second.body.report.success, JSON.stringify(second.body.report)).toBe(true);
+			const withPdf = second.body.release?.id ?? "";
+			await json(`/releases/${withPdf}/exports/domjudge`, { method: "POST" });
+			const pdfEntries = execFileSync("unzip", ["-Z1", (await store.releaseFile(withPdf, "domjudge")).path], {
+				encoding: "utf8",
+			});
+			expect(pdfEntries).toContain("problem.pdf");
+			expect(
+				execFileSync("unzip", ["-p", (await store.releaseFile(withPdf, "domjudge")).path, "problem.pdf"], {
+					encoding: "utf8",
+				}),
+			).toBe("%PDF-1.4\nexample\n");
+			const contest = await json<{ id: string }>("/contests", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ title: "ACM Practice", slug: "acm-practice" }),
+			});
+			await json(`/contests/${contest.body.id}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					title: "ACM Practice",
+					slug: "acm-practice",
+					releaseIds: [withPdf],
+					colors: { [withPdf]: "#12AB34" },
+					colorNames: { [withPdf]: "Jade Green" },
+				}),
+			});
+			const bundle = await json<{ id: string }>(`/contests/${contest.body.id}/export`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ format: "domjudge" }),
+			});
+			expect(bundle.status).toBe(201);
+			const bundlePath = join(root, "contest-releases", bundle.body.id, "bundle.zip");
+			expect(() => execFileSync("unzip", ["-t", bundlePath], { stdio: "ignore" })).not.toThrow();
+			const metadata = execFileSync("unzip", ["-p", bundlePath, "acm-practice/problems.yaml"], { encoding: "utf8" });
+			expect(metadata).toContain("rgb: '#12AB34'");
+			expect(metadata).toContain('color: "Jade Green"');
+			expect(execFileSync("unzip", ["-Z1", bundlePath], { encoding: "utf8" })).toContain(
+				"acm-practice/problems/A.zip",
+			);
+		},
+		120_000,
+	);
+
+	it.skipIf(!dockerAvailable)(
+		"keeps OI problems in Hydro contests and restricts DOMjudge contests to ACM",
+		async () => {
+			const oi = await createProject("oi");
+			await json(`/projects/${oi.id}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					title: "OI Sum",
+					slug: "oi-sum",
+					statement: "# OI Sum\n\n输出输入。",
+					reference: {
+						language: "cpp17",
+						code: "#include <iostream>\nint main(){int value;std::cin>>value;std::cout<<value<<'\\n';}",
+					},
+					subtasks: [
+						{ id: 1, type: "sum", score: 40 },
+						{ id: 2, type: "min", score: 60 },
+					],
+				}),
+			});
+			await json(`/projects/${oi.id}/cases`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ input: "7\n" }),
+			});
+			await json(`/projects/${oi.id}/cases`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ input: "8\n", subtaskId: 2 }),
+			});
+			const finalized = await json<{ release?: { id: string }; report: { success: boolean } }>(
+				`/projects/${oi.id}/finalize`,
+				{ method: "POST" },
+			);
+			expect(finalized.body.report.success, JSON.stringify(finalized.body.report)).toBe(true);
+			const releaseId = finalized.body.release?.id ?? "";
+			const hydroConfig = execFileSync(
+				"unzip",
+				["-p", (await store.releaseFile(releaseId, "hydro")).path, "oi-sum/testdata/config.yaml"],
+				{ encoding: "utf8" },
+			);
+			expect(hydroConfig).toContain("score: 40");
+			expect(hydroConfig).toContain("score: 60");
+			expect((await json(`/releases/${releaseId}/exports/domjudge`, { method: "POST" })).status).toBe(422);
+			const acm = await createProject();
+			await json(`/projects/${acm.id}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					title: "ACM Sum",
+					slug: "acm-sum",
+					statement: "# ACM Sum\n\n输出输入。",
+					reference: {
+						language: "cpp17",
+						code: "#include <iostream>\nint main(){int value;std::cin>>value;std::cout<<value<<'\\n';}",
+					},
+				}),
+			});
+			await json(`/projects/${acm.id}/cases`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ input: "9\n" }),
+			});
+			const acmFinalized = await json<{ release?: { id: string }; report: { success: boolean } }>(
+				`/projects/${acm.id}/finalize`,
+				{ method: "POST" },
+			);
+			expect(acmFinalized.body.report.success, JSON.stringify(acmFinalized.body.report)).toBe(true);
+			const acmReleaseId = acmFinalized.body.release?.id ?? "";
+			const created = await json<{ id: string }>("/contests", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ title: "Practice", slug: "practice" }),
+			});
+			expect(created.status).toBe(201);
+			const updated = await json<{ releaseIds: string[] }>(`/contests/${created.body.id}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					title: "Practice",
+					slug: "practice",
+					releaseIds: [acmReleaseId, releaseId],
+					colors: { [acmReleaseId]: "#123456" },
+				}),
+			});
+			expect(updated.body.releaseIds).toEqual([acmReleaseId, releaseId]);
+			expect(
+				(
+					await json(`/contests/${created.body.id}/export`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ format: "domjudge" }),
+					})
+				).status,
+			).toBe(422);
+			const bundle = await json<{ id: string }>(`/contests/${created.body.id}/export`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ format: "hydro" }),
+			});
+			expect(bundle.status).toBe(201);
+			const download = await fetch(`${origin}/api/contest-releases/${bundle.body.id}/download`);
+			expect(download.status).toBe(200);
+			expect(Buffer.from(await download.arrayBuffer()).subarray(0, 4)).toEqual(
+				Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+			);
+			const archivePath = join(root, "contest-releases", bundle.body.id, "bundle.zip");
+			expect(() => execFileSync("unzip", ["-t", archivePath], { stdio: "ignore" })).not.toThrow();
+			const manifest = JSON.parse(
+				execFileSync("unzip", ["-p", archivePath, "practice/manifest.json"], { encoding: "utf8" }),
+			) as { problems: Array<{ label: string; releaseId: string }> };
+			expect(manifest.problems).toMatchObject([
+				{ label: "A", releaseId: acmReleaseId },
+				{ label: "B", releaseId },
+			]);
 		},
 		120_000,
 	);

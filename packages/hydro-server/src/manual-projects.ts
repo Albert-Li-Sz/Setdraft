@@ -17,6 +17,9 @@ import {
 	writeStoredArchiveFromFiles,
 } from "@hydro-problem-make/authoring";
 import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
+import { type CheckerMode, effectiveChecker } from "./acm-checker.ts";
+import { writeDomjudgeProblemArchive } from "./domjudge-export.ts";
+import { writeLegacyProblemExport } from "./legacy-exports.ts";
 import type { HydroLiveVerificationResult } from "./live-hydro.ts";
 import {
 	type CppLanguage,
@@ -41,6 +44,7 @@ export interface ManualSubtask {
 
 export interface ManualProject {
 	id: string;
+	scoringMode: "acm" | "oi";
 	revision: number;
 	createdAt: string;
 	updatedAt: string;
@@ -57,12 +61,14 @@ export interface ManualProject {
 	generatorStandard: CppLanguage;
 	generatorScript: string;
 	checkerSource: string;
+	checkerMode?: CheckerMode;
 	checkerStandard: CppLanguage;
 	validatorSource: string;
 	validatorStandard: CppLanguage;
 	subtasks: ManualSubtask[];
 	caseSubtasks: Record<string, number>;
 	attachments: Array<{ name: string; contentBase64: string }>;
+	domjudgePdf?: { size: number; sha256: string };
 	generatedFromHash?: string;
 	latestReleaseId?: string;
 	lastReport?: ManualVerificationReport;
@@ -98,6 +104,7 @@ export interface ManualVerificationReport extends ManualSandboxReport {
 
 export interface ManualRelease {
 	id: string;
+	scoringMode: "acm" | "oi";
 	projectId: string;
 	revision: number;
 	projectHash: string;
@@ -105,6 +112,8 @@ export interface ManualRelease {
 	title: string;
 	createdAt: string;
 	report: ManualVerificationReport;
+	checkerMode?: CheckerMode;
+	domjudgePdf?: boolean;
 	liveVerification?: HydroLiveVerificationResult;
 }
 
@@ -319,11 +328,12 @@ export class ManualProjectStore {
 		await writeFile(marker, "Legacy Agent records removed; ai-config.json preserved.\n");
 	}
 
-	async create(): Promise<ManualProjectSnapshot> {
+	async create(scoringMode: "acm" | "oi"): Promise<ManualProjectSnapshot> {
 		const id = randomUUID();
 		const now = new Date().toISOString();
 		const project: ManualProject = {
 			id,
+			scoringMode,
 			revision: 0,
 			createdAt: now,
 			updatedAt: now,
@@ -339,10 +349,11 @@ export class ManualProjectStore {
 			generatorStandard: "cpp17",
 			generatorScript: "",
 			checkerSource: "",
+			checkerMode: "text",
 			checkerStandard: "cpp17",
 			validatorSource: "",
 			validatorStandard: "cpp17",
-			subtasks: [{ id: 1, type: "sum", score: 100 }],
+			subtasks: [{ id: 1, type: scoringMode === "acm" ? "min" : "sum", score: 100 }],
 			caseSubtasks: {},
 			attachments: [],
 		};
@@ -359,6 +370,8 @@ export class ManualProjectStore {
 			) as ManualProject;
 			return {
 				...stored,
+				scoringMode: stored.scoringMode ?? "oi",
+				checkerMode: stored.checkerMode ?? (stored.checkerSource.trim() ? "custom" : "text"),
 				generatorStandard: stored.generatorStandard ?? "cpp17",
 				checkerStandard: stored.checkerStandard ?? "cpp17",
 				validatorStandard: stored.validatorStandard ?? "cpp17",
@@ -435,6 +448,9 @@ export class ManualProjectStore {
 		this.assertNotBusy(id);
 		const project = await this.load(id);
 		const input = record(value, "项目草稿");
+		if (input.scoringMode !== undefined && input.scoringMode !== project.scoringMode) {
+			throw new ManualProjectError("题目赛制在创建后不可更改；请新建题目。", 422);
+		}
 		const fields = [
 			"slug",
 			"title",
@@ -452,6 +468,12 @@ export class ManualProjectStore {
 		}
 		for (const field of ["generatorStandard", "checkerStandard", "validatorStandard"] as const) {
 			if (input[field] !== undefined) project[field] = readCppLanguage(input[field], field);
+		}
+		if (input.checkerMode !== undefined) {
+			if (input.checkerMode !== "text" && input.checkerMode !== "custom") {
+				throw new ManualProjectError("Checker 模式无效。");
+			}
+			project.checkerMode = input.checkerMode;
 		}
 		if (input.reference !== undefined) project.reference = readProgram(input.reference, "reference");
 		if (input.oracle !== undefined)
@@ -656,6 +678,92 @@ export class ManualProjectStore {
 		}
 	}
 
+	async uploadDomjudgePdf(id: string, request: IncomingMessage): Promise<ManualProjectSnapshot> {
+		this.assertNotBusy(id);
+		this.busy.add(id);
+		const directory = join(this.projectDirectory(id), "domjudge");
+		const target = join(directory, "problem.pdf");
+		const temporary = `${target}.${randomUUID()}.tmp`;
+		const backup = `${target}.${randomUUID()}.bak`;
+		let originalExists = false;
+		let replaced = false;
+		let committed = false;
+		try {
+			const project = await this.load(id);
+			if (project.scoringMode !== "acm") {
+				throw new ManualProjectError("只有 ACM 题目可以上传 DOMjudge PDF。", 422);
+			}
+			await mkdir(directory, { recursive: true });
+			const file = await open(temporary, "wx");
+			let size = 0;
+			try {
+				for await (const raw of request) {
+					const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+					size += bytes.byteLength;
+					if (size > this.maxFileBytes) throw new ManualProjectError("PDF 超过单文件大小限制。", 413);
+					let offset = 0;
+					while (offset < bytes.byteLength) {
+						const result = await file.write(bytes, offset, bytes.byteLength - offset);
+						if (result.bytesWritten <= 0) throw new Error("PDF 写入中断。");
+						offset += result.bytesWritten;
+					}
+				}
+			} finally {
+				await file.close();
+			}
+			const header = Buffer.alloc(5);
+			const source = await open(temporary, "r");
+			try {
+				await source.read(header, 0, header.length, 0);
+			} finally {
+				await source.close();
+			}
+			if (!header.equals(Buffer.from("%PDF-"))) throw new ManualProjectError("上传文件不是 PDF。", 422);
+			const sha256 = await hashFile(temporary);
+			try {
+				await copyFile(target, backup);
+				originalExists = true;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			await rename(temporary, target);
+			replaced = true;
+			project.domjudgePdf = { size, sha256 };
+			project.revision += 1;
+			project.updatedAt = new Date().toISOString();
+			await this.save(project);
+			committed = true;
+			return this.get(id);
+		} catch (error) {
+			if (replaced && !committed) {
+				if (originalExists) await rename(backup, target);
+				else await rm(target, { force: true });
+			}
+			throw error;
+		} finally {
+			await rm(temporary, { force: true });
+			await rm(backup, { force: true });
+			this.busy.delete(id);
+		}
+	}
+
+	async deleteDomjudgePdf(id: string): Promise<ManualProjectSnapshot> {
+		this.assertNotBusy(id);
+		const project = await this.load(id);
+		await rm(join(this.projectDirectory(id), "domjudge", "problem.pdf"), { force: true });
+		delete project.domjudgePdf;
+		project.revision += 1;
+		project.updatedAt = new Date().toISOString();
+		await this.save(project);
+		return this.get(id);
+	}
+
+	async domjudgePdfFile(id: string): Promise<{ path: string; size: number }> {
+		const project = await this.load(id);
+		if (!project.domjudgePdf) throw new ManualProjectError("尚未上传 DOMjudge PDF。", 404);
+		return { path: join(this.projectDirectory(id), "domjudge", "problem.pdf"), size: project.domjudgePdf.size };
+	}
+
 	async file(id: string, name: string, origin?: ManualCaseSummary["origin"]): Promise<{ path: string; size: number }> {
 		await this.load(id);
 		dataStem(name);
@@ -738,7 +846,7 @@ export class ManualProjectStore {
 				generatorStandard: project.generatorStandard,
 				commands,
 				startNumber,
-				checker: project.checkerSource,
+				checker: effectiveChecker(project.checkerMode, project.checkerSource),
 				checkerStandard: project.checkerStandard,
 				validator: project.validatorSource,
 				validatorStandard: project.validatorStandard,
@@ -781,6 +889,7 @@ export class ManualProjectStore {
 		const hash = createHash("sha256").update(
 			JSON.stringify({
 				slug: project.slug,
+				scoringMode: project.scoringMode,
 				title: project.title,
 				tags: project.tags,
 				statement: project.statement,
@@ -793,12 +902,14 @@ export class ManualProjectStore {
 				generatorStandard: project.generatorStandard,
 				generatorScript: project.generatorScript,
 				checkerSource: project.checkerSource,
+				checkerMode: project.checkerMode,
 				checkerStandard: project.checkerStandard,
 				validatorSource: project.validatorSource,
 				validatorStandard: project.validatorStandard,
 				subtasks: project.subtasks,
 				caseSubtasks: project.caseSubtasks,
 				attachments: project.attachments,
+				domjudgePdf: project.domjudgePdf,
 			}),
 		);
 		for (const item of cases) {
@@ -822,7 +933,7 @@ export class ManualProjectStore {
 			statement: formatHydroStatement(project),
 			timeLimit: project.timeLimit,
 			memoryLimit: project.memoryLimit,
-			checker: project.checkerSource.trim() ? { type: "testlib", source: project.checkerSource } : undefined,
+			checker: { type: "testlib", source: effectiveChecker(project.checkerMode, project.checkerSource) ?? "" },
 			attachments: project.attachments.map((item) => ({
 				name: item.name,
 				content: Buffer.from(item.contentBase64, "base64"),
@@ -849,10 +960,25 @@ export class ManualProjectStore {
 		try {
 			const project = await this.load(id);
 			if (!project.reference.code.trim()) throw new ManualProjectError("标准程序是打包前的必填项。", 422);
+			if (!effectiveChecker(project.checkerMode, project.checkerSource)) {
+				throw new ManualProjectError("请选择文本比对 Checker，或提供 C++ testlib Checker 源码。", 422);
+			}
+			if (
+				project.scoringMode === "acm" &&
+				(project.subtasks.length !== 1 ||
+					project.subtasks[0].id !== 1 ||
+					project.subtasks[0].type !== "min" ||
+					project.subtasks[0].score !== 100)
+			) {
+				throw new ManualProjectError("ACM 题目仅允许一个 100 分 min 分组。", 422);
+			}
 			const { cases, orphanOutputs } = await this.caseList(project);
 			if (orphanOutputs.length)
 				throw new ManualProjectError(`存在没有对应 .in 的输出文件：${orphanOutputs.join(", ")}`, 422);
 			if (cases.length === 0) throw new ManualProjectError("请先上传测试数据或运行 Gen。", 422);
+			if (project.scoringMode === "acm" && cases.some((item) => item.subtaskId !== 1)) {
+				throw new ManualProjectError("ACM 题目的所有测试点必须位于唯一分组。", 422);
+			}
 			if (cases.some((item) => item.origin === "generated")) {
 				if (
 					project.generatedFromHash !==
@@ -892,7 +1018,7 @@ export class ManualProjectStore {
 				reference: project.reference,
 				oracle: project.oracle,
 				generatorStandard: project.generatorStandard,
-				checker: project.checkerSource,
+				checker: effectiveChecker(project.checkerMode, project.checkerSource),
 				checkerStandard: project.checkerStandard,
 				validator: project.validatorSource,
 				validatorStandard: project.validatorStandard,
@@ -947,7 +1073,7 @@ export class ManualProjectStore {
 				"reference.txt": project.reference.code,
 				"generator.cc": project.generatorSource,
 				"generate.txt": project.generatorScript,
-				"checker.cc": project.checkerSource,
+				"checker.cc": effectiveChecker(project.checkerMode, project.checkerSource) ?? "",
 				"validator.cc": project.validatorSource,
 				"oracle.txt": project.oracle?.code ?? "",
 			};
@@ -955,6 +1081,16 @@ export class ManualProjectStore {
 				const path = join(sourceRoot, name);
 				await writeFile(path, content);
 				sourceFiles.set(name, path);
+			}
+			if (project.domjudgePdf) {
+				const pdfSource = join(this.projectDirectory(id), "domjudge", "problem.pdf");
+				if ((await hashFile(pdfSource)) !== project.domjudgePdf.sha256) {
+					throw new ManualProjectError("DOMjudge PDF 已在项目目录外被修改，请重新上传。", 422);
+				}
+				await copyFile(pdfSource, join(releaseDirectory, "problem.pdf"));
+				const sourceTarget = join(sourceRoot, "problem.pdf");
+				await copyFile(pdfSource, sourceTarget);
+				sourceFiles.set("problem.pdf", sourceTarget);
 			}
 			for (const item of cases) {
 				for (const name of [item.inputFile, item.outputFile].filter(
@@ -989,7 +1125,7 @@ export class ManualProjectStore {
 				revision: project.revision,
 				projectHash: report.projectHash,
 				sandboxImage: this.image,
-				toolchain: { cpp: "GCC 15.2.0", python: "Python 3.14", java: "Java 21" },
+				toolchain: { cpp: "GCC 16.2.0", python: "Python 3.14", java: "Java 21" },
 				languages: {
 					reference: project.reference.language,
 					oracle: project.oracle?.language,
@@ -1018,6 +1154,7 @@ export class ManualProjectStore {
 			);
 			const release: ManualRelease = {
 				id: releaseId,
+				scoringMode: project.scoringMode,
 				projectId: id,
 				revision: project.revision,
 				projectHash: report.projectHash,
@@ -1025,6 +1162,8 @@ export class ManualProjectStore {
 				title: project.title,
 				createdAt: new Date().toISOString(),
 				report,
+				checkerMode: project.checkerMode,
+				domjudgePdf: Boolean(project.domjudgePdf),
 			};
 			await writeFile(join(releaseDirectory, "release.json"), `${JSON.stringify(release, null, 2)}\n`);
 			project.latestReleaseId = releaseId;
@@ -1080,13 +1219,43 @@ export class ManualProjectStore {
 		return updated;
 	}
 
-	async releaseFile(id: string, kind: "hydro" | "source"): Promise<{ path: string; size: number; name: string }> {
+	async exportDomjudge(id: string): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
-		const path = join(this.releaseDirectory(id), `${kind}.zip`);
+		try {
+			await writeDomjudgeProblemArchive(this.releaseDirectory(id), release, this.image);
+		} catch (error) {
+			throw new ManualProjectError(error instanceof Error ? error.message : "DOMjudge 导出失败。", 422);
+		}
+		return this.releaseFile(id, "domjudge");
+	}
+
+	async exportLegacy(id: string, format: "fps" | "qduoj"): Promise<{ path: string; size: number; name: string }> {
+		const release = await this.release(id);
+		try {
+			await writeLegacyProblemExport(this.releaseDirectory(id), release, format);
+		} catch (error) {
+			throw new ManualProjectError(error instanceof Error ? error.message : "题目格式导出失败。", 422);
+		}
+		return this.releaseFile(id, format);
+	}
+
+	async releaseFile(
+		id: string,
+		kind: "hydro" | "source" | "domjudge" | "fps" | "qduoj",
+	): Promise<{ path: string; size: number; name: string }> {
+		const release = await this.release(id);
+		const path = join(this.releaseDirectory(id), `${kind}.${kind === "fps" ? "xml" : "zip"}`);
+		let size: number;
+		try {
+			size = (await stat(path)).size;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ManualProjectError("该格式尚未导出。", 404);
+			throw error;
+		}
 		return {
 			path,
-			size: (await stat(path)).size,
-			name: `${release.slug}.${kind === "hydro" ? "hydro" : "authoring"}.zip`,
+			size,
+			name: `${release.slug}.${kind === "source" ? "authoring" : kind}.${kind === "fps" ? "xml" : "zip"}`,
 		};
 	}
 

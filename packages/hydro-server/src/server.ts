@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
+import { ContestStore } from "./contests.ts";
 import type { HydroLiveVerifier } from "./live-hydro.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
 
@@ -150,6 +151,7 @@ function readChatMessage(value: unknown): {
 
 export function createHydroServer(options: HydroServerOptions): Server {
 	const maxRequestBytes = options.maxRequestBytes ?? 32 * 1024 * 1024;
+	const contests = new ContestStore(options.projects);
 	return createServer(async (request, response) => {
 		try {
 			const url = new URL(request.url ?? "/", "http://localhost");
@@ -176,7 +178,7 @@ export function createHydroServer(options: HydroServerOptions): Server {
 					sandbox = {
 						available: true,
 						image: options.projects.image,
-						message: "Linux 沙箱已就绪 · GCC 15.2 · testlib.h 可用",
+						message: "Linux 沙箱已就绪 · GCC 16.2 · testlib.h 可用",
 					};
 				} catch (error) {
 					sandbox = {
@@ -223,10 +225,59 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				sendJson(response, 200, await options.chat.removeProfile(configProfileRoute[1]));
 				return;
 			}
+			if (url.pathname === "/api/contests") {
+				if (request.method === "GET") sendJson(response, 200, { contests: await contests.list() });
+				else if (request.method === "POST")
+					sendJson(response, 201, await contests.create(await readJson(request, maxRequestBytes)));
+				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const contestRoute = /^\/api\/contests\/([^/]+)(?:\/(export))?$/u.exec(url.pathname);
+			if (contestRoute) {
+				const id = contestRoute[1];
+				if (request.method === "GET" && !contestRoute[2]) sendJson(response, 200, await contests.get(id));
+				else if (request.method === "PUT" && !contestRoute[2]) {
+					sendJson(response, 200, await contests.update(id, await readJson(request, maxRequestBytes)));
+				} else if (request.method === "POST" && contestRoute[2] === "export") {
+					const value = await readJson(request, maxRequestBytes);
+					const format =
+						typeof value === "object" && value !== null && !Array.isArray(value)
+							? (value as Record<string, unknown>).format
+							: undefined;
+					if (format !== "hydro" && format !== "domjudge") throw new ManualProjectError("竞赛导出格式无效。");
+					sendJson(response, 201, await contests.export(id, format));
+				} else if (request.method === "DELETE" && !contestRoute[2]) {
+					await contests.delete(id);
+					response.writeHead(204, { "cache-control": "no-store" });
+					response.end();
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			if (url.pathname === "/api/contest-releases" && request.method === "GET") {
+				sendJson(response, 200, { releases: await contests.listReleases() });
+				return;
+			}
+			const contestReleaseRoute = /^\/api\/contest-releases\/([^/]+)\/download$/u.exec(url.pathname);
+			if (contestReleaseRoute) {
+				if (request.method === "GET") {
+					const file = await contests.releaseFile(contestReleaseRoute[1]);
+					await sendFile(response, file.path, file.name, file.size);
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
 			if (url.pathname === "/api/projects") {
 				if (request.method === "GET") sendJson(response, 200, { projects: await options.projects.list() });
-				else if (request.method === "POST") sendJson(response, 201, await options.projects.create());
-				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				else if (request.method === "POST") {
+					const value = await readJson(request, maxRequestBytes);
+					const scoringMode =
+						typeof value === "object" && value !== null && !Array.isArray(value)
+							? (value as Record<string, unknown>).scoringMode
+							: undefined;
+					if (scoringMode !== "acm" && scoringMode !== "oi") {
+						throw new ManualProjectError("新建题目时须选择 ACM 或 OI 赛制。");
+					}
+					sendJson(response, 201, await options.projects.create(scoringMode));
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
 			const textCaseRoute = /^\/api\/projects\/([^/]+)\/cases$/u.exec(url.pathname);
@@ -237,6 +288,22 @@ export function createHydroServer(options: HydroServerOptions): Server {
 						201,
 						await options.projects.addTextCase(textCaseRoute[1], await readJson(request, maxRequestBytes)),
 					);
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const pdfRoute = /^\/api\/projects\/([^/]+)\/domjudge-pdf$/u.exec(url.pathname);
+			if (pdfRoute) {
+				const id = pdfRoute[1];
+				if (request.method === "GET") {
+					const file = await options.projects.domjudgePdfFile(id);
+					await sendFile(response, file.path, "problem.pdf", file.size, "application/pdf");
+				} else if (request.method === "PUT") {
+					if (request.headers["content-type"]?.split(";", 1)[0] !== "application/pdf") {
+						throw new ManualProjectError("上传题面须使用 application/pdf。");
+					}
+					sendJson(response, 200, await options.projects.uploadDomjudgePdf(id, request));
+				} else if (request.method === "DELETE") {
+					sendJson(response, 200, await options.projects.deleteDomjudgePdf(id));
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -276,6 +343,10 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				else if (request.method === "PUT" && !action)
 					sendJson(response, 200, await options.projects.update(id, await readJson(request, maxRequestBytes)));
 				else if (request.method === "DELETE" && !action) {
+					const releaseIds = (await options.projects.listReleases())
+						.filter((release) => release.projectId === id)
+						.map((release) => release.id);
+					await contests.assertProblemReleasesUnreferenced(releaseIds);
 					await options.projects.delete(id);
 					response.writeHead(204, { "cache-control": "no-store" });
 					response.end();
@@ -286,7 +357,21 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
-			const releaseRoute = /^\/api\/releases\/([^/]+)\/(hydro|source|report|live-verify)$/u.exec(url.pathname);
+			const exportRoute = /^\/api\/releases\/([^/]+)\/exports\/(domjudge|fps|qduoj)$/u.exec(url.pathname);
+			if (exportRoute) {
+				if (request.method === "POST") {
+					const format = exportRoute[2] as "domjudge" | "fps" | "qduoj";
+					const file =
+						format === "domjudge"
+							? await options.projects.exportDomjudge(exportRoute[1])
+							: await options.projects.exportLegacy(exportRoute[1], format);
+					sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/${format}` });
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const releaseRoute = /^\/api\/releases\/([^/]+)\/(hydro|source|domjudge|fps|qduoj|report|live-verify)$/u.exec(
+				url.pathname,
+			);
 			if (request.method === "GET" && url.pathname === "/api/releases") {
 				sendJson(response, 200, { releases: await options.projects.listReleases() });
 				return;
@@ -296,9 +381,22 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				const action = releaseRoute[2];
 				if (request.method === "GET" && action === "report")
 					sendJson(response, 200, (await options.projects.release(id)).report);
-				else if (request.method === "GET" && (action === "hydro" || action === "source")) {
+				else if (
+					request.method === "GET" &&
+					(action === "hydro" ||
+						action === "source" ||
+						action === "domjudge" ||
+						action === "fps" ||
+						action === "qduoj")
+				) {
 					const file = await options.projects.releaseFile(id, action);
-					await sendFile(response, file.path, file.name, file.size);
+					await sendFile(
+						response,
+						file.path,
+						file.name,
+						file.size,
+						action === "fps" ? "application/xml; charset=utf-8" : undefined,
+					);
 				} else if (request.method === "POST" && action === "live-verify") {
 					if (!options.liveVerifier) throw new ManualProjectError("真实 Hydro 实测适配器未配置。", 503);
 					const release = await options.projects.release(id);

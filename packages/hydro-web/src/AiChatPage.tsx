@@ -332,7 +332,6 @@ export function AiChatPage(props: Props) {
 				<div>
 					<div className="eyebrow">独立助手</div>
 					<h1>AI 对话</h1>
-					<p>讨论题意、数据与程序；回复不会自动修改草稿。</p>
 				</div>
 				<button
 					className="button secondary"

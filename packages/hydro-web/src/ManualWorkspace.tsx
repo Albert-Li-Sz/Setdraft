@@ -38,6 +38,8 @@ interface Props {
 	onUpload(files: File[]): Promise<void>;
 	onAddCase(value: { name?: string; input: string; output?: string; subtaskId: number }): Promise<void>;
 	onUploadAttachments(files: File[]): Promise<void>;
+	onUploadDomjudgePdf(file: File): Promise<void>;
+	onDeleteDomjudgePdf(): Promise<void>;
 	onDeleteFile(name: string): Promise<void>;
 	onGenerate(): Promise<void>;
 	onFinalize(): Promise<void>;
@@ -181,12 +183,13 @@ export function ManualWorkspace(props: Props) {
 	const [caseName, setCaseName] = useState("");
 	const [caseInput, setCaseInput] = useState("");
 	const [caseOutput, setCaseOutput] = useState("");
+	const [caseSubtaskId, setCaseSubtaskId] = useState(1);
 	const [includeCaseOutput, setIncludeCaseOutput] = useState(false);
-	const [caseSubtaskId, setCaseSubtaskId] = useState(project.subtasks[0]?.id ?? 1);
 	const [caseError, setCaseError] = useState("");
 	const [caseSubmitting, setCaseSubmitting] = useState(false);
 	const caseSubmissionRef = useRef(false);
-	const selectedCaseSubtaskId = project.subtasks.some((task) => task.id === caseSubtaskId)
+	const isAcm = project.scoringMode === "acm";
+	const selectedCaseSubtaskId = project.subtasks.some((item) => item.id === caseSubtaskId)
 		? caseSubtaskId
 		: (project.subtasks[0]?.id ?? 1);
 	const sampleKeys = useRef<{ projectId: string; keys: string[] }>({ projectId: project.id, keys: [] });
@@ -213,7 +216,12 @@ export function ManualWorkspace(props: Props) {
 	const programSections: Array<{ id: ProgramSection; label: string; filled: boolean; required: boolean }> = [
 		{ id: "reference", label: "标准程序", filled: !!project.reference.code.trim(), required: true },
 		{ id: "oracle", label: "第二标准程序", filled: !!project.oracle?.code.trim(), required: false },
-		{ id: "checker", label: "SPJ · C++ testlib checker", filled: !!project.checkerSource.trim(), required: false },
+		{
+			id: "checker",
+			label: "SPJ · C++ testlib checker",
+			filled: project.checkerMode === "text" || !!project.checkerSource.trim(),
+			required: true,
+		},
 		{
 			id: "validator",
 			label: "输入校验器 · C++ testlib validator",
@@ -226,7 +234,7 @@ export function ManualWorkspace(props: Props) {
 			setPendingCheckerPreset({ projectId: project.id, preset });
 			return;
 		}
-		set("checkerSource", preset.source);
+		props.onEdit((current) => ({ ...current, checkerMode: "custom", checkerSource: preset.source }));
 		setPendingCheckerPreset(undefined);
 	}
 
@@ -235,7 +243,7 @@ export function ManualWorkspace(props: Props) {
 			<div className="breadcrumb">题库 / 制题工作台 / {project.title || "未命名题目"}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">手工制题 · Docker · Hydro</div>
+					<div className="eyebrow">手工制题 · {isAcm ? "ACM" : "OI"} · Docker</div>
 					<h1>{project.title || "新建题目"}</h1>
 					<p>上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。</p>
 				</div>
@@ -246,7 +254,7 @@ export function ManualWorkspace(props: Props) {
 						onClick={() => void props.onNew()}
 						disabled={!!props.busy}
 					>
-						重制 / 下一题
+						新建题目
 					</button>
 					<button
 						className="button primary"
@@ -411,7 +419,7 @@ export function ManualWorkspace(props: Props) {
 											name: caseName.trim() || undefined,
 											input: caseInput,
 											output: includeCaseOutput ? caseOutput : undefined,
-											subtaskId: selectedCaseSubtaskId,
+											subtaskId: isAcm ? 1 : selectedCaseSubtaskId,
 										})
 										.then(() => {
 											setCaseName("");
@@ -444,19 +452,21 @@ export function ManualWorkspace(props: Props) {
 											placeholder="留空自动编号，如 3.in"
 										/>
 									</label>
-									<label className="field">
-										<span>子任务</span>
-										<select
-											value={selectedCaseSubtaskId}
-											onChange={(event) => setCaseSubtaskId(Number(event.target.value))}
-										>
-											{project.subtasks.map((task) => (
-												<option value={task.id} key={task.id}>
-													子任务 {task.id}
-												</option>
-											))}
-										</select>
-									</label>
+									{!isAcm && (
+										<label className="field">
+											<span>所属子任务</span>
+											<select
+												value={selectedCaseSubtaskId}
+												onChange={(event) => setCaseSubtaskId(Number(event.target.value))}
+											>
+												{project.subtasks.map((subtask) => (
+													<option key={subtask.id} value={subtask.id}>
+														子任务 {subtask.id}
+													</option>
+												))}
+											</select>
+										</label>
+									)}
 								</div>
 								<div className="manual-case-form-text">
 									<label className="field">
@@ -514,7 +524,7 @@ export function ManualWorkspace(props: Props) {
 												<th>输入</th>
 												<th>输出</th>
 												<th>来源</th>
-												<th>分组</th>
+												{!isAcm && <th>子任务</th>}
 												<th>操作</th>
 											</tr>
 										</thead>
@@ -549,32 +559,34 @@ export function ManualWorkspace(props: Props) {
 														)}
 													</td>
 													<td>{item.origin === "manual" ? "手动" : "Gen"}</td>
-													<td>
-														<select
-															aria-label={`${item.inputFile}子任务`}
-															value={item.subtaskId}
-															onChange={(event) =>
-																props.onEdit((current) => ({
-																	...current,
-																	caseSubtasks: {
-																		...current.caseSubtasks,
-																		[`${item.origin}:${item.id}`]: Number(event.target.value),
-																	},
-																	cases: current.cases.map((entry) =>
-																		entry.origin === item.origin && entry.id === item.id
-																			? { ...entry, subtaskId: Number(event.target.value) }
-																			: entry,
-																	),
-																}))
-															}
-														>
-															{project.subtasks.map((task) => (
-																<option value={task.id} key={task.id}>
-																	{task.id}
-																</option>
-															))}
-														</select>
-													</td>
+													{!isAcm && (
+														<td>
+															<select
+																aria-label={`${item.inputFile} 所属子任务`}
+																value={item.subtaskId}
+																onChange={(event) =>
+																	props.onEdit((current) => ({
+																		...current,
+																		caseSubtasks: {
+																			...current.caseSubtasks,
+																			[`${item.origin}:${item.id}`]: Number(event.target.value),
+																		},
+																		cases: current.cases.map((entry) =>
+																			entry.origin === item.origin && entry.id === item.id
+																				? { ...entry, subtaskId: Number(event.target.value) }
+																				: entry,
+																		),
+																	}))
+																}
+															>
+																{project.subtasks.map((subtask) => (
+																	<option key={subtask.id} value={subtask.id}>
+																		{subtask.id}
+																	</option>
+																))}
+															</select>
+														</td>
+													)}
 													<td>
 														{item.origin === "manual" && (
 															<div className="history-actions">
@@ -606,94 +618,87 @@ export function ManualWorkspace(props: Props) {
 							{project.orphanOutputs.length > 0 && (
 								<p className="manual-error">缺少同名 .in：{project.orphanOutputs.join("、")}</p>
 							)}
-							<div className="manual-section-heading">
-								<div>
-									<h2>子任务与计分</h2>
-									<p>所有测试点必须分配到有效子任务，总分为 100。</p>
-								</div>
-								<button
-									className="button secondary"
-									type="button"
-									onClick={() =>
-										set("subtasks", [
-											...project.subtasks,
-											{
-												id: Math.max(0, ...project.subtasks.map((item) => item.id)) + 1,
-												type: "sum",
-												score: 0,
-											},
-										])
-									}
-								>
-									添加子任务
-								</button>
-							</div>
-							{project.subtasks.map((task, index) => (
-								<div className="manual-subtask" key={task.id}>
-									<label>
-										编号
-										<input
-											type="number"
-											value={task.id}
-											onChange={(event) =>
-												set(
-													"subtasks",
-													project.subtasks.map((item, position) =>
-														position === index ? { ...item, id: Number(event.target.value) } : item,
-													),
-												)
-											}
-										/>
-									</label>
-									<label>
-										计分
-										<select
-											value={task.type}
-											onChange={(event) =>
-												set(
-													"subtasks",
-													project.subtasks.map((item, position) =>
-														position === index
-															? { ...item, type: event.target.value as "sum" | "min" | "max" }
-															: item,
-													),
-												)
-											}
+							{isAcm ? (
+								<div className="info-strip">ACM 判题：所有测试点均须通过。</div>
+							) : (
+								<section className="manual-section">
+									<div className="manual-section-heading">
+										<div>
+											<h2>OI 子任务</h2>
+											<p>各子任务分值之和为 100；测试点按 sum、min 或 max 汇总。</p>
+										</div>
+										<button
+											className="button secondary"
+											type="button"
+											onClick={() => {
+												const nextId = Math.max(0, ...project.subtasks.map((item) => item.id)) + 1;
+												set("subtasks", [...project.subtasks, { id: nextId, type: "sum", score: 0 }]);
+											}}
 										>
-											<option value="sum">sum</option>
-											<option value="min">min</option>
-											<option value="max">max</option>
-										</select>
-									</label>
-									<label>
-										分值
-										<input
-											type="number"
-											value={task.score}
-											onChange={(event) =>
-												set(
-													"subtasks",
-													project.subtasks.map((item, position) =>
-														position === index ? { ...item, score: Number(event.target.value) } : item,
-													),
-												)
-											}
-										/>
-									</label>
-									<button
-										className="text-button danger"
-										type="button"
-										onClick={() =>
-											set(
-												"subtasks",
-												project.subtasks.filter((_, position) => position !== index),
-											)
-										}
-									>
-										删除
-									</button>
-								</div>
-							))}
+											添加子任务
+										</button>
+									</div>
+									{project.subtasks.map((subtask) => (
+										<div className="manual-case-form-meta" key={subtask.id}>
+											<label className="field">
+												<span>子任务 {subtask.id} 分值</span>
+												<input
+													type="number"
+													min="0"
+													max="100"
+													value={subtask.score}
+													onChange={(event) =>
+														set(
+															"subtasks",
+															project.subtasks.map((entry) =>
+																entry.id === subtask.id
+																	? { ...entry, score: Number(event.target.value) }
+																	: entry,
+															),
+														)
+													}
+												/>
+											</label>
+											<label className="field">
+												<span>计分方式</span>
+												<select
+													value={subtask.type}
+													onChange={(event) =>
+														set(
+															"subtasks",
+															project.subtasks.map((entry) =>
+																entry.id === subtask.id
+																	? { ...entry, type: event.target.value as "sum" | "min" | "max" }
+																	: entry,
+															),
+														)
+													}
+												>
+													<option value="sum">sum</option>
+													<option value="min">min</option>
+													<option value="max">max</option>
+												</select>
+											</label>
+											<button
+												className="text-button danger"
+												type="button"
+												disabled={
+													project.subtasks.length === 1 ||
+													project.cases.some((item) => item.subtaskId === subtask.id)
+												}
+												onClick={() =>
+													set(
+														"subtasks",
+														project.subtasks.filter((entry) => entry.id !== subtask.id),
+													)
+												}
+											>
+												删除
+											</button>
+										</div>
+									))}
+								</section>
+							)}
 						</div>
 					)}
 					{tab === "generator" && (
@@ -741,8 +746,8 @@ export function ManualWorkspace(props: Props) {
 					{tab === "programs" && (
 						<div className="tab-body manual-tab-body">
 							<div className="info-strip">
-								标准程序必填；第二标准程序可选，用于独立核验输出。SPJ 与输入校验器可分别选择 C++ 标准，支持
-								testlib.h，上传后可直接编辑。启用 SPJ 时允许满分的等价文本输出。
+								标准程序和 Checker 必填；第二标准程序可选，用于独立核验输出。默认 Checker 按 Hydro
+								文本规则比较，也可选择预设或自定义 C++ testlib Checker。
 							</div>
 							<div className="manual-program-layout">
 								<nav className="manual-program-menu" aria-label="程序与 SPJ 分区">
@@ -806,7 +811,11 @@ export function ManualWorkspace(props: Props) {
 															className="button primary"
 															type="button"
 															onClick={() => {
-																set("checkerSource", pendingCheckerPreset.preset.source);
+																props.onEdit((current) => ({
+																	...current,
+																	checkerMode: "custom",
+																	checkerSource: pendingCheckerPreset.preset.source,
+																}));
 																setPendingCheckerPreset(undefined);
 															}}
 														>
@@ -822,15 +831,35 @@ export function ManualWorkspace(props: Props) {
 													</div>
 												)}
 											</div>
-											<CodeEditor
-												label="SPJ · C++ testlib checker"
-												value={project.checkerSource}
-												onChange={(value) => set("checkerSource", value)}
-												standard={project.checkerStandard}
-												onStandardChange={(standard) => set("checkerStandard", standard)}
-												help="使用 registerTestlibCmd(argc, argv)，空白表示 Hydro 默认比较器。"
-												previewLines={20}
-											/>
+											<div className="manual-checker-preset-list">
+												<button type="button" onClick={() => set("checkerMode", "text")}>
+													<strong>默认文本比对</strong>
+													<span>统一换行，忽略行尾空格与末尾空行</span>
+												</button>
+												<button type="button" onClick={() => set("checkerMode", "custom")}>
+													<strong>自定义 Checker</strong>
+													<span>编辑 C++ testlib 判定代码</span>
+												</button>
+											</div>
+											<p className="manual-muted">
+												当前：
+												{project.checkerMode === "text"
+													? "文本比对 Checker"
+													: project.checkerMode === "custom"
+														? "自定义 Checker"
+														: "旧草稿尚未选择 Checker"}
+											</p>
+											{project.checkerMode === "custom" && (
+												<CodeEditor
+													label="SPJ · C++ testlib checker"
+													value={project.checkerSource}
+													onChange={(value) => set("checkerSource", value)}
+													standard={project.checkerStandard}
+													onStandardChange={(standard) => set("checkerStandard", standard)}
+													help="使用 registerTestlibCmd(argc, argv)，正确输出必须得到满分。"
+													previewLines={20}
+												/>
+											)}
 										</>
 									)}
 									{programSection === "validator" && (
@@ -853,7 +882,7 @@ export function ManualWorkspace(props: Props) {
 							<div className="manual-section-heading">
 								<div>
 									<h2>完整验证</h2>
-									<p>编译、生成复现、输入校验、标准程序、可选第二标准程序与 SPJ 判定均通过后才发放包。</p>
+									<p>编译、生成复现、输入校验、标准程序、可选第二标准程序与 Checker 判定均通过后才发放包。</p>
 								</div>
 								<button
 									className="button primary"
@@ -964,6 +993,7 @@ export function ManualWorkspace(props: Props) {
 				<aside className="manual-sidebar">
 					<section className="card manual-side-card">
 						<h2>题目配置</h2>
+						<p>赛制：{isAcm ? "ACM（全部通过）" : "OI（子任务计分）"}</p>
 						<label className="field">
 							<span>题目标题</span>
 							<input
@@ -1041,6 +1071,42 @@ export function ManualWorkspace(props: Props) {
 							</div>
 						))}
 					</section>
+					{isAcm && (
+						<section className="card manual-side-card">
+							<h2>DOMjudge PDF</h2>
+							<p>DOMjudge 包默认不含题面；上传 PDF 后才会附带原文件。</p>
+							<label className="button secondary manual-file-button">
+								{project.domjudgePdf ? "替换 PDF" : "上传 PDF"}
+								<input
+									type="file"
+									accept="application/pdf,.pdf"
+									onChange={(event) => {
+										const file = event.currentTarget.files?.[0];
+										event.currentTarget.value = "";
+										if (file) void props.onUploadDomjudgePdf(file);
+									}}
+								/>
+							</label>
+							{project.domjudgePdf && (
+								<div className="manual-attachment">
+									<a
+										href={apiUrl(props.apiOrigin, `/projects/${project.id}/domjudge-pdf`)}
+										target="_blank"
+										rel="noreferrer"
+									>
+										problem.pdf · {(project.domjudgePdf.size / 1024).toFixed(1)} KiB
+									</a>
+									<button
+										className="text-button danger"
+										type="button"
+										onClick={() => void props.onDeleteDomjudgePdf()}
+									>
+										删除
+									</button>
+								</div>
+							)}
+						</section>
+					)}
 					<section className="card manual-side-card">
 						<h2>运行状态</h2>
 						<p>{props.sandbox?.message ?? "正在检测 Linux 沙箱…"}</p>
