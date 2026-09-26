@@ -560,15 +560,8 @@ export function App() {
 		<>
 			<header className="site-header">
 				<div className="header-inner">
-					<a className="brand" href="#workspace" aria-label={t("Hydro Problem Make 首页")}>
-						<span className="brand-mark" aria-hidden="true">
-							<i />
-							<i />
-							<i />
-						</span>
-						<span className="brand-wordmark">
-							Hydro<span>PROBLEM MAKE</span>
-						</span>
+					<a className="brand" href="#workspace" aria-label={t("Setdraft 首页")}>
+						<span className="brand-wordmark">Setdraft</span>
 					</a>
 					<Navigation page={page} taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)} />
 					<div className="header-tools">
@@ -716,7 +709,7 @@ export function App() {
 				</div>
 			)}
 			<footer className="site-footer">
-				<span className="footer-name">Hydro Problem Make</span>
+				<span className="footer-name">{t("Setdraft · 题序")}</span>
 				<span className="footer-detail">{t("本地工作区")}</span>
 			</footer>
 		</>

@@ -49,7 +49,8 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"完整验证未通过，未生成新的下载包。请查看失败项。":
 		"Verification failed. No new package was created. Review the failed checks.",
 	"验证或打包失败。": "Verification or packaging failed.",
-	"Hydro Problem Make 首页": "Hydro Problem Make home",
+	"Setdraft · 题序": "Setdraft",
+	"Setdraft 首页": "Setdraft home",
 	主导航: "Main navigation",
 	制题工作台: "Workspace",
 	"AI 对话": "AI chat",

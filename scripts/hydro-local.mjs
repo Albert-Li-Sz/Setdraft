@@ -40,7 +40,7 @@ function activeServices() {
 }
 
 function usage() {
-	console.log(`Hydro Problem Make 本地管理
+	console.log(`Setdraft · 题序 本地管理
 
   ./install.sh [--mode production|dev] [--dry-run]
                                           安装依赖、构建网页并启动；默认生产模式
@@ -525,6 +525,6 @@ async function prune(args) {
 }
 
 main().catch((error) => {
-	console.error(`Hydro Problem Make：${error instanceof Error ? error.message : String(error)}`);
+	console.error(`Setdraft：${error instanceof Error ? error.message : String(error)}`);
 	process.exitCode = 1;
 });

@@ -1,15 +1,18 @@
-# Hydro Problem Make
+# Setdraft · 题序
 
-Hydro Problem Make 是桌面本地制题工作台：编辑题面、管理数据、在 GCC 16 沙箱中验证，
+算法竞赛制题工作台 · Competitive Programming Workspace
+
+Setdraft（题序）是桌面本地制题工作台：编辑题面、管理数据、在 GCC 16 沙箱中验证，
 并下载 Hydro 题目包或 DOMjudge / Hydro 竞赛包。AI 对话独立于制题草稿。
+Web 界面采用黑白配色，右上角支持中英文切换。
 
 ## 安装
 
 环境要求：Node.js 22.19+、npm。Docker 用于生成、验证和打包；Docker 未启动时仍可安装并编辑草稿。
 
 ```bash
-git clone https://github.com/Albert-Li-Sz/Hydro-Problem-Maker-Agent.git
-cd Hydro-Problem-Maker-Agent
+git clone https://github.com/Albert-Li-Sz/setdraft.git
+cd setdraft
 ./install.sh
 ```
 
@@ -34,6 +37,9 @@ node scripts/hydro-local.mjs prune --older-than-days 90 --dry-run
 Windows PowerShell 使用 `./install.ps1`、`./upgrade.ps1` 和 `./uninstall.ps1`；前两个支持 `-Mode dev`。
 三个 Unix 脚本和三个 PowerShell 脚本都支持 dry-run。默认数据目录是 `.hydro-problem-make/`，也可用
 `HYDRO_WORKSPACE_ROOT` 指定其他目录。
+
+Setdraft 沿用原有的 `HYDRO_*` 环境变量、数据目录和内部包名，现有安装可直接升级，
+草稿、聊天记录和语言偏好会继续保留。
 
 ## 制题流程
 

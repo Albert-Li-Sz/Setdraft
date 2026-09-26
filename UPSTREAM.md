@@ -7,4 +7,4 @@
 题目格式和界面行为参考 [Hydro](https://github.com/hydro-dev/Hydro)，生成与校验使用
 [Testlib](https://github.com/MikeMirzayanov/testlib)。AI 底层库的上游来源是
 [pi](https://github.com/earendil-works/pi)；同步上游代码时只保留本项目实际需要的
-AI 与遥测依赖，并运行 Hydro 的检查和测试。
+AI 与遥测依赖，并运行 Setdraft 的检查和测试。

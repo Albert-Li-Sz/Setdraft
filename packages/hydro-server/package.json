@@ -1,7 +1,7 @@
 {
 	"name": "@hydro-problem-make/server",
 	"version": "0.1.0",
-	"description": "HTTP API for Hydro Problem Make",
+	"description": "Local HTTP API for Setdraft",
 	"private": true,
 	"type": "module",
 	"main": "./dist/index.js",

@@ -1,7 +1,7 @@
 {
 	"name": "@hydro-problem-make/web",
 	"version": "0.1.0",
-	"description": "Hydro-style authoring workspace for Hydro Problem Make",
+	"description": "Web workspace for Setdraft",
 	"private": true,
 	"type": "module",
 	"scripts": {

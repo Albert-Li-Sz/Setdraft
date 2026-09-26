@@ -1,6 +1,6 @@
-# Hydro AI runtime
+# Setdraft AI runtime
 
-`@earendil-works/pi-ai` is the provider and streaming layer used by Hydro Problem Make's
+`@earendil-works/pi-ai` is the provider and streaming layer used by Setdraft's
 local AI chat. It is kept as a workspace package so the server can support multiple API
 protocols without depending on an Agent runtime.
 

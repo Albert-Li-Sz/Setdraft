@@ -1,6 +1,6 @@
-# Hydro web
+# Setdraft web
 
-The desktop React workspace uses Hydro-like visual conventions. It is original CSS and does not copy Hydro UI source files.
+Setdraft is a local competitive programming workspace built with React. Its monochrome interface uses rounded controls and motion that respects the system's reduced-motion preference. The upper-right language control switches between Chinese and English and remembers the choice. The product wordmark is **Setdraft**; its Chinese name is **题序**.
 
 ```bash
 npm run dev:hydro-api

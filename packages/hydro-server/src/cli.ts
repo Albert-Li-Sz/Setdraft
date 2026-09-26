@@ -43,6 +43,6 @@ const server = createHydroServer({
 	chat,
 });
 server.listen(portValue, "127.0.0.1", () => {
-	console.log(`Hydro Problem Make API listening on http://127.0.0.1:${portValue}`);
+	console.log(`Setdraft API listening on http://127.0.0.1:${portValue}`);
 	console.log(`AI chat: ${chat.getConfiguration().configured ? "configured" : "not configured"}`);
 });

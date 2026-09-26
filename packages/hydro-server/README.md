@@ -1,4 +1,4 @@
-# Hydro server
+# Setdraft server
 
 The local API stores drafts, tasks, chats, contests and releases in `workspace.sqlite`. Large files live in SHA-256 blobs under the workspace root. Existing file-based records are migrated on first startup; their original directories remain available as rollback copies and for historical downloads. The server can start without Docker. `GET /api/health` reports whether the daemon is unavailable, the image is missing, or the sandbox is ready.
 
@@ -23,7 +23,7 @@ New draft files are read from the blob index. Legacy directories are migration i
 
 Task transitions and their persisted events commit together. SSE drains all pages after the supplied cursor before closing a completed stream, and respects socket backpressure. Sandbox code receives an `ExecutionContext` explicitly and has no dependency on the task queue.
 
-On the web side, `api-client.ts` owns HTTP errors, revision conflicts and abortable task polling. `project-session.ts` owns pending edits, serialized autosave, conflict blocking and cancellation when another draft is opened; React subscribes through `use-project-session.ts`. `npm run check` enforces the shared-contract boundary and rejects runtime import cycles in the Hydro code.
+On the web side, `api-client.ts` owns HTTP errors, revision conflicts and abortable task polling. `project-session.ts` owns pending edits, serialized autosave, conflict blocking and cancellation when another draft is opened; React subscribes through `use-project-session.ts`. `npm run check` enforces the shared-contract boundary and rejects runtime import cycles in the Setdraft code.
 
 ## Authoring API
 

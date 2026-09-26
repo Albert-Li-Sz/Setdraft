@@ -89,7 +89,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Albert-Li-Sz/Hydro-Problem-Maker-Agent.git",
+		"url": "git+https://github.com/Albert-Li-Sz/setdraft.git",
 		"directory": "packages/ai"
 	},
 	"engines": {

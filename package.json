@@ -1,5 +1,6 @@
 {
-	"name": "hydro-problem-maker",
+	"name": "setdraft",
+	"description": "Setdraft · 题序 — Competitive Programming Workspace",
 	"private": true,
 	"type": "module",
 	"workspaces": ["packages/*"],

@@ -1,8 +1,8 @@
-# Hydro Problem Make development rules
+# Setdraft development rules
 
 ## Scope
 
-This repository contains the Hydro authoring workspace, local verification API, web UI,
+This repository contains the Setdraft authoring workspace, local verification API, web UI,
 and the `pi-ai`/telemetry libraries used by the AI chat. The former Pi Agent, terminal UI,
 remote transport, and evaluation workspaces are intentionally not part of this project.
 

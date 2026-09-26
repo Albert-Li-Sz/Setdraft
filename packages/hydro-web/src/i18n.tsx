@@ -58,6 +58,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 	}, []);
 	useEffect(() => {
 		document.documentElement.lang = locale;
+		document.title = translate(locale, "Setdraft · 题序");
 	}, [locale]);
 	useEffect(() => {
 		const sync = (event: StorageEvent) => {

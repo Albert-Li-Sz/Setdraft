@@ -1,6 +1,6 @@
 # 贡献指南
 
-Hydro Problem Make 是一个本地制题工作台。贡献应围绕以下包展开：
+Setdraft（题序）是一个本地算法竞赛制题工作台。贡献应围绕以下包展开：
 
 - `packages/hydro-authoring`：Hydro 目录、题面和 ZIP 的生成与检查。
 - `packages/hydro-server`：草稿、沙箱验证、发布包、竞赛包和 AI 对话 API。

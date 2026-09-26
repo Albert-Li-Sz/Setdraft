@@ -126,23 +126,7 @@ a svg {
 	text-decoration: none;
 	display: flex;
 	align-items: center;
-	gap: 11px;
 	justify-self: start;
-}
-.brand-mark {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 3px;
-	width: 39px;
-	height: 42px;
-	border-radius: 13px;
-	background: var(--ink);
-	color: #fff;
-	transition: transform var(--motion) var(--ease-spring);
-}
-.brand:hover .brand-mark {
-	transform: rotate(-5deg);
 }
 .main-nav {
 	position: relative;
@@ -2735,29 +2719,16 @@ footer {
 }
 
 /* Rounded identity and sliding language control. */
-.brand-mark i {
-	display: block;
-	width: 5px;
-	height: 22px;
-	border-radius: 3px;
-	background: currentColor;
-}
-.brand-mark i:nth-child(2) {
-	height: 11px;
-}
 .brand-wordmark {
-	display: grid;
-	gap: 4px;
-	font-size: 22px;
-	line-height: 1;
+	display: block;
+	font-size: 26px;
+	line-height: 1.1;
 	letter-spacing: -0.05em;
 	font-weight: 650;
+	transition: opacity var(--motion) ease;
 }
-.brand-wordmark > span {
-	color: var(--muted);
-	font-size: 8px;
-	letter-spacing: 0.09em;
-	font-weight: 400;
+.brand:hover .brand-wordmark {
+	opacity: 0.7;
 }
 .header-tools {
 	justify-self: end;
@@ -3833,7 +3804,7 @@ body:has(.motion-dialog[open]) {
 		padding: 0 12px;
 	}
 	.brand-wordmark {
-		font-size: 20px;
+		font-size: 24px;
 	}
 	.home-shortcut {
 		padding: 22px 18px;
@@ -3894,26 +3865,8 @@ body:has(.motion-dialog[open]) {
 		padding: 16px 14px 12px;
 		gap: 14px;
 	}
-	.brand {
-		gap: 9px;
-	}
-	.brand-mark {
-		width: 34px;
-		height: 37px;
-		border-radius: 12px;
-	}
-	.brand-mark i {
-		width: 4px;
-		height: 19px;
-	}
-	.brand-mark i:nth-child(2) {
-		height: 10px;
-	}
 	.brand-wordmark {
-		font-size: 20px;
-	}
-	.brand-wordmark > span {
-		font-size: 7px;
+		font-size: 23px;
 	}
 	.main-nav {
 		justify-content: flex-start;
@@ -4055,8 +4008,5 @@ body:has(.motion-dialog[open]) {
 	.manual-chat-message,
 	.loading-icon {
 		animation: none;
-	}
-	.brand:hover .brand-mark {
-		transform: none;
 	}
 }
