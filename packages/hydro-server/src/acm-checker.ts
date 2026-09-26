@@ -35,10 +35,12 @@ int main(int argc, char* argv[]) {
 }
 `;
 
-export type CheckerMode = "text" | "custom";
-
 export function effectiveChecker(mode: CheckerMode | undefined, customSource: string): string | undefined {
 	if (mode === "text") return defaultTextChecker;
 	if (mode === "custom" && customSource.trim()) return customSource;
 	return undefined;
 }
+
+import type { CheckerMode } from "@hydro-problem-make/contracts";
+
+export type { CheckerMode } from "@hydro-problem-make/contracts";

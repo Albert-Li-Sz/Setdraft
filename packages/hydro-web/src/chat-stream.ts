@@ -1,10 +1,7 @@
+import type { ChatStreamEvent } from "@hydro-problem-make/contracts";
 import type { ChatConversation } from "./platform.ts";
 
-export type ChatStreamEvent =
-	| { type: "start"; chat: ChatConversation }
-	| { type: "delta"; delta: string }
-	| { type: "done"; chat: ChatConversation }
-	| { type: "error"; message: string };
+export type { ChatStreamEvent } from "@hydro-problem-make/contracts";
 
 function decodeEvent(name: string, data: string): ChatStreamEvent | undefined {
 	if (!(["start", "delta", "done", "error"] as string[]).includes(name)) return undefined;
@@ -34,19 +31,21 @@ function decodeEvent(name: string, data: string): ChatStreamEvent | undefined {
 
 export async function readChatStream(
 	body: ReadableStream<Uint8Array>,
-	onEvent: (event: ChatStreamEvent) => void,
+	onEvent: (event: ChatStreamEvent, sequence?: number) => void,
 ): Promise<void> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let pending = "";
 	let eventName = "message";
+	let eventId: number | undefined;
 	let data: string[] = [];
 	const dispatch = (): void => {
 		if (data.length > 0) {
 			const event = decodeEvent(eventName, data.join("\n"));
-			if (event) onEvent(event);
+			if (event) onEvent(event, eventId);
 		}
 		eventName = "message";
+		eventId = undefined;
 		data = [];
 	};
 	const line = (value: string): void => {
@@ -60,6 +59,7 @@ export async function readChatStream(
 		const raw = separator < 0 ? "" : value.slice(separator + 1);
 		const content = raw.startsWith(" ") ? raw.slice(1) : raw;
 		if (field === "event") eventName = content;
+		if (field === "id" && Number.isSafeInteger(Number(content))) eventId = Number(content);
 		if (field === "data") data.push(content);
 	};
 	const consume = (finished: boolean): void => {

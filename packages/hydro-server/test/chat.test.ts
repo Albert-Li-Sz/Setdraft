@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatService } from "../src/chat.ts";
+import { WorkspaceDatabase } from "../src/workspace-db.ts";
 
 let root: string;
 
@@ -103,7 +104,7 @@ describe("AI chat", () => {
 		const saved = await service.get(chat.id);
 		expect(saved.messages).toHaveLength(4);
 		expect(saved.messages[2].contextSnapshot).toBe("只读题面");
-		expect(await readFile(join(root, "ai-config.json"), "utf8")).toContain("secret");
+		expect(JSON.stringify(new WorkspaceDatabase(root).get("ai-config", "default"))).toContain("secret");
 		expect(service.getConfiguration()).not.toHaveProperty("apiKey");
 	});
 
@@ -214,7 +215,7 @@ describe("AI chat", () => {
 			contextWindow: 4096,
 			maxTokens: 1024,
 		});
-		const saved = JSON.parse(await readFile(configPath, "utf8")) as {
+		const saved = new WorkspaceDatabase(root).get("ai-config", "default") as {
 			version: number;
 			profiles: Array<{ id: string; apiKey: string }>;
 		};

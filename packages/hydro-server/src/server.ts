@@ -5,16 +5,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
+import { ChatRequestQueue } from "./chat-requests.ts";
 import { ContestStore } from "./contests.ts";
-import type { HydroLiveVerifier } from "./live-hydro.ts";
+import { streamEvents } from "./event-stream.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
+import { TaskQueue } from "./tasks.ts";
 
 export interface HydroServerOptions {
 	staticRoot?: string;
 	maxRequestBytes?: number;
 	projects: ManualProjectStore;
 	chat: ChatService;
-	liveVerifier?: HydroLiveVerifier;
 }
 
 const contentTypes: Readonly<Record<string, string>> = {
@@ -34,10 +35,6 @@ function sendJson(response: ServerResponse, statusCode: number, value: unknown):
 		"content-length": Buffer.byteLength(body),
 	});
 	response.end(body);
-}
-
-function sendChatEvent(response: ServerResponse, event: "start" | "delta" | "done" | "error", value: unknown): void {
-	if (!response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`);
 }
 
 function localBrowserOrigin(request: IncomingMessage): string | undefined {
@@ -67,6 +64,65 @@ async function readJson(request: IncomingMessage, maxBytes: number): Promise<unk
 	} catch {
 		throw new ManualProjectError("请求体不是有效 JSON。");
 	}
+}
+
+function expectedRevision(request: IncomingMessage): number | undefined {
+	const header = request.headers["x-expected-revision"];
+	if (header === undefined) return undefined;
+	if (typeof header !== "string" || !/^(0|[1-9]\d*)$/u.test(header)) {
+		throw new ManualProjectError("草稿版本无效。", 422);
+	}
+	const value = Number(header);
+	if (!Number.isSafeInteger(value)) throw new ManualProjectError("草稿版本无效。", 422);
+	return value;
+}
+
+async function readChatSubmission(
+	request: IncomingMessage,
+	maxBytes: number,
+): Promise<ReturnType<typeof readChatMessage> & { requestId: string }> {
+	const contentType = request.headers["content-type"] ?? "";
+	if (contentType.startsWith("application/json")) {
+		const value = await readJson(request, maxBytes);
+		const parsed = readChatMessage(value);
+		const requestId =
+			typeof value === "object" && value !== null && "requestId" in value ? String(value.requestId) : "";
+		return { ...parsed, requestId };
+	}
+	if (!contentType.startsWith("multipart/form-data;")) throw new ChatError("消息须使用 multipart/form-data。", 415);
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const raw of request) {
+		const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+		size += chunk.length;
+		if (size > maxBytes) throw new ChatError("消息或图片超过大小限制。", 413);
+		chunks.push(chunk);
+	}
+	const form = await new Request("http://localhost", {
+		method: "POST",
+		headers: { "content-type": contentType },
+		body: new Uint8Array(Buffer.concat(chunks)),
+	}).formData();
+	const field = (name: string) => {
+		const value = form.get(name);
+		return typeof value === "string" ? value : undefined;
+	};
+	const images: ChatImageUpload[] = [];
+	for (const item of form.getAll("images")) {
+		if (typeof item === "string") throw new ChatError("图片格式无效。", 422);
+		images.push({
+			name: item.name,
+			mimeType: item.type,
+			data: Buffer.from(await item.arrayBuffer()).toString("base64"),
+		});
+	}
+	return {
+		requestId: field("requestId") ?? "",
+		message: field("message") ?? "",
+		contextSnapshot: field("contextSnapshot"),
+		profileId: field("profileId"),
+		images,
+	};
 }
 
 async function sendFile(
@@ -152,7 +208,9 @@ function readChatMessage(value: unknown): {
 export function createHydroServer(options: HydroServerOptions): Server {
 	const maxRequestBytes = options.maxRequestBytes ?? 32 * 1024 * 1024;
 	const contests = new ContestStore(options.projects);
-	return createServer(async (request, response) => {
+	const tasks = new TaskQueue(options.projects, contests);
+	const chatRequests = new ChatRequestQueue(options.projects.database, options.chat);
+	const server = createServer(async (request, response) => {
 		try {
 			const url = new URL(request.url ?? "/", "http://localhost");
 			const origin = localBrowserOrigin(request);
@@ -163,7 +221,7 @@ export function createHydroServer(options: HydroServerOptions): Server {
 			if (origin && url.pathname.startsWith("/api/")) {
 				response.setHeader("access-control-allow-origin", origin);
 				response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
-				response.setHeader("access-control-allow-headers", "content-type");
+				response.setHeader("access-control-allow-headers", "content-type, x-expected-revision, last-event-id");
 				response.setHeader("vary", "origin");
 			}
 			if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
@@ -172,19 +230,31 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				return;
 			}
 			if (request.method === "GET" && url.pathname === "/api/health") {
-				let sandbox: { available: boolean; image: string; message: string };
+				let sandbox: { available: boolean; image: string; message: string; state: string };
 				try {
+					await promisify(execFile)("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 10_000 });
 					await promisify(execFile)("docker", ["image", "inspect", options.projects.image], { timeout: 10_000 });
 					sandbox = {
 						available: true,
+						state: "ready",
 						image: options.projects.image,
 						message: "Linux 沙箱已就绪 · GCC 16.2 · testlib.h 可用",
 					};
 				} catch (error) {
+					let daemon = false;
+					try {
+						await promisify(execFile)("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 5000 });
+						daemon = true;
+					} catch {
+						daemon = false;
+					}
 					sandbox = {
 						available: false,
+						state: daemon ? "image-missing" : "daemon-unavailable",
 						image: options.projects.image,
-						message: error instanceof Error ? error.message : "沙箱不可用",
+						message: daemon
+							? "沙盒镜像缺失，请在设置中构建。"
+							: `Docker 守护进程未运行：${error instanceof Error ? error.message : "请启动 Docker"}`,
 					};
 				}
 				sendJson(response, 200, {
@@ -195,12 +265,40 @@ export function createHydroServer(options: HydroServerOptions): Server {
 						maxFileBytes: options.projects.maxFileBytes,
 						maxProjectBytes: options.projects.maxProjectBytes,
 						aiChat: options.chat.getConfiguration().configured,
-						liveHydro: options.liveVerifier?.status() ?? {
-							configured: false,
-							message: "未配置真实 Hydro 实测适配器。",
-						},
+						tasks: true,
 					},
 				});
+				return;
+			}
+			if (url.pathname === "/api/sandbox/build" && request.method === "POST") {
+				sendJson(response, 202, { task: await tasks.submit("image-build", "image") });
+				return;
+			}
+			if (url.pathname === "/api/tasks" && request.method === "GET") {
+				sendJson(response, 200, { tasks: tasks.list() });
+				return;
+			}
+			const taskRoute = /^\/api\/tasks\/([^/]+)(?:\/(events|cancel|retry))?$/u.exec(url.pathname);
+			if (taskRoute) {
+				const id = taskRoute[1];
+				const action = taskRoute[2];
+				if (request.method === "GET" && !action) sendJson(response, 200, tasks.get(id));
+				else if (request.method === "POST" && action === "cancel") sendJson(response, 200, await tasks.cancel(id));
+				else if (request.method === "POST" && action === "retry")
+					sendJson(response, 202, { task: await tasks.retry(id) });
+				else if (request.method === "GET" && action === "events") {
+					const after = Number(request.headers["last-event-id"] ?? url.searchParams.get("after") ?? 0);
+					if (!Number.isSafeInteger(after) || after < 0) throw new ManualProjectError("事件序号无效。", 422);
+					tasks.get(id);
+					streamEvents(response, {
+						after,
+						read: (cursor) => tasks.events(id, cursor),
+						isTerminal: () =>
+							["succeeded", "failed", "cancelled", "stale", "interrupted"].includes(tasks.get(id).state),
+						data: (event) => event,
+					});
+					return;
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
 			if (url.pathname === "/api/ai/config") {
@@ -218,6 +316,11 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				const id = (value as Record<string, unknown>).profileId;
 				if (typeof id !== "string") throw new ChatError("默认配置 ID 无效。");
 				sendJson(response, 200, await options.chat.setDefaultProfile(id));
+				return;
+			}
+			const profileTestRoute = /^\/api\/ai\/config\/([^/]+)\/test$/u.exec(url.pathname);
+			if (profileTestRoute && request.method === "POST") {
+				sendJson(response, 200, await options.chat.testProfile(profileTestRoute[1]));
 				return;
 			}
 			const configProfileRoute = /^\/api\/ai\/config\/([^/]+)$/u.exec(url.pathname);
@@ -245,7 +348,7 @@ export function createHydroServer(options: HydroServerOptions): Server {
 							? (value as Record<string, unknown>).format
 							: undefined;
 					if (format !== "hydro" && format !== "domjudge") throw new ManualProjectError("竞赛导出格式无效。");
-					sendJson(response, 201, await contests.export(id, format));
+					sendJson(response, 202, { task: await tasks.submit("contest-export", id, format) });
 				} else if (request.method === "DELETE" && !contestRoute[2]) {
 					await contests.delete(id);
 					response.writeHead(204, { "cache-control": "no-store" });
@@ -291,6 +394,57 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
+			const caseBatchRoute = /^\/api\/projects\/([^/]+)\/cases\/(batch-delete|renumber)$/u.exec(url.pathname);
+			if (caseBatchRoute) {
+				const id = caseBatchRoute[1];
+				if (request.method === "GET" && caseBatchRoute[2] === "renumber")
+					sendJson(response, 200, { changes: await options.projects.renumberPreview(id) });
+				else if (request.method === "POST") {
+					const value = await readJson(request, maxRequestBytes);
+					if (typeof value !== "object" || value === null || Array.isArray(value))
+						throw new ManualProjectError("请求格式无效。", 422);
+					const body = value as Record<string, unknown>;
+					const revision = typeof body.expectedRevision === "number" ? body.expectedRevision : undefined;
+					if (caseBatchRoute[2] === "renumber")
+						sendJson(response, 200, await options.projects.renumberCases(id, revision));
+					else {
+						if (!Array.isArray(body.stems) || body.stems.some((item) => typeof item !== "string"))
+							throw new ManualProjectError("测试点列表无效。", 422);
+						sendJson(response, 200, await options.projects.deleteCases(id, body.stems as string[], revision));
+					}
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const generatedRoute = /^\/api\/projects\/([^/]+)\/generated$/u.exec(url.pathname);
+			if (generatedRoute && request.method === "DELETE") {
+				const expectedRevision = Number(request.headers["x-expected-revision"]);
+				sendJson(
+					response,
+					200,
+					await options.projects.clearGenerated(
+						generatedRoute[1],
+						Number.isSafeInteger(expectedRevision) && request.headers["x-expected-revision"] !== undefined
+							? expectedRevision
+							: undefined,
+					),
+				);
+				return;
+			}
+			const casePreviewRoute = /^\/api\/projects\/([^/]+)\/cases\/(manual|generated)\/([^/]+)\/preview$/u.exec(
+				url.pathname,
+			);
+			if (casePreviewRoute && request.method === "GET") {
+				sendJson(
+					response,
+					200,
+					await options.projects.casePreview(
+						casePreviewRoute[1],
+						casePreviewRoute[2] as "manual" | "generated",
+						decodeURIComponent(casePreviewRoute[3]),
+					),
+				);
+				return;
+			}
 			const pdfRoute = /^\/api\/projects\/([^/]+)\/domjudge-pdf$/u.exec(url.pathname);
 			if (pdfRoute) {
 				const id = pdfRoute[1];
@@ -301,9 +455,13 @@ export function createHydroServer(options: HydroServerOptions): Server {
 					if (request.headers["content-type"]?.split(";", 1)[0] !== "application/pdf") {
 						throw new ManualProjectError("上传题面须使用 application/pdf。");
 					}
-					sendJson(response, 200, await options.projects.uploadDomjudgePdf(id, request));
+					sendJson(
+						response,
+						200,
+						await options.projects.uploadDomjudgePdf(id, request, expectedRevision(request)),
+					);
 				} else if (request.method === "DELETE") {
-					sendJson(response, 200, await options.projects.deleteDomjudgePdf(id));
+					sendJson(response, 200, await options.projects.deleteDomjudgePdf(id, expectedRevision(request)));
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -329,9 +487,9 @@ export function createHydroServer(options: HydroServerOptions): Server {
 					if (request.headers["content-type"]?.split(";", 1)[0] !== "application/octet-stream") {
 						throw new ManualProjectError("上传数据须使用 application/octet-stream。");
 					}
-					sendJson(response, 200, await options.projects.upload(id, name, request));
+					sendJson(response, 200, await options.projects.upload(id, name, request, expectedRevision(request)));
 				} else if (request.method === "DELETE")
-					sendJson(response, 200, await options.projects.deleteFile(id, name));
+					sendJson(response, 200, await options.projects.deleteFile(id, name, expectedRevision(request)));
 				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -343,7 +501,7 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				else if (request.method === "PUT" && !action)
 					sendJson(response, 200, await options.projects.update(id, await readJson(request, maxRequestBytes)));
 				else if (request.method === "DELETE" && !action) {
-					const releaseIds = (await options.projects.listReleases())
+					const releaseIds = (await options.projects.releases.listReleases())
 						.filter((release) => release.projectId === id)
 						.map((release) => release.id);
 					await contests.assertProblemReleasesUnreferenced(releaseIds);
@@ -351,9 +509,9 @@ export function createHydroServer(options: HydroServerOptions): Server {
 					response.writeHead(204, { "cache-control": "no-store" });
 					response.end();
 				} else if (request.method === "POST" && action === "generate")
-					sendJson(response, 200, await options.projects.generate(id));
+					sendJson(response, 202, { task: await tasks.submit("generate", id) });
 				else if (request.method === "POST" && action === "finalize")
-					sendJson(response, 200, await options.projects.finalize(id));
+					sendJson(response, 202, { task: await tasks.submit("finalize", id) });
 				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -363,24 +521,32 @@ export function createHydroServer(options: HydroServerOptions): Server {
 					const format = exportRoute[2] as "domjudge" | "fps" | "qduoj";
 					const file =
 						format === "domjudge"
-							? await options.projects.exportDomjudge(exportRoute[1])
-							: await options.projects.exportLegacy(exportRoute[1], format);
+							? await options.projects.releases.exportDomjudge(exportRoute[1])
+							: await options.projects.releases.exportLegacy(exportRoute[1], format);
 					sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/${format}` });
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
-			const releaseRoute = /^\/api\/releases\/([^/]+)\/(hydro|source|domjudge|fps|qduoj|report|live-verify)$/u.exec(
+			const releaseRoute = /^\/api\/releases\/([^/]+)\/(hydro|source|domjudge|fps|qduoj|report)$/u.exec(
 				url.pathname,
 			);
 			if (request.method === "GET" && url.pathname === "/api/releases") {
-				sendJson(response, 200, { releases: await options.projects.listReleases() });
+				sendJson(response, 200, { releases: await options.projects.releases.listReleases() });
+				return;
+			}
+			const releaseDeleteRoute = /^\/api\/releases\/([^/]+)$/u.exec(url.pathname);
+			if (releaseDeleteRoute && request.method === "DELETE") {
+				await contests.assertProblemReleasesUnreferenced([releaseDeleteRoute[1]]);
+				await options.projects.releases.deleteRelease(releaseDeleteRoute[1]);
+				response.writeHead(204, { "cache-control": "no-store" });
+				response.end();
 				return;
 			}
 			if (releaseRoute) {
 				const id = releaseRoute[1];
 				const action = releaseRoute[2];
 				if (request.method === "GET" && action === "report")
-					sendJson(response, 200, (await options.projects.release(id)).report);
+					sendJson(response, 200, (await options.projects.releases.release(id)).report);
 				else if (
 					request.method === "GET" &&
 					(action === "hydro" ||
@@ -389,7 +555,7 @@ export function createHydroServer(options: HydroServerOptions): Server {
 						action === "fps" ||
 						action === "qduoj")
 				) {
-					const file = await options.projects.releaseFile(id, action);
+					const file = await options.projects.releases.releaseFile(id, action);
 					await sendFile(
 						response,
 						file.path,
@@ -397,18 +563,6 @@ export function createHydroServer(options: HydroServerOptions): Server {
 						file.size,
 						action === "fps" ? "application/xml; charset=utf-8" : undefined,
 					);
-				} else if (request.method === "POST" && action === "live-verify") {
-					if (!options.liveVerifier) throw new ManualProjectError("真实 Hydro 实测适配器未配置。", 503);
-					const release = await options.projects.release(id);
-					const result = await options.liveVerifier.verify({
-						releaseId: id,
-						slug: release.slug,
-						packageDirectory: joinReleaseHydroDirectory(options.projects, release.id, release.slug),
-						reference: await options.projects.releaseReference(id),
-						wrongPrograms: [],
-					});
-					await options.projects.recordLiveVerification(id, result);
-					sendJson(response, 200, result);
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -427,6 +581,34 @@ export function createHydroServer(options: HydroServerOptions): Server {
 				return;
 			}
 			const chatRoute = /^\/api\/chats\/([^/]+)(?:\/(messages))?$/u.exec(url.pathname);
+			const chatRequestsRoute = /^\/api\/chats\/([^/]+)\/requests$/u.exec(url.pathname);
+			if (chatRequestsRoute && request.method === "GET") {
+				sendJson(response, 200, { requests: chatRequests.list(chatRequestsRoute[1]) });
+				return;
+			}
+			const chatRequestRoute = /^\/api\/chats\/([^/]+)\/requests\/([^/]+)(?:\/(events|retry|cancel))?$/u.exec(
+				url.pathname,
+			);
+			if (chatRequestRoute) {
+				const [, chatId, requestId, action] = chatRequestRoute;
+				if (request.method === "GET" && !action) sendJson(response, 200, chatRequests.get(requestId, chatId));
+				else if (request.method === "POST" && action === "retry")
+					sendJson(response, 202, await chatRequests.retry(chatId, requestId));
+				else if (request.method === "POST" && action === "cancel")
+					sendJson(response, 200, await chatRequests.cancel(chatId, requestId));
+				else if (request.method === "GET" && action === "events") {
+					const after = Number(request.headers["last-event-id"] ?? url.searchParams.get("after") ?? 0);
+					if (!Number.isSafeInteger(after) || after < 0) throw new ChatError("事件序号无效。", 422);
+					chatRequests.get(requestId, chatId);
+					streamEvents(response, {
+						after,
+						read: (cursor) => chatRequests.events(requestId, chatId, cursor),
+						isTerminal: () => ["done", "failed"].includes(chatRequests.get(requestId, chatId).state),
+						data: (event) => event.data,
+					});
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
 			if (chatRoute) {
 				const id = chatRoute[1];
 				if (request.method === "GET" && !chatRoute[2]) sendJson(response, 200, await options.chat.get(id));
@@ -435,46 +617,15 @@ export function createHydroServer(options: HydroServerOptions): Server {
 					response.writeHead(204, { "cache-control": "no-store" });
 					response.end();
 				} else if (request.method === "POST" && chatRoute[2] === "messages") {
-					const { message, contextSnapshot, profileId, images } = readChatMessage(
-						await readJson(request, maxRequestBytes),
+					const { requestId, message, contextSnapshot, profileId, images } = await readChatSubmission(
+						request,
+						maxRequestBytes,
 					);
-					const controller = new AbortController();
-					response.once("close", () => {
-						if (!response.writableEnded) controller.abort();
-					});
-					response.writeHead(200, {
-						"cache-control": "no-cache, no-transform",
-						"content-type": "text/event-stream; charset=utf-8",
-						connection: "keep-alive",
-						"x-accel-buffering": "no",
-					});
-					response.flushHeaders();
-					const heartbeat = setInterval(() => {
-						if (!response.destroyed) response.write(": ping\n\n");
-					}, 15_000);
-					heartbeat.unref();
-					try {
-						const chat = await options.chat.send(
-							id,
-							message,
-							contextSnapshot,
-							{
-								onStart: (started) => sendChatEvent(response, "start", { chat: started }),
-								onDelta: (delta) => sendChatEvent(response, "delta", { delta }),
-							},
-							controller.signal,
-							profileId,
-							images,
-						);
-						sendChatEvent(response, "done", { chat });
-					} catch (error) {
-						sendChatEvent(response, "error", {
-							message: error instanceof Error ? error.message : "AI 请求失败。",
-						});
-					} finally {
-						clearInterval(heartbeat);
-						response.end();
-					}
+					sendJson(
+						response,
+						202,
+						await chatRequests.submit(id, requestId, message, contextSnapshot, profileId, images),
+					);
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -485,7 +636,11 @@ export function createHydroServer(options: HydroServerOptions): Server {
 			sendJson(response, 404, { error: "NOT_FOUND", message: "接口不存在。" });
 		} catch (error) {
 			if (error instanceof ManualProjectError || error instanceof ChatError) {
-				sendJson(response, error.statusCode, { error: error.name, message: error.message });
+				sendJson(response, error.statusCode, {
+					error: error.name,
+					message: error.message,
+					...(error instanceof ManualProjectError && error.current ? { current: error.current } : {}),
+				});
 				return;
 			}
 			console.error(error);
@@ -495,8 +650,9 @@ export function createHydroServer(options: HydroServerOptions): Server {
 			});
 		}
 	});
-}
-
-function joinReleaseHydroDirectory(projects: ManualProjectStore, id: string, slug: string): string {
-	return resolve(projects.root, "releases", id, "hydro", slug);
+	server.once("close", () => {
+		tasks.close();
+		void chatRequests.close().catch((error: unknown) => console.error("Chat queue shutdown failed:", error));
+	});
+	return server;
 }

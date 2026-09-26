@@ -13,7 +13,8 @@
 			"@earendil-works/pi-ai": ["./packages/ai/src/index.ts"],
 			"@earendil-works/pi-ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@earendil-works/pi-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
-			"typebox": ["./node_modules/typebox"]
+			"typebox": ["./node_modules/typebox"],
+			"@hydro-problem-make/contracts": ["./packages/hydro-contracts/src/index.ts"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],

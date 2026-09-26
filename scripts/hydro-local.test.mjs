@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -88,6 +90,46 @@ test("uninstall preserves project data unless purge is requested", () => {
 		);
 		assert.equal(purge.status, 0, purge.stderr);
 		assert.equal(existsSync(join(fixture, ".hydro-problem-make")), false);
+	} finally {
+		rmSync(fixture, { recursive: true, force: true });
+	}
+});
+
+test("backup validates blobs and restore rejects a damaged copy without replacing live data", () => {
+	const fixture = mkdtempSync(join(tmpdir(), "hydro-local-backup-"));
+	try {
+		mkdirSync(join(fixture, "scripts"));
+		copyFileSync(join(root, "scripts/hydro-local.mjs"), join(fixture, "scripts/hydro-local.mjs"));
+		const data = join(fixture, ".hydro-problem-make");
+		mkdirSync(data);
+		const database = new DatabaseSync(join(data, "workspace.sqlite"));
+		database.exec("CREATE TABLE files (hash TEXT NOT NULL); CREATE TABLE metadata (value TEXT NOT NULL)");
+		const original = Buffer.from("original data");
+		const hash = createHash("sha256").update(original).digest("hex");
+		mkdirSync(join(data, "blobs", hash.slice(0, 2)), { recursive: true });
+		writeFileSync(join(data, "blobs", hash.slice(0, 2), hash), original);
+		database.prepare("INSERT INTO files (hash) VALUES (?)").run(hash);
+		database.prepare("INSERT INTO metadata (value) VALUES (?)").run("original");
+		database.close();
+		const saved = join(fixture, "saved-backup");
+		const backup = command(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "backup", saved]);
+		assert.equal(backup.status, 0, backup.stderr);
+		const live = new DatabaseSync(join(data, "workspace.sqlite"));
+		live.prepare("UPDATE metadata SET value='modified'").run();
+		live.close();
+		writeFileSync(join(saved, "blobs", hash.slice(0, 2), hash), "damaged");
+		const rejected = command(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "restore", saved]);
+		assert.equal(rejected.status, 1);
+		assert.match(rejected.stderr, /哈希不匹配/);
+		const unchanged = new DatabaseSync(join(data, "workspace.sqlite"), { readOnly: true });
+		assert.equal(unchanged.prepare("SELECT value FROM metadata").get().value, "modified");
+		unchanged.close();
+		writeFileSync(join(saved, "blobs", hash.slice(0, 2), hash), original);
+		const restored = command(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "restore", saved]);
+		assert.equal(restored.status, 0, restored.stderr);
+		const checked = new DatabaseSync(join(data, "workspace.sqlite"), { readOnly: true });
+		assert.equal(checked.prepare("SELECT value FROM metadata").get().value, "original");
+		checked.close();
 	} finally {
 		rmSync(fixture, { recursive: true, force: true });
 	}

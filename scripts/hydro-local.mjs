@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { closeSync, createReadStream, openSync } from "node:fs";
+import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/promises";
 import { connect } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +13,7 @@ const scriptPath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(scriptPath), "..");
 const dataRoot = join(root, ".hydro-problem-make");
 const runtimeRoot = join(dataRoot, "runtime");
+const modePath = join(dataRoot, "mode.json");
 const image = "hydro-problem-make/sandbox:local";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npmRegistry = process.env.HYDRO_NPM_REGISTRY?.trim() || "https://registry.npmmirror.com";
@@ -18,17 +21,38 @@ const services = {
 	api: { script: "dev:hydro-api", port: 4321, url: "http://127.0.0.1:4321/api/health" },
 	web: { script: "dev:hydro-web", port: 5173, url: "http://127.0.0.1:5173/" },
 };
+let currentMode = "production";
+
+async function readMode() {
+	try {
+		const saved = JSON.parse(await readFile(modePath, "utf8"));
+		return saved.mode === "dev" ? "dev" : "production";
+	} catch { return "production"; }
+}
+
+async function saveMode(mode) {
+	await mkdir(dataRoot, { recursive: true });
+	await writeFile(modePath, JSON.stringify({ mode }) + "\n");
+}
+
+function activeServices() {
+	return currentMode === "dev" ? ["api", "web"] : ["api"];
+}
 
 function usage() {
 	console.log(`Hydro Problem Make 本地管理
 
-  ./install.sh [--dry-run]                 安装依赖、构建沙箱并启动
-  ./upgrade.sh [--dry-run]                 从 origin/main 快进升级并重启
+  ./install.sh [--mode production|dev] [--dry-run]
+                                          安装依赖、构建网页并启动；默认生产模式
+  ./upgrade.sh [--mode production|dev] [--dry-run]
+                                          从 origin/main 快进升级；默认沿用上次模式
   ./uninstall.sh [--purge-data] [--remove-deps] [--dry-run]
                                           停止服务并移除沙箱镜像
   ./install.ps1 / ./upgrade.ps1 / ./uninstall.ps1
                                           Windows PowerShell 等价入口
-  node scripts/hydro-local.mjs start|stop|status
+  node scripts/hydro-local.mjs start [--mode production|dev]|stop|status|doctor
+  node scripts/hydro-local.mjs backup <目录>|restore <目录>
+  node scripts/hydro-local.mjs prune --older-than-days <天数> [--dry-run]
 
 卸载默认保留 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
 --purge-data 会永久删除这些数据；--remove-deps 额外删除根目录 node_modules。`);
@@ -76,7 +100,7 @@ function checkDependencies() {
 	try {
 		output("docker", ["info", "--format", "{{.ServerVersion}}"]);
 	} catch (error) {
-		throw new Error(`Docker 未就绪：${error instanceof Error ? error.message : String(error)}`);
+		console.warn(`Docker 未就绪，网页仍可使用；验证前请启动 Docker：${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -146,7 +170,7 @@ async function startService(name) {
 	const log = openSync(join(runtimeRoot, `${name}.log`), "a");
 	let child;
 	try {
-		child = spawn(process.execPath, [scriptPath, "service", name], {
+		child = spawn(process.execPath, [scriptPath, "service", name, currentMode], {
 			cwd: root,
 			detached: true,
 			stdio: ["ignore", log, log],
@@ -214,12 +238,12 @@ function stopPid(pid, force) {
 }
 
 async function stopAll() {
-	await stopService("web");
-	await stopService("api");
+	for (const name of Object.keys(services)) await stopService(name);
 }
 
 async function checkPorts() {
-	for (const [name, config] of Object.entries(services)) {
+	for (const name of activeServices()) {
+		const config = services[name];
 		if (!(await readManagedPid(name)) && (await portInUse(config.port))) {
 			throw new Error(`端口 ${config.port} 已被其他进程占用；请先停止该进程。`);
 		}
@@ -230,14 +254,14 @@ async function startAll() {
 	await checkPorts();
 	const started = [];
 	try {
-		for (const name of Object.keys(services)) {
+		for (const name of activeServices()) {
 			if (await startService(name)) started.push(name);
 		}
 	} catch (error) {
 		for (const name of started.reverse()) await stopService(name);
 		throw error;
 	}
-	console.log("打开 http://127.0.0.1:5173/ 使用制题工作台。");
+	console.log(`打开 http://127.0.0.1:${currentMode === "dev" ? "5173" : "4321"}/ 使用制题工作台。`);
 }
 
 function installDependencies() {
@@ -254,7 +278,8 @@ function installDependencies() {
 		"@hydro-problem-make/server",
 		"@hydro-problem-make/web",
 	]) runNpm(["run", "build", `--workspace=${workspace}`]);
-	run("docker", ["build", "-t", image, "packages/hydro-server/sandbox"]);
+	try { run("docker", ["build", "-t", image, "packages/hydro-server/sandbox"]); }
+	catch (error) { console.warn(`沙盒镜像未能构建，稍后可在设置页重试：${error instanceof Error ? error.message : String(error)}`); }
 }
 
 function checkUpgrade() {
@@ -270,7 +295,7 @@ function checkUpgrade() {
 function printDryRun(command, options) {
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
-		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再执行 pi-ai 离线构建、其余工作区构建、docker build -t ${image} packages/hydro-server/sandbox，然后启动 API 与网页。`);
+		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再执行 pi-ai 离线构建、其余工作区构建、docker build -t ${image} packages/hydro-server/sandbox，然后以 ${currentMode} 模式启动。Docker 故障只告警。`);
 	} else if (command === "uninstall") {
 		console.log(`将停止托管服务、删除 ${image} 镜像及 ${runtimeRoot}。`);
 		if (options.has("--purge-data")) console.log(`还将永久删除 ${dataRoot}。`);
@@ -278,8 +303,13 @@ function printDryRun(command, options) {
 	} else console.log(`将${command === "start" ? "启动" : "停止"} API 与网页。`);
 }
 
-function runService(name) {
-	const child = spawn(npm, ["run", services[name].script], { cwd: root, stdio: "inherit" });
+function runService(name, mode) {
+	const production = name === "api" && mode === "production";
+	const child = spawn(production ? process.execPath : npm, production ? [join(root, "packages", "hydro-server", "dist", "cli.js")] : ["run", services[name].script], {
+		cwd: root,
+		stdio: "inherit",
+		env: production ? { ...process.env, HYDRO_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : process.env,
+	});
 	const forward = () => child.kill("SIGTERM");
 	process.on("SIGTERM", forward);
 	process.on("SIGINT", forward);
@@ -294,18 +324,34 @@ async function main() {
 	requireRuntime();
 	const [command = "help", ...argumentsList] = process.argv.slice(2);
 	if (command === "service") {
-		if (argumentsList.length !== 1 || !Object.hasOwn(services, argumentsList[0]))
+		if (argumentsList.length !== 2 || !Object.hasOwn(services, argumentsList[0]) || !["dev", "production"].includes(argumentsList[1]))
 			throw new Error("无效服务名。");
-		runService(argumentsList[0]);
+		runService(argumentsList[0], argumentsList[1]);
 		return;
 	}
 	if (command === "help" || command === "--help" || command === "-h") {
 		usage();
 		return;
 	}
-	if (!["install", "upgrade", "uninstall", "start", "stop", "status"].includes(command)) {
+	if (!["install", "upgrade", "uninstall", "start", "stop", "status", "doctor", "backup", "restore", "prune"].includes(command)) {
 		throw new Error(`未知命令：${command}。运行 ./install.sh --dry-run 查看用法。`);
 	}
+	if (command === "doctor") { await doctor(); return; }
+	if (command === "backup" || command === "restore") {
+		if (argumentsList.length !== 1) throw new Error(`${command} 需要一个目录参数。`);
+		if (command === "backup") await backup(resolve(argumentsList[0]));
+		else await restore(resolve(argumentsList[0]));
+		return;
+	}
+	if (command === "prune") { await prune(argumentsList); return; }
+	const modeIndex = argumentsList.indexOf("--mode");
+	let requestedMode;
+	if (modeIndex >= 0) {
+		requestedMode = argumentsList[modeIndex + 1];
+		argumentsList.splice(modeIndex, 2);
+		if (!["dev", "production"].includes(requestedMode) || !["install", "upgrade", "start"].includes(command)) throw new Error("--mode 只能指定 dev 或 production。");
+	}
+	currentMode = requestedMode ?? (command === "install" ? "production" : await readMode());
 	const options = new Set(argumentsList);
 	const allowed =
 		command === "uninstall"
@@ -321,7 +367,8 @@ async function main() {
 		return;
 	}
 	if (command === "status") {
-		for (const [name, config] of Object.entries(services)) {
+		for (const name of Object.keys(services)) {
+			const config = services[name];
 			const managed = await readManagedPid(name);
 			const status = managed
 				? (await ready(config.url))
@@ -340,8 +387,10 @@ async function main() {
 	}
 	if (command === "start") {
 		checkDependencies();
-		output("docker", ["image", "inspect", image]);
+		await stopService(currentMode === "production" ? "web" : "api");
+		if (currentMode === "production" && !(await stat(join(root, "packages", "hydro-web", "dist", "index.html")).catch(() => undefined))) throw new Error("生产网页尚未构建，请先运行 ./install.sh。");
 		await startAll();
+		await saveMode(currentMode);
 		return;
 	}
 	if (command === "uninstall") {
@@ -380,6 +429,99 @@ async function main() {
 	if (command === "upgrade") run("git", ["merge", "--ff-only", "FETCH_HEAD"]);
 	installDependencies();
 	await startAll();
+	await saveMode(currentMode);
+}
+
+async function doctor() {
+	console.log(`Node.js ${process.version} · 模式 ${await readMode()}`);
+	try { console.log(`npm ${output(npm, ["--version"])}`); } catch (error) { console.log(`npm 不可用：${error}`); }
+	try {
+		console.log(`Docker ${output("docker", ["info", "--format", "{{.ServerVersion}}"])}`);
+		try { output("docker", ["image", "inspect", image]); console.log("沙盒镜像已就绪。"); }
+		catch { console.log("沙盒镜像缺失；可在设置页构建。"); }
+	} catch { console.log("Docker 守护进程未运行；网页仍可启动。"); }
+	const databasePath = join(dataRoot, "workspace.sqlite");
+	if (await stat(databasePath).catch(() => undefined)) {
+		const database = new DatabaseSync(databasePath, { readOnly: true });
+		try { console.log(`SQLite: ${database.prepare("PRAGMA integrity_check").get().integrity_check}`); }
+		finally { database.close(); }
+	} else console.log("SQLite: 尚无数据，首次启动后创建。");
+	for (const [name, service] of Object.entries(services)) console.log(`${name}: ${await ready(service.url) ? "在线" : "未运行"}`);
+}
+
+async function backup(destination) {
+	if (resolve(destination) === resolve(dataRoot) || resolve(destination).startsWith(`${resolve(dataRoot)}${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("备份目标不能在业务数据目录内。");
+	if (await stat(destination).catch(() => undefined)) throw new Error("备份目标已存在，请选择新目录。");
+	await stopAll();
+	try {
+		await cp(dataRoot, destination, { recursive: true, filter: (source) => !source.includes(`${process.platform === "win32" ? "\\" : "/"}runtime${process.platform === "win32" ? "\\" : "/"}`) });
+		await validateWorkspaceDirectory(destination);
+	} catch (error) {
+		await rm(destination, { recursive: true, force: true });
+		throw error;
+	}
+	console.log(`备份完成：${destination}。服务已停止，可运行 start 重启。`);
+}
+
+async function restore(source) {
+	if (resolve(source) === resolve(dataRoot) || resolve(source).startsWith(`${resolve(dataRoot)}${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("不能从业务数据目录内部恢复。");
+	await validateWorkspaceDirectory(source);
+	await stopAll();
+	const previous = `${dataRoot}.before-restore-${Date.now()}`;
+	if (await stat(dataRoot).catch(() => undefined)) await rename(dataRoot, previous);
+	try { await cp(source, dataRoot, { recursive: true }); await validateWorkspaceDirectory(dataRoot); }
+	catch (error) { await rm(dataRoot, { recursive: true, force: true }); if (await stat(previous).catch(() => undefined)) await rename(previous, dataRoot); throw error; }
+	console.log(`恢复完成：${dataRoot}。旧数据保存在 ${previous}；运行 start 启动。`);
+}
+
+async function validateWorkspaceDirectory(directory) {
+	const path = join(directory, "workspace.sqlite");
+	if (!(await stat(path).catch(() => undefined))) throw new Error("备份目录缺少 workspace.sqlite。");
+	const database = new DatabaseSync(path, { readOnly: true });
+	let hashes;
+	try {
+		const integrity = database.prepare("PRAGMA integrity_check").get();
+		if (integrity.integrity_check !== "ok") throw new Error(`SQLite 校验失败：${integrity.integrity_check}`);
+		hashes = database.prepare("SELECT DISTINCT hash FROM files").all().map((row) => row.hash);
+	} finally { database.close(); }
+	for (const hash of hashes) {
+		if (!/^[a-f0-9]{64}$/u.test(hash)) throw new Error(`文件索引哈希无效：${hash}`);
+		const blob = join(directory, "blobs", hash.slice(0, 2), hash);
+		const actual = createHash("sha256");
+		try { for await (const chunk of createReadStream(blob)) actual.update(chunk); }
+		catch { throw new Error(`备份文件缺失：${hash}`); }
+		if (actual.digest("hex") !== hash) throw new Error(`备份文件哈希不匹配：${hash}`);
+	}
+}
+
+async function prune(args) {
+	if (args.length < 2 || args[0] !== "--older-than-days" || !/^\d+$/u.test(args[1]) || args.slice(2).some((item) => item !== "--dry-run")) throw new Error("用法：prune --older-than-days <天数> [--dry-run]");
+	const days = Number(args[1]);
+	if (days < 1 || !Number.isSafeInteger(days)) throw new Error("保留天数须为正整数。");
+	const databasePath = join(dataRoot, "workspace.sqlite");
+	if (!(await stat(databasePath).catch(() => undefined))) { console.log("暂无发布记录。"); return; }
+	await stopAll();
+	const database = new DatabaseSync(databasePath);
+	try {
+		const readDocs = (kind) => database.prepare("SELECT id,body FROM documents WHERE kind=?").all(kind).map((row) => ({ id: row.id, ...JSON.parse(row.body) }));
+		const referenced = new Set(readDocs("contest").flatMap((item) => item.releaseIds ?? []));
+		const latest = new Set(readDocs("project").map((item) => item.latestReleaseId).filter(Boolean));
+		const limit = Date.now() - days * 24 * 60 * 60 * 1000;
+		const expired = readDocs("release").filter((item) => Date.parse(item.createdAt) < limit && !referenced.has(item.id) && !latest.has(item.id));
+		console.log(`找到 ${expired.length} 个超过 ${days} 天且未被竞赛引用、不是草稿最新版本的发布包。`);
+		if (args.includes("--dry-run")) { for (const item of expired) console.log(`${item.id} ${item.title}`); return; }
+		for (const item of expired) {
+			database.prepare("DELETE FROM files WHERE owner_kind='release-file' AND owner_id=?").run(item.id);
+			database.prepare("DELETE FROM documents WHERE kind='release' AND id=?").run(item.id);
+			await rm(join(dataRoot, "releases", item.id), { recursive: true, force: true });
+		}
+		const referencedHashes = new Set(database.prepare("SELECT DISTINCT hash FROM files").all().map((item) => item.hash));
+		for (const shard of await readdir(join(dataRoot, "blobs"), { withFileTypes: true }).catch(() => [])) {
+			if (!shard.isDirectory()) continue;
+			for (const blob of await readdir(join(dataRoot, "blobs", shard.name))) if (!referencedHashes.has(blob)) await rm(join(dataRoot, "blobs", shard.name, blob));
+		}
+		console.log(`已清理 ${expired.length} 个过期发布包。服务已停止，可运行 start 重启。`);
+	} finally { database.close(); }
 }
 
 main().catch((error) => {

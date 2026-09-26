@@ -18,7 +18,7 @@
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
 		"check:runtime-deps": "node scripts/check-runtime-deps.mjs",
 		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",
-		"check:entry-graphs": "node scripts/check-entry-graphs.mjs",
+		"check:entry-graphs": "node scripts/check-entry-graphs.mjs && node scripts/check-hydro-boundaries.mjs",
 		"check:hydro-web": "tsgo --noEmit -p packages/hydro-web/tsconfig.json",
 		"prepare": "husky"
 	},

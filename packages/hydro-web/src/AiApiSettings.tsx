@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { requestJson } from "./api-client.ts";
 import { type AiConfiguration, type AiProfile, apiUrl, readAiConfiguration } from "./platform.ts";
 
 type ConfigurationStatus = "loading" | "ready" | "saving" | "error";
@@ -12,12 +13,6 @@ const MAX_MAX_TOKENS = 1_000_000;
 interface AiApiSettingsProps {
 	apiOrigin: string;
 	onConfigurationChanged: () => void;
-}
-
-function responseMessage(value: unknown): string {
-	if (typeof value !== "object" || value === null) return "AI 配置请求失败。";
-	const message = (value as Record<string, unknown>).message;
-	return typeof message === "string" ? message : "AI 配置请求失败。";
 }
 
 function initialProvider(configuration: AiConfiguration): string {
@@ -50,6 +45,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 	const [contextWindow, setContextWindow] = useState(String(DEFAULT_CONTEXT_WINDOW));
 	const [maxTokens, setMaxTokens] = useState(String(DEFAULT_MAX_TOKENS));
 	const [message, setMessage] = useState("正在读取 AI 对话配置……");
+	const [testing, setTesting] = useState(false);
 
 	const selectProfile = useCallback((current: AiConfiguration, profile?: AiProfile): void => {
 		setSelectedId(profile?.id ?? "");
@@ -68,9 +64,9 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		setMessage("正在读取 AI 对话配置……");
 		void (async () => {
 			try {
-				const response = await fetch(apiUrl(props.apiOrigin, "/ai/config"), { signal: controller.signal });
-				const body = (await response.json()) as unknown;
-				if (!response.ok) throw new Error(responseMessage(body));
+				const body = await requestJson<unknown>(apiUrl(props.apiOrigin, "/ai/config"), {
+					signal: controller.signal,
+				});
 				const parsed = readAiConfiguration(body);
 				if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
 				setConfiguration(parsed);
@@ -121,7 +117,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		setStatus("saving");
 		setMessage("正在保存 AI 对话配置……");
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, "/ai/config"), {
+			const body = await requestJson<unknown>(apiUrl(props.apiOrigin, "/ai/config"), {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -135,8 +131,6 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 					maxTokens: parsedMaxTokens,
 				}),
 			});
-			const body = (await response.json()) as unknown;
-			if (!response.ok) throw new Error(responseMessage(body));
 			const parsed = readAiConfiguration(body);
 			if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
 			setConfiguration(parsed);
@@ -156,11 +150,12 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		setStatus("saving");
 		setMessage("正在删除 AI 配置……");
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, `/ai/config/${encodeURIComponent(selectedProfile.id)}`), {
-				method: "DELETE",
-			});
-			const body = (await response.json()) as unknown;
-			if (!response.ok) throw new Error(responseMessage(body));
+			const body = await requestJson<unknown>(
+				apiUrl(props.apiOrigin, `/ai/config/${encodeURIComponent(selectedProfile.id)}`),
+				{
+					method: "DELETE",
+				},
+			);
 			const parsed = readAiConfiguration(body);
 			if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
 			setConfiguration(parsed);
@@ -181,13 +176,11 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		if (!selectedProfile) return;
 		setStatus("saving");
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, "/ai/config/default"), {
+			const body = await requestJson<unknown>(apiUrl(props.apiOrigin, "/ai/config/default"), {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ profileId: selectedProfile.id }),
 			});
-			const body = (await response.json()) as unknown;
-			if (!response.ok) throw new Error(responseMessage(body));
 			const parsed = readAiConfiguration(body);
 			if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
 			setConfiguration(parsed);
@@ -196,6 +189,27 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 		} catch (error) {
 			setStatus("error");
 			setMessage(error instanceof Error ? error.message : "设置默认配置失败。");
+		}
+	}
+
+	async function testConnection(): Promise<void> {
+		if (!selectedProfile) return;
+		setTesting(true);
+		setMessage("正在发送一条短消息测试模型连接…");
+		try {
+			const body = await requestJson<{ reply?: string; usage?: { input: number; output: number } }>(
+				apiUrl(props.apiOrigin, `/ai/config/${selectedProfile.id}/test`),
+				{ method: "POST" },
+			);
+			setMessage(
+				`连接成功 · ${selectedProfile.modelId}${body.usage ? ` · 输入 ${body.usage.input} / 输出 ${body.usage.output} tokens` : ""}`,
+			);
+			setStatus("ready");
+		} catch (error) {
+			setStatus("error");
+			setMessage(error instanceof Error ? error.message : "模型连接失败。");
+		} finally {
+			setTesting(false);
 		}
 	}
 
@@ -357,6 +371,14 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 					URL 留空使用协议默认地址。API Key 保存在本机，编辑现有配置时留空可沿用该配置的 Key。
 				</p>
 				<div className="settings-actions">
+					<button
+						className="button secondary"
+						type="button"
+						disabled={!selectedProfile || testing || status === "saving"}
+						onClick={() => void testConnection()}
+					>
+						{testing ? "测试中…" : "测试模型连接"}
+					</button>
 					<button className="button primary" type="submit" disabled={status === "loading" || status === "saving"}>
 						{status === "saving" ? "正在处理……" : selectedId ? "保存配置" : "添加配置"}
 					</button>

@@ -1,13 +1,7 @@
 export type { ChatConversation, ChatMessage, ChatModelClient } from "./chat.ts";
 export { ChatError, ChatService } from "./chat.ts";
 export type {
-	HydroLiveSubmissionResult,
-	HydroLiveVerificationRequest,
-	HydroLiveVerificationResult,
-	HydroLiveVerifier,
-} from "./live-hydro.ts";
-export { CommandHydroLiveVerifier, createHydroLiveVerifierFromEnvironment } from "./live-hydro.ts";
-export type {
+	HistoricHydroVerification,
 	ManualProject,
 	ManualProjectSnapshot,
 	ManualRelease,

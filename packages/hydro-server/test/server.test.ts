@@ -28,7 +28,41 @@ const dockerAvailable = (() => {
 
 async function json<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T }> {
 	const response = await fetch(`${origin}/api${path}`, init);
-	return { status: response.status, body: (await response.json()) as T };
+	const body = (await response.json()) as T;
+	if (response.status !== 202 || !/\/(generate|finalize|export)$/u.test(path))
+		return { status: response.status, body };
+	const taskId = (body as { task: { id: string } }).task.id;
+	for (let attempt = 0; attempt < 1200; attempt++) {
+		const task = (await fetch(`${origin}/api/tasks/${taskId}`).then((result) => result.json())) as {
+			state: string;
+			result?: T;
+			error?: string;
+		};
+		if (task.state === "succeeded") return { status: path.endsWith("/export") ? 201 : 200, body: task.result as T };
+		if (["failed", "cancelled", "stale", "interrupted"].includes(task.state))
+			return { status: 422, body: { message: task.error } as T };
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	throw new Error("后台任务未在两分钟内完成。");
+}
+
+async function sendChatMessage(
+	chatId: string,
+	message: string,
+	profileId?: string,
+	image?: { name: string; data: string },
+): Promise<string> {
+	const form = new FormData();
+	form.set("requestId", randomUUID());
+	form.set("message", message);
+	if (profileId) form.set("profileId", profileId);
+	if (image) form.append("images", new File([Buffer.from(image.data, "base64")], image.name, { type: "image/png" }));
+	const response = await fetch(`${origin}/api/chats/${chatId}/messages`, { method: "POST", body: form });
+	expect(response.status).toBe(202);
+	const request = (await response.json()) as { id: string };
+	const events = await fetch(`${origin}/api/chats/${chatId}/requests/${request.id}/events`);
+	expect(events.status).toBe(200);
+	return events.text();
 }
 
 async function createProject(scoringMode: "acm" | "oi" = "acm"): Promise<{ id: string }> {
@@ -73,6 +107,10 @@ async function seedRelease(projectId: string, overrides: Partial<ManualRelease> 
 	await mkdir(directory, { recursive: true });
 	await writeFile(join(directory, "release.json"), JSON.stringify(release));
 	await writeFile(join(directory, "hydro.zip"), "historical Hydro package");
+	await store.database.commitFiles(
+		[{ ownerKind: "release-file", ownerId: id, name: "hydro.zip", source: { path: join(directory, "hydro.zip") } }],
+		() => store.database.put("release", id, release),
+	);
 	return release;
 }
 
@@ -98,6 +136,40 @@ afterEach(async () => {
 });
 
 describe("manual project API", () => {
+	it("does not discover incomplete or deleted releases from leftover directories", async () => {
+		const project = await createProject();
+		const release = await seedRelease(project.id);
+		// Simulate an interruption after the database commit but before old directory cleanup.
+		store.database.transaction(() => {
+			store.database.delete("release", release.id);
+			store.database.removeOwnerFiles("release-file", release.id);
+		});
+		await mkdir(join(root, "releases", randomUUID()), { recursive: true });
+		expect((await json<{ releases: ManualRelease[] }>("/releases")).body.releases).toEqual([]);
+		expect((await fetch(`${origin}/api/releases/${release.id}/hydro`)).status).toBe(404);
+	});
+
+	it("rolls back release deletion and file references when the draft update fails", async () => {
+		const project = await createProject();
+		const release = await seedRelease(project.id);
+		const draft = store.load(project.id);
+		draft.latestReleaseId = release.id;
+		store.save(draft);
+		store.database.db.exec(
+			"CREATE TEMP TRIGGER reject_release_delete BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
+		);
+		try {
+			await expect(store.releases.deleteRelease(release.id)).rejects.toThrow("simulated save failure");
+			expect((await store.get(project.id)).latestReleaseId).toBe(release.id);
+			expect(await store.releases.release(release.id)).toEqual(release);
+			expect(await readFile((await store.releases.releaseFile(release.id, "hydro")).path, "utf8")).toBe(
+				"historical Hydro package",
+			);
+		} finally {
+			store.database.db.exec("DROP TRIGGER reject_release_delete");
+		}
+	});
+
 	it("requires a scoring mode before editing and keeps the selected mode immutable", async () => {
 		for (const body of ["{}", '{"scoringMode":"icpc"}']) {
 			const created = await json<{ message: string }>("/projects", {
@@ -388,16 +460,15 @@ describe("manual project API", () => {
 
 	it("rolls back both text files when saving the case fails", async () => {
 		const project = await createProject();
-		const save = Reflect.get(store, "save") as (value: unknown) => Promise<void>;
-		Reflect.set(store, "save", async () => {
-			throw new Error("simulated save failure");
-		});
+		store.database.db.exec(
+			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
+		);
 		try {
 			await expect(store.addTextCase(project.id, { name: "retry.in", input: "x", output: "y" })).rejects.toThrow(
 				"simulated save failure",
 			);
 		} finally {
-			Reflect.set(store, "save", save);
+			store.database.db.exec("DROP TRIGGER fail_project_write");
 		}
 		expect((await fetch(`${origin}/api/projects/${project.id}/files/retry.in`)).status).toBe(404);
 		expect((await fetch(`${origin}/api/projects/${project.id}/files/retry.out`)).status).toBe(404);
@@ -409,12 +480,11 @@ describe("manual project API", () => {
 
 	it("preserves OI mode and text Checker when loading an older draft", async () => {
 		const project = await createProject("oi");
-		const path = join(root, "projects", project.id, "project.json");
-		const stored = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+		const stored = store.database.get<Record<string, unknown>>("project", project.id)!;
 		delete stored.scoringMode;
 		delete stored.checkerMode;
 		stored.subtasks = [{ id: 1, type: "min", score: 100 }];
-		await writeFile(path, JSON.stringify(stored));
+		store.database.put("project", project.id, stored);
 		expect(await store.get(project.id)).toMatchObject({ scoringMode: "oi", checkerMode: "text" });
 	});
 
@@ -429,10 +499,9 @@ describe("manual project API", () => {
 		});
 		expect(uploaded.status).toBe(200);
 		const revision = (await json<{ revision: number }>(`/projects/${project.id}`)).body.revision;
-		const save = Reflect.get(store, "save") as (value: unknown) => Promise<void>;
-		Reflect.set(store, "save", async () => {
-			throw new Error("simulated save failure");
-		});
+		store.database.db.exec(
+			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
+		);
 		try {
 			const failed = await fetch(`${origin}/api${pdfPath}`, {
 				method: "PUT",
@@ -441,10 +510,88 @@ describe("manual project API", () => {
 			});
 			expect(failed.status).toBe(500);
 		} finally {
-			Reflect.set(store, "save", save);
+			store.database.db.exec("DROP TRIGGER fail_project_write");
 		}
 		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
 		expect(await (await fetch(`${origin}/api${pdfPath}`)).text()).toBe(original);
+	});
+
+	it("restores the previous uploaded case when replacement cannot be saved", async () => {
+		const project = await createProject();
+		const path = `/projects/${project.id}/files/1.in`;
+		const original = "old input\n";
+		const uploaded = await fetch(`${origin}/api${path}`, {
+			method: "PUT",
+			headers: { "content-type": "application/octet-stream" },
+			body: original,
+		});
+		expect(uploaded.status).toBe(200);
+		const revision = (await json<{ revision: number }>(`/projects/${project.id}`)).body.revision;
+		store.database.db.exec(
+			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
+		);
+		try {
+			const failed = await fetch(`${origin}/api${path}`, {
+				method: "PUT",
+				headers: { "content-type": "application/octet-stream" },
+				body: "replacement\n",
+			});
+			expect(failed.status).toBe(500);
+		} finally {
+			store.database.db.exec("DROP TRIGGER fail_project_write");
+		}
+		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
+		expect(await (await fetch(`${origin}/api${path}`)).text()).toBe(original);
+	});
+
+	it("restores files, indexes, and metadata when renumbering cannot be saved", async () => {
+		const project = await createProject();
+		const path = `/projects/${project.id}/files/2.in`;
+		const uploaded = await fetch(`${origin}/api${path}`, {
+			method: "PUT",
+			headers: { "content-type": "application/octet-stream" },
+			body: "two\n",
+		});
+		expect(uploaded.status).toBe(200);
+		const before = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
+		expect(before.body.cases.map((item) => item.inputFile)).toEqual(["2.in"]);
+		store.database.db.exec(
+			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
+		);
+		try {
+			await expect(store.renumberCases(project.id)).rejects.toThrow("simulated save failure");
+		} finally {
+			store.database.db.exec("DROP TRIGGER fail_project_write");
+		}
+		const after = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
+		expect(after.body.revision).toBe(before.body.revision);
+		expect(after.body.cases.map((item) => item.inputFile)).toEqual(["2.in"]);
+		expect(await (await fetch(`${origin}/api/projects/${project.id}/files/2.in`)).text()).toBe("two\n");
+		expect((await fetch(`${origin}/api/projects/${project.id}/files/1.in`)).status).toBe(404);
+	});
+
+	it("restores deleted cases when the batch metadata commit fails", async () => {
+		const project = await createProject();
+		const path = `/projects/${project.id}/files/1.in`;
+		const uploaded = await fetch(`${origin}/api${path}`, {
+			method: "PUT",
+			headers: { "content-type": "application/octet-stream" },
+			body: "one\n",
+		});
+		expect(uploaded.status).toBe(200);
+		const before = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
+		store.database.db.exec(
+			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
+		);
+		try {
+			await expect(store.deleteCases(project.id, ["1"])).rejects.toThrow("simulated save failure");
+		} finally {
+			store.database.db.exec("DROP TRIGGER fail_project_write");
+		}
+		const after = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
+		expect(after.body.revision).toBe(before.body.revision);
+		expect(after.body.cases.map((item) => item.inputFile)).toEqual(["1.in"]);
+		expect(await (await fetch(`${origin}/api${path}`)).text()).toBe("one\n");
 	});
 
 	it("streams faux-provider AI replies and persists the conversation", async () => {
@@ -462,24 +609,8 @@ describe("manual project API", () => {
 		expect(configured.body.configured).toBe(true);
 		expect(configured.body.apiKey).toBeUndefined();
 		const created = await json<{ id: string }>("/chats", { method: "POST" });
-		const response = await fetch(`${origin}/api/chats/${created.body.id}/messages`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ message: "你好" }),
-		});
-		expect(response.status).toBe(200);
-		const reader = response.body?.getReader();
-		expect(reader).toBeDefined();
-		const first = await reader!.read();
-		const decoder = new TextDecoder();
-		let stream = decoder.decode(first.value, { stream: true });
+		const stream = await sendChatMessage(created.body.id, "你好");
 		expect(stream).toContain("event: start");
-		for (;;) {
-			const next = await reader!.read();
-			if (next.done) break;
-			stream += decoder.decode(next.value, { stream: true });
-		}
-		stream += decoder.decode();
 		expect([...stream.matchAll(/^event: (start|delta|done)$/gmu)].map((match) => match[1])).toEqual([
 			"start",
 			"delta",
@@ -507,13 +638,9 @@ describe("manual project API", () => {
 		});
 		const created = await json<{ id: string }>("/chats", { method: "POST" });
 		const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==";
-		const response = await fetch(`${origin}/api/chats/${created.body.id}/messages`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ message: "", images: [{ name: "pixel.png", mimeType: "image/png", data: png }] }),
-		});
-		expect(response.status).toBe(200);
-		expect(await response.text()).toContain("event: done");
+		expect(await sendChatMessage(created.body.id, "", undefined, { name: "pixel.png", data: png })).toContain(
+			"event: done",
+		);
 		const conversation = (
 			await json<{ messages: Array<{ images?: Array<{ id: string }> }> }>(`/chats/${created.body.id}`)
 		).body;
@@ -572,13 +699,7 @@ describe("manual project API", () => {
 			["第一轮", firstId],
 			["第二轮", secondId],
 		]) {
-			const response = await fetch(`${origin}/api/chats/${created.body.id}/messages`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ message, profileId }),
-			});
-			expect(response.status).toBe(200);
-			expect(await response.text()).toContain("event: done");
+			expect(await sendChatMessage(created.body.id, message, profileId)).toContain("event: done");
 		}
 		const conversation = (
 			await json<{
@@ -698,8 +819,8 @@ describe("manual project API", () => {
 			expect(Buffer.from(await hydro.arrayBuffer()).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
 			const source = await fetch(`${origin}/api/releases/${releaseId}/source`);
 			expect(source.status).toBe(200);
-			const hydroPath = (await store.releaseFile(releaseId!, "hydro")).path;
-			const sourcePath = (await store.releaseFile(releaseId!, "source")).path;
+			const hydroPath = (await store.releases.releaseFile(releaseId!, "hydro")).path;
+			const sourcePath = (await store.releases.releaseFile(releaseId!, "source")).path;
 			expect(() => execFileSync("unzip", ["-t", hydroPath], { stdio: "ignore" })).not.toThrow();
 			expect(() => execFileSync("unzip", ["-t", sourcePath], { stdio: "ignore" })).not.toThrow();
 			const hydroConfig = execFileSync("unzip", ["-p", hydroPath, "a-plus-b/testdata/config.yaml"], {
@@ -731,34 +852,7 @@ describe("manual project API", () => {
 				}),
 			});
 			expect((await fetch(`${origin}/api/releases/${releaseId}/hydro`)).status).toBe(200);
-			expect(await store.releaseReference(releaseId!)).toEqual({ language: "cpp23", code: referenceCode });
-			await new Promise<void>((resolve) => server.close(() => resolve()));
-			server = createHydroServer({
-				projects: store,
-				chat,
-				liveVerifier: {
-					status: () => ({ configured: true, message: "test adapter" }),
-					verify: async (request) => {
-						expect(request.releaseId).toBe(releaseId);
-						expect(request.reference.code).toBe(referenceCode);
-						return {
-							success: true,
-							startedAt: "2026-01-01T00:00:00.000Z",
-							finishedAt: "2026-01-01T00:00:01.000Z",
-							import: { success: true, message: "imported" },
-							reference: { name: "reference", verdict: "AC", score: 100, accepted: true },
-							wrongPrograms: [],
-							message: "Hydro verified",
-						};
-					},
-				},
-			});
-			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-			origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-			const live = await json<{ success: boolean }>(`/releases/${releaseId}/live-verify`, { method: "POST" });
-			expect(live.status).toBe(200);
-			expect(live.body.success).toBe(true);
-			expect((await store.release(releaseId!)).liveVerification?.reference.verdict).toBe("AC");
+			expect(await store.releases.releaseReference(releaseId!)).toEqual({ language: "cpp23", code: referenceCode });
 		},
 		120_000,
 	);
@@ -789,7 +883,7 @@ describe("manual project API", () => {
 			);
 			expect(finalized.body.report.success).toBe(true);
 			expect(finalized.body.release?.id).toBeTruthy();
-			const archive = (await store.releaseFile(finalized.body.release!.id, "hydro")).path;
+			const archive = (await store.releases.releaseFile(finalized.body.release!.id, "hydro")).path;
 			expect(execFileSync("unzip", ["-p", archive, "empty-io/testdata/1.in"]).byteLength).toBe(0);
 			expect(execFileSync("unzip", ["-p", archive, "empty-io/testdata/1.out"]).byteLength).toBe(0);
 		},
@@ -1048,7 +1142,7 @@ describe("manual project API", () => {
 				method: "POST",
 			});
 			expect(domjudge.status, JSON.stringify(domjudge.body)).toBe(200);
-			const domjudgePath = (await store.releaseFile(releaseId, "domjudge")).path;
+			const domjudgePath = (await store.releases.releaseFile(releaseId, "domjudge")).path;
 			expect(() => execFileSync("unzip", ["-t", domjudgePath], { stdio: "ignore" })).not.toThrow();
 			const entries = execFileSync("unzip", ["-Z1", domjudgePath], { encoding: "utf8" }).trim().split("\n");
 			expect(entries).toContain("problem.yaml");
@@ -1061,7 +1155,7 @@ describe("manual project API", () => {
 				),
 			);
 			for (const qduoj of qduojExports) expect(qduoj.status, JSON.stringify(qduoj.body)).toBe(200);
-			const qduojPath = (await store.releaseFile(releaseId, "qduoj")).path;
+			const qduojPath = (await store.releases.releaseFile(releaseId, "qduoj")).path;
 			const document = JSON.parse(
 				execFileSync("unzip", ["-p", qduojPath, "1/problem.json"], { encoding: "utf8" }),
 			) as {
@@ -1099,7 +1193,7 @@ describe("manual project API", () => {
 			expect(rejected.status, rejected.stderr).toBe(1);
 			const fps = await json<{ download: string }>(`/releases/${releaseId}/exports/fps`, { method: "POST" });
 			expect(fps.status, JSON.stringify(fps.body)).toBe(200);
-			expect(await readFile((await store.releaseFile(releaseId, "fps")).path, "utf8")).toContain(
+			expect(await readFile((await store.releases.releaseFile(releaseId, "fps")).path, "utf8")).toContain(
 				'<spj language="C++">',
 			);
 			const pdfUpload = await fetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
@@ -1115,12 +1209,16 @@ describe("manual project API", () => {
 			expect(second.body.report.success, JSON.stringify(second.body.report)).toBe(true);
 			const withPdf = second.body.release?.id ?? "";
 			await json(`/releases/${withPdf}/exports/domjudge`, { method: "POST" });
-			const pdfEntries = execFileSync("unzip", ["-Z1", (await store.releaseFile(withPdf, "domjudge")).path], {
-				encoding: "utf8",
-			});
+			const pdfEntries = execFileSync(
+				"unzip",
+				["-Z1", (await store.releases.releaseFile(withPdf, "domjudge")).path],
+				{
+					encoding: "utf8",
+				},
+			);
 			expect(pdfEntries).toContain("problem.pdf");
 			expect(
-				execFileSync("unzip", ["-p", (await store.releaseFile(withPdf, "domjudge")).path, "problem.pdf"], {
+				execFileSync("unzip", ["-p", (await store.releases.releaseFile(withPdf, "domjudge")).path, "problem.pdf"], {
 					encoding: "utf8",
 				}),
 			).toBe("%PDF-1.4\nexample\n");
@@ -1197,7 +1295,7 @@ describe("manual project API", () => {
 			const releaseId = finalized.body.release?.id ?? "";
 			const hydroConfig = execFileSync(
 				"unzip",
-				["-p", (await store.releaseFile(releaseId, "hydro")).path, "oi-sum/testdata/config.yaml"],
+				["-p", (await store.releases.releaseFile(releaseId, "hydro")).path, "oi-sum/testdata/config.yaml"],
 				{ encoding: "utf8" },
 			);
 			expect(hydroConfig).toContain("score: 40");

@@ -1,44 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { Api, Context, ImageContent, Message, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
+import type {
+	ChatConversation,
+	ChatImage,
+	ChatImageUpload,
+	ChatMessage,
+	ChatProtocol,
+} from "@hydro-problem-make/contracts";
+import { WorkspaceDatabase } from "./workspace-db.ts";
 
-type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
-
-export interface ChatImage {
-	id: string;
-	name: string;
-	mimeType: string;
-	bytes: number;
-}
-
-export interface ChatImageUpload {
-	name: string;
-	mimeType: string;
-	data: string;
-}
-
-export interface ChatMessage {
-	id: string;
-	role: "user" | "assistant";
-	content: string;
-	images?: ChatImage[];
-	createdAt: string;
-	contextSnapshot?: string;
-	profileId?: string;
-	modelId?: string;
-	api?: ChatProtocol;
-}
-
-export interface ChatConversation {
-	id: string;
-	title: string;
-	createdAt: string;
-	updatedAt: string;
-	profileId?: string;
-	messages: ChatMessage[];
-}
+export type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@hydro-problem-make/contracts";
 
 interface StoredConfiguration {
 	id: string;
@@ -79,7 +53,7 @@ export interface ChatSendEvents {
 	onDelta(delta: string): void;
 }
 
-export type ChatModelClient = (request: ChatModelRequest) => Promise<string>;
+export type ChatModelClient = (request: ChatModelRequest) => Promise<string | { text: string; usage?: Usage }>;
 
 const protocols = [
 	{ id: "openai-completions", name: "OpenAI Chat Completions", baseUrl: "https://api.openai.com/v1" },
@@ -140,7 +114,7 @@ export class ChatError extends Error {
 	}
 }
 
-async function defaultClient(request: ChatModelRequest): Promise<string> {
+async function defaultClient(request: ChatModelRequest): Promise<{ text: string; usage?: Usage }> {
 	const configuration = request.configuration;
 	const protocol = protocols.find((item) => item.id === configuration.provider);
 	if (!protocol) throw new ChatError("AI 协议无效。", 422);
@@ -190,7 +164,7 @@ async function defaultClient(request: ChatModelRequest): Promise<string> {
 			.filter((item) => item.type === "text")
 			.map((item) => item.text)
 			.join("");
-	return output;
+	return { text: output, usage: final.usage };
 }
 
 function readConfiguration(value: unknown, id: string, previous?: StoredConfiguration): StoredConfiguration {
@@ -272,22 +246,30 @@ function readStoredCatalog(value: unknown): StoredCatalog {
 
 export class ChatService {
 	private readonly root: string;
+	private readonly database: WorkspaceDatabase;
 	private readonly configPath: string;
 	private readonly client: ChatModelClient;
 	private catalog: StoredCatalog = { version: 2, profiles: [] };
 	private configurationError?: string;
 	private readonly busy = new Set<string>();
+	private readonly documentVersions = new WeakMap<ChatConversation, number>();
 
-	constructor(options: { root: string; configPath: string; client?: ChatModelClient }) {
+	constructor(options: { root: string; configPath: string; client?: ChatModelClient; database?: WorkspaceDatabase }) {
 		this.root = resolve(options.root);
+		this.database = options.database ?? new WorkspaceDatabase(this.root);
+		if (this.database.root !== this.root) throw new Error("Workspace database root must match the chat root.");
 		this.configPath = resolve(options.configPath);
 		this.client = options.client ?? defaultClient;
 	}
 
 	async loadConfiguration(): Promise<void> {
 		try {
-			this.catalog = readStoredCatalog(JSON.parse(await readFile(this.configPath, "utf8")) as unknown);
-			this.configurationError = undefined;
+			this.catalog = readStoredCatalog(
+				this.database.get<StoredCatalog>("ai-config", "default") ??
+					(JSON.parse(await readFile(this.configPath, "utf8")) as unknown),
+			);
+			if (!this.database.migrationError) this.database.put("ai-config", "default", this.catalog);
+			this.configurationError = this.database.migrationError;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 			this.catalog = { version: 2, profiles: [] };
@@ -308,14 +290,36 @@ export class ChatService {
 		};
 	}
 
+	async testProfile(id: string): Promise<{ connected: boolean; modelId: string; usage?: Usage; reply: string }> {
+		const configuration = this.catalog.profiles.find((item) => item.id === id);
+		if (!configuration) throw new ChatError("AI 配置不存在。", 404);
+		const signal = AbortSignal.timeout(15_000);
+		const response = await this.client({
+			configuration,
+			context: {
+				systemPrompt: "Reply with OK.",
+				messages: [{ role: "user", content: "OK", timestamp: Date.now() }],
+			},
+			signal,
+			onDelta: () => {},
+		});
+		return {
+			connected: true,
+			modelId: configuration.modelId,
+			reply: typeof response === "string" ? response : response.text,
+			usage: typeof response === "string" ? undefined : response.usage,
+		};
+	}
+
 	private async saveCatalog(catalog: StoredCatalog): Promise<void> {
-		await mkdir(dirname(this.configPath), { recursive: true, mode: 0o700 });
-		const temporary = `${this.configPath}.${randomUUID()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(catalog, null, 2)}\n`, { mode: 0o600 });
-		await chmod(temporary, 0o600);
-		await rename(temporary, this.configPath);
+		this.assertWritable();
+		this.database.put("ai-config", "default", catalog);
 		this.catalog = catalog;
 		this.configurationError = undefined;
+	}
+
+	private assertWritable(): void {
+		if (this.database.migrationError) throw new ChatError("旧数据迁移失败，当前只读。", 503);
 	}
 
 	async configure(value: unknown): Promise<ChatConfigurationSnapshot> {
@@ -363,10 +367,9 @@ export class ChatService {
 	}
 
 	async clearConfiguration(): Promise<ChatConfigurationSnapshot> {
-		await unlink(this.configPath).catch((error: NodeJS.ErrnoException) => {
-			if (error.code !== "ENOENT") throw error;
-		});
+		this.assertWritable();
 		this.catalog = { version: 2, profiles: [] };
+		this.database.put("ai-config", "default", this.catalog);
 		this.configurationError = undefined;
 		return this.getConfiguration();
 	}
@@ -381,40 +384,34 @@ export class ChatService {
 		return join(this.root, "chats", chatId, imageId);
 	}
 
-	private async save(chat: ChatConversation): Promise<void> {
-		const path = this.chatPath(chat.id);
-		await mkdir(dirname(path), { recursive: true });
-		const temporary = `${path}.${randomUUID()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(chat, null, 2)}\n`);
-		await rename(temporary, path);
+	private save(chat: ChatConversation): void {
+		const version = this.documentVersions.get(chat) ?? -1;
+		try {
+			this.database.put("chat", chat.id, chat, version);
+		} catch (error) {
+			if (String(error).includes("VERSION_CONFLICT")) throw new ChatError("对话已变化，请刷新后重试。", 409);
+			throw error;
+		}
+		this.documentVersions.set(chat, version + 1);
 	}
 
 	async get(id: string): Promise<ChatConversation> {
-		try {
-			return JSON.parse(await readFile(this.chatPath(id), "utf8")) as ChatConversation;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ChatError("对话不存在。", 404);
-			throw error;
-		}
+		this.chatPath(id);
+		const document = this.database.getVersioned<ChatConversation>("chat", id);
+		if (!document) throw new ChatError("对话不存在。", 404);
+		if (document.version !== undefined) this.documentVersions.set(document.value, document.version);
+		return document.value;
 	}
 
 	async list(): Promise<Array<Pick<ChatConversation, "id" | "title" | "createdAt" | "updatedAt">>> {
-		let names: string[];
-		try {
-			names = await readdir(join(this.root, "chats"));
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-			throw error;
-		}
-		const chats = await Promise.all(
-			names.filter((name) => /^[a-f0-9-]{36}\.json$/u.test(name)).map((name) => this.get(name.slice(0, -5))),
-		);
+		const chats = this.database.list<ChatConversation>("chat");
 		return chats
 			.map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt }))
 			.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	}
 
 	async create(): Promise<ChatConversation> {
+		this.assertWritable();
 		const now = new Date().toISOString();
 		const chat: ChatConversation = {
 			id: randomUUID(),
@@ -428,17 +425,39 @@ export class ChatService {
 	}
 
 	async delete(id: string): Promise<void> {
+		this.assertWritable();
 		if (this.busy.has(id)) throw new ChatError("对话正在生成，请稍后删除。", 409);
 		await this.get(id);
-		await rm(this.chatPath(id));
+		this.database.transaction(() => {
+			if (
+				this.database.db
+					.prepare("SELECT 1 FROM chat_requests WHERE chat_id=? AND state IN ('queued','running')")
+					.get(id)
+			)
+				throw new ChatError("对话正在生成，请稍后删除。", 409);
+			const requests = this.database.db.prepare("SELECT id FROM chat_requests WHERE chat_id=?").all(id) as Array<{
+				id: string;
+			}>;
+			for (const request of requests) {
+				this.database.removeOwnerFiles("chat-request-image", request.id);
+				this.database.db.prepare("DELETE FROM chat_request_events WHERE request_id=?").run(request.id);
+			}
+			this.database.db.prepare("DELETE FROM chat_requests WHERE chat_id=?").run(id);
+			this.database.delete("chat", id);
+			this.database.removeOwnerFiles("chat-image", id);
+		});
 		await rm(join(this.root, "chats", id), { recursive: true, force: true });
+		await this.database.pruneBlobs();
 	}
 
 	async image(chatId: string, imageId: string): Promise<{ path: string; mimeType: string }> {
 		const chat = await this.get(chatId);
 		const image = chat.messages.flatMap((item) => item.images ?? []).find((item) => item.id === imageId);
 		if (!image) throw new ChatError("图片不存在。", 404);
-		return { path: this.imagePath(chatId, imageId), mimeType: image.mimeType };
+		return {
+			path: this.database.filePath("chat-image", chatId, imageId) ?? this.imagePath(chatId, imageId),
+			mimeType: image.mimeType,
+		};
 	}
 
 	async send(
@@ -449,13 +468,16 @@ export class ChatService {
 		signal?: AbortSignal,
 		profileId?: string,
 		images: ChatImageUpload[] = [],
+		requestId?: string,
 	): Promise<ChatConversation> {
+		this.assertWritable();
 		if (this.catalog.profiles.length === 0) throw new ChatError("请先在设置中配置 AI API。", 503);
 		if (this.busy.has(id)) throw new ChatError("上一条消息仍在生成。", 409);
 		if ((!message.trim() && images.length === 0) || message.length > 40_000) {
 			throw new ChatError("请填写消息或添加图片；文字最多 40000 个字符。");
 		}
 		if (contextSnapshot && contextSnapshot.length > 80_000) throw new ChatError("附带的题目上下文过长。");
+		if (requestId && !/^[a-f0-9-]{36}$/u.test(requestId)) throw new ChatError("请求 ID 无效。", 422);
 		const decodedImages = decodeImages(images);
 		this.busy.add(id);
 		try {
@@ -463,6 +485,11 @@ export class ChatService {
 			const selectedProfileId = profileId ?? chat.profileId ?? this.catalog.defaultProfileId;
 			const configuration = this.catalog.profiles.find((item) => item.id === selectedProfileId);
 			if (!configuration) throw new ChatError("当前对话使用的 AI 配置不存在，请重新选择。", 422);
+			if (requestId && chat.messages.some((item) => item.role === "assistant" && item.requestId === requestId))
+				return chat;
+			const previousUser = requestId
+				? chat.messages.find((item) => item.role === "user" && item.requestId === requestId)
+				: undefined;
 			const maxInputCharacters = Math.max(1000, (configuration.contextWindow - configuration.maxTokens) * 3);
 			if (
 				message.trim().length + (contextSnapshot?.length ?? 0) + images.length * imageContextCharacters >
@@ -472,31 +499,31 @@ export class ChatService {
 			}
 			const now = new Date().toISOString();
 			const user: ChatMessage = {
-				id: randomUUID(),
+				id: requestId ?? randomUUID(),
+				requestId,
 				role: "user",
 				content: message.trim(),
 				images: decodedImages.length ? decodedImages.map((item) => item.image) : undefined,
 				createdAt: now,
 				contextSnapshot: contextSnapshot?.trim() || undefined,
 			};
-			chat.messages.push(user);
+			if (!previousUser) chat.messages.push(user);
 			if (chat.messages.length === 1)
 				chat.title = (message.trim() || `图片：${decodedImages[0]?.image.name}`).slice(0, 60);
 			chat.profileId = configuration.id;
 			chat.updatedAt = now;
-			const createdPaths: string[] = [];
-			try {
-				if (decodedImages.length) await mkdir(join(this.root, "chats", id), { recursive: true });
-				for (const item of decodedImages) {
-					const path = this.imagePath(id, item.image.id);
-					await writeFile(path, item.bytes, { flag: "wx" });
-					createdPaths.push(path);
-				}
-				await this.save(chat);
-			} catch (error) {
-				await Promise.all(createdPaths.map((path) => rm(path, { force: true })));
-				throw error;
-			}
+			await this.database.commitFiles(
+				(previousUser ? [] : decodedImages).map((item) => ({
+					ownerKind: "chat-image",
+					ownerId: id,
+					name: item.image.id,
+					source: { bytes: item.bytes },
+				})),
+				() => {
+					signal?.throwIfAborted();
+					this.save(chat);
+				},
+			);
 			events.onStart({ ...chat, messages: [...chat.messages] });
 			const selected: ChatMessage[] = [];
 			let characters = 0;
@@ -524,7 +551,12 @@ export class ChatService {
 											async (image): Promise<ImageContent> => ({
 												type: "image",
 												mimeType: image.mimeType,
-												data: (await readFile(this.imagePath(id, image.id))).toString("base64"),
+												data: (
+													await readFile(
+														this.database.filePath("chat-image", id, image.id) ??
+															this.imagePath(id, image.id),
+													)
+												).toString("base64"),
 											}),
 										),
 									)),
@@ -548,7 +580,8 @@ export class ChatService {
 				systemPrompt: "你是 Hydro 制题助手。回答用户问题；你没有工具权限，不能修改题目草稿、运行代码或声称已验证。",
 				messages,
 			};
-			const answer = await this.client({ configuration, context, signal, onDelta: events.onDelta });
+			const reply = await this.client({ configuration, context, signal, onDelta: events.onDelta });
+			const answer = typeof reply === "string" ? reply : reply.text;
 			if (signal?.aborted) throw new ChatError("对话已取消。", 499);
 			chat.messages.push({
 				id: randomUUID(),
@@ -558,6 +591,8 @@ export class ChatService {
 				profileId: configuration.id,
 				modelId: configuration.modelId,
 				api: configuration.provider,
+				requestId,
+				usage: typeof reply === "string" ? undefined : reply.usage,
 			});
 			chat.updatedAt = new Date().toISOString();
 			await this.save(chat);

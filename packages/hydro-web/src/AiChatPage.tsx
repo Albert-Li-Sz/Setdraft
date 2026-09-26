@@ -1,7 +1,9 @@
+import type { ChatRequest } from "@hydro-problem-make/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { requestJson as jsonRequest } from "./api-client.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
-import { readChatStream } from "./chat-stream.ts";
+import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
 import {
 	type AiConfiguration,
 	apiUrl,
@@ -51,13 +53,6 @@ async function readImage(file: File): Promise<PendingImage> {
 	return { localId: crypto.randomUUID(), name, mimeType: file.type, data, bytes: file.size };
 }
 
-async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
-	const response = await fetch(url, init);
-	const body = (await response.json()) as unknown;
-	if (!response.ok) throw new Error(responseError(body));
-	return body as T;
-}
-
 function profileForChat(configuration: AiConfiguration, chat?: ChatConversation): string {
 	if (chat?.profileId && configuration.profiles.some((item) => item.id === chat.profileId)) return chat.profileId;
 	return configuration.defaultProfileId ?? configuration.profiles[0]?.id ?? "";
@@ -79,12 +74,14 @@ export function AiChatPage(props: Props) {
 	const [attachProject, setAttachProject] = useState(false);
 	const [streaming, setStreaming] = useState("");
 	const [streamFailed, setStreamFailed] = useState(false);
+	const [failedRequest, setFailedRequest] = useState<{ chatId: string; requestId: string }>();
 	const [busy, setBusy] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [historyCollapsed, setHistoryCollapsed] = useState(false);
 	const [message, setMessage] = useState("正在读取本地对话…");
 	const [messageTone, setMessageTone] = useState<"pending" | "passed" | "failed">("pending");
 	const controllerRef = useRef<AbortController | undefined>(undefined);
+	const activeRequestRef = useRef<{ chatId: string; requestId: string } | undefined>(undefined);
 	const messagesRef = useRef<HTMLDivElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const followOutputRef = useRef(true);
@@ -111,6 +108,29 @@ export function AiChatPage(props: Props) {
 		observer.observe(element);
 		return () => observer.disconnect();
 	}, []);
+
+	useEffect(() => {
+		if (!chat?.id || busy) return;
+		const chatId = chat.id;
+		const controller = new AbortController();
+		void jsonRequest<{ requests: Array<{ id: string; state: string }> }>(
+			apiUrl(props.apiOrigin, `/chats/${chatId}/requests`),
+			{ signal: controller.signal },
+		)
+			.then((value) => {
+				if (controller.signal.aborted) return;
+				const latest = value.requests[0];
+				if (
+					latest &&
+					latest.state !== "done" &&
+					!chat.messages.some((item) => item.role === "assistant" && item.requestId === latest.id)
+				) {
+					setFailedRequest({ chatId, requestId: latest.id });
+				}
+			})
+			.catch(() => {});
+		return () => controller.abort();
+	}, [chat, busy, props.apiOrigin]);
 
 	useEffect(() => {
 		const controller = new AbortController();
@@ -248,6 +268,7 @@ export function AiChatPage(props: Props) {
 		let activeChat = chat;
 		let previousMessageCount = chat?.messages.length ?? 0;
 		let partialText = "";
+		const requestId = crypto.randomUUID();
 		sendingRef.current = true;
 		setBusy(true);
 		setStreaming("");
@@ -260,24 +281,32 @@ export function AiChatPage(props: Props) {
 			const current = chat ?? (await create(true));
 			activeChat = current;
 			previousMessageCount = current.messages.length;
+			const form = new FormData();
+			form.set("requestId", requestId);
+			form.set("message", content);
+			form.set("profileId", selectedProfileId);
+			if (attachProject && props.projectSnapshot) form.set("contextSnapshot", props.projectSnapshot);
+			for (const image of images) {
+				const binary = atob(image.data);
+				const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+				form.append("images", new File([bytes], image.name, { type: image.mimeType }));
+			}
 			const response = await fetch(apiUrl(props.apiOrigin, `/chats/${current.id}/messages`), {
 				method: "POST",
 				signal: controller.signal,
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					message: content,
-					images: images.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
-					profileId: selectedProfileId,
-					contextSnapshot: attachProject ? props.projectSnapshot : undefined,
-				}),
+				body: form,
 			});
 			if (!response.ok) throw new Error(responseError(await response.json()));
-			if (!response.body) throw new Error("服务端未返回流式响应。");
+			activeRequestRef.current = { chatId: current.id, requestId };
+			setInput("");
+			setImages([]);
 			let completed = false;
-			await readChatStream(response.body, (event) => {
+			let after = 0;
+			let attempts = 0;
+			const handleEvent = (event: ChatStreamEvent, sequence?: number) => {
+				if (sequence !== undefined && sequence <= after) return;
+				if (sequence !== undefined) after = sequence;
 				if (event.type === "start") {
-					setInput("");
-					setImages([]);
 					activeChat = event.chat;
 					setChat(event.chat);
 					setSelectedProfileId(event.chat.profileId ?? selectedProfileId);
@@ -297,8 +326,29 @@ export function AiChatPage(props: Props) {
 				} else {
 					throw new Error(event.message);
 				}
-			});
+			};
+			while (!completed && !controller.signal.aborted) {
+				try {
+					const stream = await fetch(
+						apiUrl(props.apiOrigin, `/chats/${current.id}/requests/${requestId}/events?after=${after}`),
+						{ signal: controller.signal },
+					);
+					if (!stream.ok || !stream.body) throw new Error("无法订阅 AI 回复。");
+					await readChatStream(stream.body, handleEvent);
+					if (completed) break;
+					const status = await jsonRequest<ChatRequest>(
+						apiUrl(props.apiOrigin, `/chats/${current.id}/requests/${requestId}`),
+					);
+					if (status.state === "failed") throw new Error(status.error ?? "模型请求失败。");
+					attempts = 0;
+				} catch (error) {
+					if (controller.signal.aborted) throw error;
+					if (++attempts > 5) throw error;
+				}
+				if (!completed) await new Promise((resolve) => setTimeout(resolve, 500));
+			}
 			if (!completed) throw new Error("模型连接提前中断。");
+			setFailedRequest(undefined);
 			await refreshList();
 			showMessage("回复已保存到本地对话。", "passed");
 		} catch (error) {
@@ -307,6 +357,7 @@ export function AiChatPage(props: Props) {
 				controller.signal.aborted ? "pending" : "failed",
 			);
 			setStreamFailed(partialText.length > 0);
+			if (!controller.signal.aborted && activeChat) setFailedRequest({ chatId: activeChat.id, requestId });
 			if (!partialText) setStreaming("");
 			if (activeChat) {
 				const fallback = activeChat;
@@ -322,6 +373,90 @@ export function AiChatPage(props: Props) {
 			sendingRef.current = false;
 			setBusy(false);
 			controllerRef.current = undefined;
+			activeRequestRef.current = undefined;
+		}
+	}
+
+	async function resumeFailed(): Promise<void> {
+		if (!failedRequest || busy) return;
+		setBusy(true);
+		setStreaming("");
+		setStreamFailed(false);
+		const controller = new AbortController();
+		controllerRef.current = controller;
+		activeRequestRef.current = failedRequest;
+		try {
+			const base = `/chats/${failedRequest.chatId}/requests/${failedRequest.requestId}`;
+			const state = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base));
+			if (state.state === "failed") await jsonRequest(apiUrl(props.apiOrigin, `${base}/retry`), { method: "POST" });
+			let after = 0;
+			let completed = false;
+			let retries = 0;
+			while (!completed && !controller.signal.aborted) {
+				try {
+					const response = await fetch(apiUrl(props.apiOrigin, `${base}/events?after=${after}`), {
+						signal: controller.signal,
+					});
+					if (!response.ok || !response.body) throw new Error("无法接收模型回复。");
+					await readChatStream(response.body, (event, sequence) => {
+						if (sequence !== undefined && sequence <= after) return;
+						if (sequence !== undefined) after = sequence;
+						if (event.type === "start") setChat(event.chat);
+						else if (event.type === "delta") setStreaming((current) => current + event.delta);
+						else if (event.type === "done") {
+							setChat(event.chat);
+							setStreaming("");
+							completed = true;
+						} else throw new Error(event.message);
+					});
+					if (!completed) {
+						const status = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base));
+						if (status.state === "failed") throw new Error(status.error ?? "模型请求失败。");
+					}
+					retries = 0;
+				} catch (error) {
+					if (controller.signal.aborted || ++retries > 5) throw error;
+				}
+				if (!completed) await new Promise((resolve) => setTimeout(resolve, 500));
+			}
+			if (!completed) throw new Error("模型连接提前中断。");
+			setFailedRequest(undefined);
+			await refreshList();
+			showMessage("回复已保存到本地对话。", "passed");
+		} catch (error) {
+			showMessage(error instanceof Error ? error.message : "重试失败。", "failed");
+			setStreamFailed(true);
+		} finally {
+			activeRequestRef.current = undefined;
+			controllerRef.current = undefined;
+			setBusy(false);
+		}
+	}
+
+	async function stopGeneration(): Promise<void> {
+		const active = activeRequestRef.current;
+		controllerRef.current?.abort();
+		if (!active) return;
+		try {
+			await fetch(apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}/cancel`), {
+				method: "POST",
+			});
+			for (let attempt = 0; attempt < 20; attempt++) {
+				const response = await fetch(
+					apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}`),
+				);
+				if (response.ok) {
+					const state = (await response.json()) as { state: string };
+					if (state.state === "failed") {
+						setFailedRequest(active);
+						break;
+					}
+					if (state.state === "done") break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+		} catch {
+			setFailedRequest(active);
 		}
 	}
 
@@ -431,6 +566,11 @@ export function AiChatPage(props: Props) {
 										</div>
 									)}
 									{item.contextSnapshot && <small>已附带当前题目只读快照</small>}
+									{item.usage && (
+										<small>
+											输入 {item.usage.input} · 输出 {item.usage.output} tokens
+										</small>
+									)}
 								</article>
 							))
 						) : !busy ? (
@@ -566,12 +706,13 @@ export function AiChatPage(props: Props) {
 								}}
 							/>
 							{busy && (
-								<button
-									className="button secondary"
-									type="button"
-									onClick={() => controllerRef.current?.abort()}
-								>
+								<button className="button secondary" type="button" onClick={() => void stopGeneration()}>
 									停止生成
+								</button>
+							)}
+							{!busy && failedRequest && (
+								<button className="button secondary" type="button" onClick={() => void resumeFailed()}>
+									{streamFailed ? "重试并续接" : "续接回复"}
 								</button>
 							)}
 							<button

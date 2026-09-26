@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AiChatPage } from "./AiChatPage.tsx";
-import { ContestsPage } from "./ContestsPage.tsx";
-import { ManualWorkspace } from "./ManualWorkspace.tsx";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { RevisionConflict, requestJson } from "./api-client.ts";
 import {
 	apiUrl,
+	type BackgroundTask,
 	type ManualRelease,
 	type ManualReport,
 	type PageRoute,
@@ -11,70 +10,87 @@ import {
 	pageFromHash,
 	responseError,
 	type SandboxStatus,
+	waitForTask,
 } from "./platform.ts";
-import { editableProject, projectContextSnapshot } from "./problem.ts";
-import { RecordsPage } from "./RecordsPage.tsx";
-import { SettingsPage } from "./SettingsPage.tsx";
+import { projectContextSnapshot } from "./problem.ts";
+import { useProjectSession } from "./use-project-session.ts";
+
+const AiChatPage = lazy(() => import("./AiChatPage.tsx").then((module) => ({ default: module.AiChatPage })));
+const ContestsPage = lazy(() => import("./ContestsPage.tsx").then((module) => ({ default: module.ContestsPage })));
+const ManualWorkspace = lazy(() =>
+	import("./ManualWorkspace.tsx").then((module) => ({ default: module.ManualWorkspace })),
+);
+const RecordsPage = lazy(() => import("./RecordsPage.tsx").then((module) => ({ default: module.RecordsPage })));
+const SettingsPage = lazy(() => import("./SettingsPage.tsx").then((module) => ({ default: module.SettingsPage })));
+const TasksPage = lazy(() => import("./TasksPage.tsx").then((module) => ({ default: module.TasksPage })));
 
 const currentProjectKey = "hydro-problem-make.project-id";
-
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-	const response = await fetch(url, init);
-	const body = (await response.json()) as unknown;
-	if (!response.ok) throw new Error(responseError(body));
-	return body as T;
-}
 
 export function App() {
 	const [page, setPage] = useState<PageRoute>(() => pageFromHash(window.location.hash));
 	const apiOrigin = "";
+	const selection = useRef<AbortController | undefined>(undefined);
 	const [sandbox, setSandbox] = useState<SandboxStatus>();
 	const [aiConfigured, setAiConfigured] = useState(false);
-	const [liveHydroConfigured, setLiveHydroConfigured] = useState(false);
-	const [project, setProject] = useState<ProjectSnapshot>();
 	const [choosingScoringMode, setChoosingScoringMode] = useState(false);
-	const projectRef = useRef<ProjectSnapshot | undefined>(undefined);
 	const [projects, setProjects] = useState<ProjectSnapshot[]>([]);
 	const [releases, setReleases] = useState<ManualRelease[]>([]);
 	const [release, setRelease] = useState<ManualRelease>();
 	const [report, setReport] = useState<ManualReport>();
-	const [busy, setBusy] = useState<"upload" | "generate" | "finalize" | "live">();
+	const [busy, setBusy] = useState<"upload" | "generate" | "finalize">();
+	const [activeTask, setActiveTask] = useState<BackgroundTask>();
 	const [recordsLoading, setRecordsLoading] = useState(false);
 	const [recordsMessage, setRecordsMessage] = useState("");
 	const [recordsTone, setRecordsTone] = useState<"passed" | "failed">("passed");
 	const [notice, setNotice] = useState("草稿自动保存在本地服务端。请添加标准程序与测试数据。");
 	const [noticeTone, setNoticeTone] = useState<"pending" | "passed" | "failed">("pending");
-	const [saveStatus, setSaveStatus] = useState("已保存");
-	const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	const saveFlight = useRef<Promise<void> | undefined>(undefined);
-	const editVersion = useRef(0);
-	const savedVersion = useRef(0);
 
 	const showNotice = useCallback((message: string, tone: "pending" | "passed" | "failed" = "pending"): void => {
 		setNotice(message);
 		setNoticeTone(tone);
 	}, []);
 
-	const setCurrentProject = useCallback((snapshot: ProjectSnapshot): void => {
-		projectRef.current = snapshot;
-		setProject(snapshot);
+	const {
+		session,
+		project,
+		status: sessionStatus,
+		conflict: conflictSnapshot,
+	} = useProjectSession(apiOrigin, (error) =>
+		showNotice(error instanceof Error ? error.message : "草稿保存失败。", "failed"),
+	);
+	const saveStatus = { saved: "已保存", dirty: "待保存", saving: "正在保存", conflict: "版本冲突", error: "保存失败" }[
+		sessionStatus
+	];
+	const projectRef = {
+		get current() {
+			return session.getSnapshot().project;
+		},
+	};
+	const saveNow = () => session.flush();
+	const setConflictSnapshot = (snapshot?: ProjectSnapshot) =>
+		snapshot ? session.conflict(snapshot) : session.dismissConflict();
+	const setCurrentProject = (snapshot: ProjectSnapshot) => session.accept(snapshot);
+	const openSession = (snapshot: ProjectSnapshot) => {
+		session.open(snapshot);
+		setBusy(undefined);
+		setReport(snapshot.lastReport);
+		setRelease(releases.find((item) => item.id === snapshot.latestReleaseId));
 		localStorage.setItem(currentProjectKey, snapshot.id);
-	}, []);
+	};
+	useEffect(() => () => selection.current?.abort(), []);
 
 	const checkApiConnection = useCallback(async (signal?: AbortSignal): Promise<void> => {
 		try {
 			const health = await requestJson<{
 				sandbox: SandboxStatus;
-				capabilities: { aiChat: boolean; liveHydro?: { configured: boolean } };
+				capabilities: { aiChat: boolean };
 			}>(apiUrl(apiOrigin, "/health"), { signal });
 			if (signal?.aborted) return;
 			setSandbox(health.sandbox);
 			setAiConfigured(health.capabilities.aiChat);
-			setLiveHydroConfigured(health.capabilities.liveHydro?.configured === true);
 		} catch (error) {
 			if (signal?.aborted) return;
 			setAiConfigured(false);
-			setLiveHydroConfigured(false);
 			setSandbox({
 				available: false,
 				image: "",
@@ -128,105 +144,59 @@ export function App() {
 	useEffect(() => {
 		if (page === "records") void refreshRecords();
 	}, [page, refreshRecords]);
-	useEffect(
-		() => () => {
-			if (saveTimer.current) clearTimeout(saveTimer.current);
-		},
-		[],
-	);
-
-	async function saveNow(): Promise<void> {
-		if (saveTimer.current) {
-			clearTimeout(saveTimer.current);
-			saveTimer.current = undefined;
-		}
-		if (saveFlight.current) {
-			await saveFlight.current;
-			if (savedVersion.current < editVersion.current) await saveNow();
-			return;
-		}
-		const current = projectRef.current;
-		if (!current || savedVersion.current >= editVersion.current) return;
-		const version = editVersion.current;
-		const task = (async () => {
-			const saved = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${current.id}`), {
-				method: "PUT",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(editableProject(current)),
-			});
-			if (projectRef.current?.id === current.id) {
-				const merged = { ...projectRef.current, revision: saved.revision, updatedAt: saved.updatedAt };
-				projectRef.current = merged;
-				setProject(merged);
-			}
-			savedVersion.current = version;
-			setSaveStatus(savedVersion.current === editVersion.current ? "已保存" : "还有修改待保存");
-		})();
-		saveFlight.current = task;
-		try {
-			await task;
-		} catch (error) {
-			setSaveStatus("保存失败");
-			throw error;
-		} finally {
-			saveFlight.current = undefined;
-		}
-		if (savedVersion.current < editVersion.current) await saveNow();
-	}
-
 	function editProject(change: (current: ProjectSnapshot) => ProjectSnapshot): void {
-		const current = projectRef.current;
-		if (!current) return;
-		const next = change(current);
-		projectRef.current = next;
-		setProject(next);
+		session.edit(change);
 		setReport(undefined);
-		editVersion.current += 1;
-		setSaveStatus("待保存");
 		showNotice("草稿已修改，发布前需要重新验证。");
-		if (saveTimer.current) clearTimeout(saveTimer.current);
-		saveTimer.current = setTimeout(() => {
-			void saveNow().catch((error: unknown) =>
-				showNotice(error instanceof Error ? error.message : "草稿保存失败。", "failed"),
-			);
-		}, 650);
 	}
 
 	async function newProject(scoringMode: "acm" | "oi"): Promise<void> {
+		selection.current?.abort();
+		const controller = new AbortController();
+		selection.current = controller;
 		try {
 			await saveNow();
+			controller.signal.throwIfAborted();
 			const created = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, "/projects"), {
 				method: "POST",
+				signal: controller.signal,
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ scoringMode }),
 			});
-			setCurrentProject(created);
+			controller.signal.throwIfAborted();
+			await saveNow();
+			controller.signal.throwIfAborted();
+			openSession(created);
 			setChoosingScoringMode(false);
-			editVersion.current = 0;
-			savedVersion.current = 0;
-			setReport(undefined);
-			setRelease(undefined);
-			setSaveStatus("已保存");
+
 			showNotice("已创建空白草稿；旧项目保留在制题记录中。", "passed");
 			window.location.hash = "workspace";
 		} catch (error) {
+			if (controller.signal.aborted) return;
 			showNotice(error instanceof Error ? error.message : "创建草稿失败。", "failed");
 		}
 	}
 
 	async function openProject(id: string): Promise<void> {
+		selection.current?.abort();
+		const controller = new AbortController();
+		selection.current = controller;
 		try {
 			await saveNow();
-			const selected = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${id}`));
-			setCurrentProject(selected);
-			editVersion.current = 0;
-			savedVersion.current = 0;
-			setReport(selected.lastReport);
-			setRelease(releases.find((item) => item.id === selected.latestReleaseId));
-			setSaveStatus("已保存");
+			controller.signal.throwIfAborted();
+			const selected = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${id}`), {
+				signal: controller.signal,
+			});
+			controller.signal.throwIfAborted();
+			await saveNow();
+			controller.signal.throwIfAborted();
+			const latest = projectRef.current;
+			openSession(latest?.id === id && latest.revision > selected.revision ? latest : selected);
+
 			showNotice(`已打开“${selected.title || "未命名题目"}”。`, "passed");
 			window.location.hash = "workspace";
 		} catch (error) {
+			if (controller.signal.aborted) return;
 			setRecordsMessage(error instanceof Error ? error.message : "项目读取失败。");
 			setRecordsTone("failed");
 		}
@@ -237,8 +207,7 @@ export function App() {
 			const response = await fetch(apiUrl(apiOrigin, `/projects/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			if (projectRef.current?.id === id) {
-				projectRef.current = undefined;
-				setProject(undefined);
+				session.open();
 				setReport(undefined);
 				setRelease(undefined);
 				localStorage.removeItem(currentProjectKey);
@@ -252,13 +221,29 @@ export function App() {
 		}
 	}
 
+	async function deleteRelease(id: string): Promise<void> {
+		try {
+			const response = await fetch(apiUrl(apiOrigin, `/releases/${id}`), { method: "DELETE" });
+			if (!response.ok) throw new Error(responseError(await response.json()));
+			if (release?.id === id) setRelease(undefined);
+			await refreshRecords();
+			setRecordsMessage("发布包已删除；草稿仍保留。");
+			setRecordsTone("passed");
+		} catch (error) {
+			setRecordsMessage(error instanceof Error ? error.message : "删除发布包失败。");
+			setRecordsTone("failed");
+		}
+	}
+
 	async function uploadFiles(files: File[]): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) return;
 		setBusy("upload");
 		try {
 			await saveNow();
-			let snapshot = current;
+			signal.throwIfAborted();
+			let snapshot = projectRef.current ?? current;
 			for (const file of files) {
 				if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(in|out|ans)$/u.test(file.name))
 					throw new Error(`不支持的测试文件名：${file.name}`);
@@ -266,18 +251,25 @@ export function App() {
 					apiUrl(apiOrigin, `/projects/${current.id}/files/${encodeURIComponent(file.name)}`),
 					{
 						method: "PUT",
-						headers: { "content-type": "application/octet-stream" },
+						signal,
+						headers: {
+							"content-type": "application/octet-stream",
+							"x-expected-revision": String(snapshot.revision),
+						},
 						body: file,
 					},
 				);
+				signal.throwIfAborted();
 				setCurrentProject(snapshot);
 			}
 			setReport(undefined);
 			showNotice(`已上传 ${files.length} 个测试文件。`, "passed");
 		} catch (error) {
+			if (signal.aborted) return;
+			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
 			showNotice(error instanceof Error ? error.message : "测试文件上传失败。", "failed");
 		} finally {
-			setBusy(undefined);
+			if (!signal.aborted) setBusy(undefined);
 		}
 	}
 
@@ -288,19 +280,24 @@ export function App() {
 		subtaskId: number;
 	}): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) throw new Error("请先创建题目草稿。");
 		setBusy("upload");
 		try {
 			await saveNow();
+			signal.throwIfAborted();
+			const revision = projectRef.current?.revision ?? current.revision;
 			const result = await requestJson<{
 				inputFile: string;
 				outputFile?: string;
 				project: ProjectSnapshot;
 			}>(apiUrl(apiOrigin, `/projects/${current.id}/cases`), {
 				method: "POST",
+				signal,
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify(value),
+				body: JSON.stringify({ ...value, expectedRevision: revision }),
 			});
+			signal.throwIfAborted();
 			setCurrentProject(result.project);
 			setReport(undefined);
 			showNotice(
@@ -308,14 +305,50 @@ export function App() {
 				"passed",
 			);
 		} catch (error) {
+			if (signal.aborted) return;
+			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
 			showNotice(error instanceof Error ? error.message : "添加测试点失败。", "failed");
 			throw error;
 		} finally {
-			setBusy(undefined);
+			if (!signal.aborted) setBusy(undefined);
 		}
 	}
 
+	async function manageCases(
+		action: "batch-delete" | "renumber" | "clear-generated",
+		stems?: string[],
+	): Promise<void> {
+		const current = projectRef.current;
+		const signal = session.signal;
+		if (!current) return;
+		await saveNow();
+		signal.throwIfAborted();
+		const target = projectRef.current ?? current;
+		const path =
+			action === "clear-generated" ? `/projects/${target.id}/generated` : `/projects/${target.id}/cases/${action}`;
+		const snapshot = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, path), {
+			method: action === "clear-generated" ? "DELETE" : "POST",
+			signal,
+			headers: { "content-type": "application/json", "x-expected-revision": String(target.revision) },
+			...(action !== "clear-generated"
+				? { body: JSON.stringify({ stems, expectedRevision: target.revision }) }
+				: {}),
+		});
+		signal.throwIfAborted();
+		setCurrentProject(snapshot);
+		setReport(undefined);
+		showNotice(
+			action === "batch-delete"
+				? "所选测试点已删除。"
+				: action === "renumber"
+					? "手动数字测试点已重新编号。"
+					: "Gen 数据已移除。",
+			"passed",
+		);
+	}
+
 	async function uploadAttachments(files: File[]): Promise<void> {
+		const signal = session.signal;
 		try {
 			const additions: ProjectSnapshot["attachments"] = [];
 			for (const file of files) {
@@ -326,6 +359,7 @@ export function App() {
 				for (const byte of bytes) binary += String.fromCharCode(byte);
 				additions.push({ name: file.name, contentBase64: btoa(binary) });
 			}
+			signal.throwIfAborted();
 			editProject((current) => ({
 				...current,
 				attachments: [
@@ -334,82 +368,118 @@ export function App() {
 				],
 			}));
 		} catch (error) {
+			if (signal.aborted) return;
 			showNotice(error instanceof Error ? error.message : "附件读取失败。", "failed");
 		}
 	}
 
 	async function uploadDomjudgePdf(file: File): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) return;
 		setBusy("upload");
 		try {
 			await saveNow();
+			signal.throwIfAborted();
+			const revision = projectRef.current?.revision ?? current.revision;
 			const snapshot = await requestJson<ProjectSnapshot>(
 				apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
 				{
 					method: "PUT",
-					headers: { "content-type": "application/pdf" },
+					signal,
+					headers: { "content-type": "application/pdf", "x-expected-revision": String(revision) },
 					body: file,
 				},
 			);
+			signal.throwIfAborted();
 			setCurrentProject(snapshot);
 			setReport(undefined);
 			showNotice("DOMjudge PDF 已上传；重新验证后会进入新发布包。", "passed");
 		} catch (error) {
+			if (signal.aborted) return;
+			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
 			showNotice(error instanceof Error ? error.message : "PDF 上传失败。", "failed");
 		} finally {
-			setBusy(undefined);
+			if (!signal.aborted) setBusy(undefined);
 		}
 	}
 
 	async function deleteDomjudgePdf(): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) return;
 		try {
 			await saveNow();
+			signal.throwIfAborted();
+			const revision = projectRef.current?.revision ?? current.revision;
 			const snapshot = await requestJson<ProjectSnapshot>(
 				apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
 				{
 					method: "DELETE",
+					signal,
+					headers: { "x-expected-revision": String(revision) },
 				},
 			);
+			signal.throwIfAborted();
 			setCurrentProject(snapshot);
 			setReport(undefined);
 			showNotice("已移除 DOMjudge PDF；重新验证后生效。", "passed");
 		} catch (error) {
+			if (signal.aborted) return;
+			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
 			showNotice(error instanceof Error ? error.message : "移除 PDF 失败。", "failed");
 		}
 	}
 
 	async function deleteFile(name: string): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) return;
 		try {
 			await saveNow();
+			signal.throwIfAborted();
+			const revision = projectRef.current?.revision ?? current.revision;
 			const snapshot = await requestJson<ProjectSnapshot>(
 				apiUrl(apiOrigin, `/projects/${current.id}/files/${encodeURIComponent(name)}`),
-				{ method: "DELETE" },
+				{ method: "DELETE", signal, headers: { "x-expected-revision": String(revision) } },
 			);
+			signal.throwIfAborted();
 			setCurrentProject(snapshot);
 			setReport(undefined);
 			showNotice(`已删除 ${name}。`, "passed");
 		} catch (error) {
+			if (signal.aborted) return;
+			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
 			showNotice(error instanceof Error ? error.message : "删除文件失败。", "failed");
 		}
 	}
 
 	async function generate(): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) return;
 		setBusy("generate");
 		showNotice("正在编译 Gen 和标程，逐条生成并复现检查…");
 		try {
 			await saveNow();
-			const result = await requestJson<{ project: ProjectSnapshot; report: ManualReport }>(
+			signal.throwIfAborted();
+			const accepted = await requestJson<{ task: BackgroundTask }>(
 				apiUrl(apiOrigin, `/projects/${current.id}/generate`),
-				{ method: "POST" },
+				{ method: "POST", signal },
 			);
+			signal.throwIfAborted();
+			setActiveTask(accepted.task);
+			const result = await waitForTask<{ project: ProjectSnapshot; report: ManualReport }>(
+				apiOrigin,
+				accepted.task.id,
+				(task) => {
+					if (!signal.aborted) setActiveTask(task);
+				},
+				signal,
+			);
+			signal.throwIfAborted();
 			setCurrentProject(result.project);
+			if (projectRef.current?.id !== current.id) return;
 			setReport(result.report);
 			showNotice(
 				result.report.success
@@ -418,26 +488,42 @@ export function App() {
 				result.report.success ? "passed" : "failed",
 			);
 		} catch (error) {
+			if (signal.aborted) return;
 			showNotice(error instanceof Error ? error.message : "生成失败。", "failed");
 		} finally {
-			setBusy(undefined);
+			if (!signal.aborted) setBusy(undefined);
 		}
 	}
 
 	async function finalize(): Promise<void> {
 		const current = projectRef.current;
+		const signal = session.signal;
 		if (!current) return;
 		setBusy("finalize");
 		showNotice("正在完整验证测试数据与程序，并生成 Hydro 包…");
 		try {
 			await saveNow();
-			const result = await requestJson<{ release?: ManualRelease; report: ManualReport }>(
+			signal.throwIfAborted();
+			const accepted = await requestJson<{ task: BackgroundTask }>(
 				apiUrl(apiOrigin, `/projects/${current.id}/finalize`),
-				{ method: "POST" },
+				{ method: "POST", signal },
 			);
+			signal.throwIfAborted();
+			setActiveTask(accepted.task);
+			const result = await waitForTask<{ release?: ManualRelease; report: ManualReport }>(
+				apiOrigin,
+				accepted.task.id,
+				(task) => {
+					if (!signal.aborted) setActiveTask(task);
+				},
+				signal,
+			);
+			signal.throwIfAborted();
+			if (projectRef.current?.id !== current.id) return;
 			setReport(result.report);
 			if (result.release) setRelease(result.release);
-			const refreshed = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${current.id}`));
+			const refreshed = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${current.id}`), { signal });
+			signal.throwIfAborted();
 			setCurrentProject(refreshed);
 			showNotice(
 				result.release
@@ -446,35 +532,10 @@ export function App() {
 				result.release ? "passed" : "failed",
 			);
 		} catch (error) {
+			if (signal.aborted) return;
 			showNotice(error instanceof Error ? error.message : "验证或打包失败。", "failed");
 		} finally {
-			setBusy(undefined);
-		}
-	}
-
-	async function liveVerify(): Promise<void> {
-		if (!release) return;
-		setBusy("live");
-		showNotice("正在真实 Hydro 上导入并评测已发布版本…");
-		try {
-			const result = await requestJson<{
-				success: boolean;
-				message: string;
-				problemUrl?: string;
-				reference: { verdict: string; score?: number; accepted: boolean };
-			}>(apiUrl(apiOrigin, `/releases/${release.id}/live-verify`), { method: "POST" });
-			setRelease({ ...release, liveVerification: result });
-			setReleases((current) =>
-				current.map((item) => (item.id === release.id ? { ...item, liveVerification: result } : item)),
-			);
-			showNotice(
-				result.success ? "真实 Hydro 实测通过。" : "真实 Hydro 实测未通过，请检查适配器结果。",
-				result.success ? "passed" : "failed",
-			);
-		} catch (error) {
-			showNotice(error instanceof Error ? error.message : "真实 Hydro 实测失败。", "failed");
-		} finally {
-			setBusy(undefined);
+			if (!signal.aborted) setBusy(undefined);
 		}
 	}
 
@@ -499,78 +560,85 @@ export function App() {
 						<a className={page === "contests" ? "active" : ""} href="#contests">
 							竞赛
 						</a>
+						<a className={page === "tasks" ? "active" : ""} href="#tasks">
+							任务{activeTask && ["queued", "running"].includes(activeTask.state) ? " · 进行中" : ""}
+						</a>
 						<a className={page === "settings" ? "active" : ""} href="#settings">
 							设置
 						</a>
 					</nav>
 				</div>
 			</header>
-			{page === "workspace" &&
-				(project ? (
-					<ManualWorkspace
-						key={project.id}
+			<Suspense fallback={<main className="page manual-muted">正在打开页面…</main>}>
+				{page === "workspace" &&
+					(project ? (
+						<ManualWorkspace
+							key={project.id}
+							apiOrigin={apiOrigin}
+							project={project}
+							release={release}
+							report={report}
+							sandbox={sandbox}
+							busy={busy}
+							saveStatus={saveStatus}
+							notice={notice}
+							noticeTone={noticeTone}
+							onEdit={editProject}
+							onUpload={uploadFiles}
+							onAddCase={addTextCase}
+							onManageCases={manageCases}
+							onUploadAttachments={uploadAttachments}
+							onUploadDomjudgePdf={uploadDomjudgePdf}
+							onDeleteDomjudgePdf={deleteDomjudgePdf}
+							onDeleteFile={deleteFile}
+							onGenerate={generate}
+							onFinalize={finalize}
+							onNew={async () => setChoosingScoringMode(true)}
+						/>
+					) : (
+						<main className="page workspace-empty">
+							<section className="card workspace-empty-card">
+								<div className="eyebrow">Hydro Problem Make</div>
+								<h1>开始创建题目</h1>
+								<p>选择赛制后进入制题工作台。已有草稿请从“制题记录”中打开。</p>
+								<button className="button primary" type="button" onClick={() => setChoosingScoringMode(true)}>
+									新建题目
+								</button>
+							</section>
+						</main>
+					))}
+				{page === "chat" && (
+					<AiChatPage
 						apiOrigin={apiOrigin}
-						project={project}
-						release={release}
-						report={report}
-						sandbox={sandbox}
-						liveHydroConfigured={liveHydroConfigured}
-						busy={busy}
-						saveStatus={saveStatus}
-						notice={notice}
-						noticeTone={noticeTone}
-						onEdit={editProject}
-						onUpload={uploadFiles}
-						onAddCase={addTextCase}
-						onUploadAttachments={uploadAttachments}
-						onUploadDomjudgePdf={uploadDomjudgePdf}
-						onDeleteDomjudgePdf={deleteDomjudgePdf}
-						onDeleteFile={deleteFile}
-						onGenerate={generate}
-						onFinalize={finalize}
-						onNew={async () => setChoosingScoringMode(true)}
-						onLiveVerify={liveVerify}
+						configured={aiConfigured}
+						projectSnapshot={project ? projectContextSnapshot(project) : undefined}
 					/>
-				) : (
-					<main className="page workspace-empty">
-						<section className="card workspace-empty-card">
-							<div className="eyebrow">Hydro Problem Make</div>
-							<h1>开始创建题目</h1>
-							<p>选择赛制后进入制题工作台。已有草稿请从“制题记录”中打开。</p>
-							<button className="button primary" type="button" onClick={() => setChoosingScoringMode(true)}>
-								新建题目
-							</button>
-						</section>
-					</main>
-				))}
-			{page === "chat" && (
-				<AiChatPage
-					apiOrigin={apiOrigin}
-					configured={aiConfigured}
-					projectSnapshot={project ? projectContextSnapshot(project) : undefined}
-				/>
-			)}
-			{page === "records" && (
-				<RecordsPage
-					apiOrigin={apiOrigin}
-					projects={projects}
-					releases={releases}
-					loading={recordsLoading}
-					message={recordsMessage}
-					tone={recordsTone}
-					onRefresh={refreshRecords}
-					onOpen={openProject}
-					onDelete={deleteProject}
-				/>
-			)}
-			{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
-			{page === "settings" && (
-				<SettingsPage
-					apiOrigin={apiOrigin}
-					sandbox={sandbox}
-					onAiConfigurationChanged={() => void checkApiConnection()}
-				/>
-			)}
+				)}
+				{page === "records" && (
+					<RecordsPage
+						apiOrigin={apiOrigin}
+						projects={projects}
+						releases={releases}
+						loading={recordsLoading}
+						message={recordsMessage}
+						tone={recordsTone}
+						onRefresh={refreshRecords}
+						onOpen={openProject}
+						onDelete={deleteProject}
+						onDeleteRelease={deleteRelease}
+					/>
+				)}
+				{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
+				{page === "tasks" && <TasksPage apiOrigin={apiOrigin} />}
+				{page === "settings" && (
+					<SettingsPage
+						apiOrigin={apiOrigin}
+						sandbox={sandbox}
+						onRefreshSandbox={() => void checkApiConnection()}
+						onAiConfigurationChanged={() => void checkApiConnection()}
+					/>
+				)}
+			</Suspense>
 			{choosingScoringMode && (
 				<div className="confirmation-backdrop" role="presentation">
 					<div
@@ -593,6 +661,40 @@ export function App() {
 							</button>
 							<button className="button primary" type="button" onClick={() => void newProject("acm")}>
 								ACM
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			{conflictSnapshot && (
+				<div className="confirmation-backdrop" role="presentation">
+					<div
+						className="card confirmation-dialog"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="conflict-title"
+					>
+						<div className="confirmation-heading">
+							<span>版本冲突</span>
+							<h2 id="conflict-title">草稿已在其他窗口更新</h2>
+						</div>
+						<p>
+							服务器版本为 {conflictSnapshot.revision}
+							。加载前可复制当前编辑内容；加载会替换当前窗口未保存的修改。
+						</p>
+						<div className="confirmation-actions">
+							<button className="button secondary" type="button" onClick={() => setConflictSnapshot(undefined)}>
+								保留当前内容
+							</button>
+							<button
+								className="button primary"
+								type="button"
+								onClick={() => {
+									openSession(conflictSnapshot);
+									setConflictSnapshot(undefined);
+								}}
+							>
+								加载服务器版本
 							</button>
 						</div>
 					</div>

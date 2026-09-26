@@ -2,9 +2,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_HYDRO_JUDGE_LIMITS, type HydroJudgeLimits } from "@hydro-problem-make/authoring";
 import { ChatService } from "./chat.ts";
-import { createHydroLiveVerifierFromEnvironment } from "./live-hydro.ts";
 import { ManualProjectStore } from "./manual-projects.ts";
 import { createHydroServer } from "./server.ts";
+import { WorkspaceDatabase } from "./workspace-db.ts";
 
 const portValue = Number.parseInt(process.env.PORT ?? "4321", 10);
 if (!Number.isSafeInteger(portValue) || portValue < 1 || portValue > 65535) throw new Error("PORT must be 1-65535.");
@@ -19,8 +19,10 @@ if (!Number.isSafeInteger(judgeLimits.totalTimeLimitMs) || judgeLimits.totalTime
 
 const projectRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const workspaceRoot = resolve(projectRoot, process.env.HYDRO_WORKSPACE_ROOT ?? ".hydro-problem-make");
+const database = new WorkspaceDatabase(workspaceRoot);
 const projects = new ManualProjectStore({
 	root: workspaceRoot,
+	database,
 	image: process.env.HYDRO_SANDBOX_IMAGE,
 	judgeLimits,
 	maxFileBytes: Number(process.env.HYDRO_CASE_MAX_BYTES ?? 64 * 1024 * 1024),
@@ -28,19 +30,19 @@ const projects = new ManualProjectStore({
 });
 const chat = new ChatService({
 	root: workspaceRoot,
-	configPath: resolve(projectRoot, process.env.HYDRO_AI_CONFIG_PATH ?? ".hydro-problem-make/ai-config.json"),
+	database,
+	configPath: process.env.HYDRO_AI_CONFIG_PATH
+		? resolve(projectRoot, process.env.HYDRO_AI_CONFIG_PATH)
+		: resolve(workspaceRoot, "ai-config.json"),
 });
 await chat.loadConfiguration();
-const liveVerifier = createHydroLiveVerifierFromEnvironment();
 
 const server = createHydroServer({
 	staticRoot: process.env.HYDRO_WEB_ROOT === undefined ? undefined : resolve(process.env.HYDRO_WEB_ROOT),
 	projects,
 	chat,
-	liveVerifier,
 });
 server.listen(portValue, "127.0.0.1", () => {
 	console.log(`Hydro Problem Make API listening on http://127.0.0.1:${portValue}`);
 	console.log(`AI chat: ${chat.getConfiguration().configured ? "configured" : "not configured"}`);
-	console.log(`Live Hydro verification: ${liveVerifier?.status().message ?? "not configured"}`);
 });

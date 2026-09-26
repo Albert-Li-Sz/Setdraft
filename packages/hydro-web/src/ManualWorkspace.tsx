@@ -16,7 +16,7 @@ import { parseTags } from "./problem.ts";
 
 type Tab = "statement" | "data" | "generator" | "programs" | "validation";
 type ProgramSection = "reference" | "oracle" | "checker" | "validator";
-type Busy = "upload" | "generate" | "finalize" | "live" | undefined;
+type Busy = "upload" | "generate" | "finalize" | undefined;
 const checkLabels: Record<string, string> = {
 	"compile:oracle": "编译第二标准程序",
 	oracle: "运行第二标准程序",
@@ -29,7 +29,6 @@ interface Props {
 	release?: ManualRelease;
 	report?: ManualReport;
 	sandbox?: SandboxStatus;
-	liveHydroConfigured: boolean;
 	busy: Busy;
 	saveStatus: string;
 	notice: string;
@@ -37,6 +36,7 @@ interface Props {
 	onEdit(change: (current: ProjectSnapshot) => ProjectSnapshot): void;
 	onUpload(files: File[]): Promise<void>;
 	onAddCase(value: { name?: string; input: string; output?: string; subtaskId: number }): Promise<void>;
+	onManageCases(action: "batch-delete" | "renumber" | "clear-generated", stems?: string[]): Promise<void>;
 	onUploadAttachments(files: File[]): Promise<void>;
 	onUploadDomjudgePdf(file: File): Promise<void>;
 	onDeleteDomjudgePdf(): Promise<void>;
@@ -44,7 +44,6 @@ interface Props {
 	onGenerate(): Promise<void>;
 	onFinalize(): Promise<void>;
 	onNew(): Promise<void>;
-	onLiveVerify(): Promise<void>;
 }
 
 function CodeEditor(props: {
@@ -187,8 +186,60 @@ export function ManualWorkspace(props: Props) {
 	const [includeCaseOutput, setIncludeCaseOutput] = useState(false);
 	const [caseError, setCaseError] = useState("");
 	const [caseSubmitting, setCaseSubmitting] = useState(false);
+	const [selectedCases, setSelectedCases] = useState<string[]>([]);
+	const [casePreview, setCasePreview] = useState<{
+		name: string;
+		input: string;
+		output?: string;
+		verified?: string;
+		truncated: boolean;
+	}>();
+	const [caseAction, setCaseAction] = useState("");
 	const caseSubmissionRef = useRef(false);
 	const isAcm = project.scoringMode === "acm";
+	async function previewCase(origin: "manual" | "generated", stem: string): Promise<void> {
+		try {
+			const response = await fetch(
+				apiUrl(props.apiOrigin, `/projects/${project.id}/cases/${origin}/${encodeURIComponent(stem)}/preview`),
+			);
+			const value = (await response.json()) as {
+				input: string;
+				output?: string;
+				verified?: string;
+				truncated: boolean;
+				message?: string;
+			};
+			if (!response.ok) throw new Error(value.message ?? "预览失败。");
+			setCasePreview({ ...value, name: `${stem}.in` });
+			setCaseAction("");
+		} catch (error) {
+			setCaseAction(error instanceof Error ? error.message : "预览失败。");
+		}
+	}
+
+	async function renumber(): Promise<void> {
+		try {
+			const response = await fetch(apiUrl(props.apiOrigin, `/projects/${project.id}/cases/renumber`));
+			const value = (await response.json()) as { changes?: Array<{ from: string; to: string }>; message?: string };
+			if (!response.ok) throw new Error(value.message ?? "编号预览失败。");
+			const changes = value.changes?.filter((item) => item.from !== item.to) ?? [];
+			if (!changes.length) {
+				setCaseAction("数字测试点编号已连续，无需调整。");
+				return;
+			}
+			if (
+				!window.confirm(
+					`确认按下列映射重新编号？\n${changes.map((item) => `${item.from}.in → ${item.to}.in`).join("\n")}\n已有 Gen 数据时请重新生成。`,
+				)
+			)
+				return;
+			await props.onManageCases("renumber");
+			setSelectedCases([]);
+			setCaseAction("重新编号完成。");
+		} catch (error) {
+			setCaseAction(error instanceof Error ? error.message : "重新编号失败。");
+		}
+	}
 	const selectedCaseSubtaskId = project.subtasks.some((item) => item.id === caseSubtaskId)
 		? caseSubtaskId
 		: (project.subtasks[0]?.id ?? 1);
@@ -513,7 +564,49 @@ export function ManualWorkspace(props: Props) {
 									<h2>测试点</h2>
 									<p>生成点排在手动点后；重跑 Gen 原子替换上一批生成点。</p>
 								</div>
+								<div className="heading-actions">
+									<button
+										className="button secondary"
+										type="button"
+										disabled={!!props.busy}
+										onClick={() => void renumber()}
+									>
+										重新编号
+									</button>
+									<button
+										className="button secondary"
+										type="button"
+										disabled={!!props.busy || !project.cases.some((item) => item.origin === "generated")}
+										onClick={() => {
+											if (window.confirm("移除本题全部 Gen 数据？手动测试点会保留。"))
+												void props.onManageCases("clear-generated");
+										}}
+									>
+										移除 Gen 数据
+									</button>
+									<button
+										className="button secondary danger"
+										type="button"
+										disabled={!!props.busy || selectedCases.length === 0}
+										onClick={() => {
+											if (window.confirm(`删除所选 ${selectedCases.length} 个手动测试点及其输出？`))
+												void props
+													.onManageCases("batch-delete", selectedCases)
+													.then(() => setSelectedCases([]))
+													.catch((error: unknown) =>
+														setCaseAction(error instanceof Error ? error.message : "批量删除失败。"),
+													);
+										}}
+									>
+										批量删除（{selectedCases.length}）
+									</button>
+								</div>
 							</div>
+							{caseAction && (
+								<output className="notice pending" aria-live="polite">
+									{caseAction}
+								</output>
+							)}
 							{project.cases.length === 0 ? (
 								<p className="manual-muted">尚无私有测试点。</p>
 							) : (
@@ -521,6 +614,7 @@ export function ManualWorkspace(props: Props) {
 									<table className="history-table">
 										<thead>
 											<tr>
+												<th aria-label="选择" />
 												<th>输入</th>
 												<th>输出</th>
 												<th>来源</th>
@@ -531,6 +625,22 @@ export function ManualWorkspace(props: Props) {
 										<tbody>
 											{project.cases.map((item) => (
 												<tr key={`${item.origin}:${item.id}`}>
+													<td>
+														{item.origin === "manual" && (
+															<input
+																type="checkbox"
+																aria-label={`选择 ${item.inputFile}`}
+																checked={selectedCases.includes(item.id)}
+																onChange={(event) =>
+																	setSelectedCases((current) =>
+																		event.target.checked
+																			? [...current, item.id]
+																			: current.filter((entry) => entry !== item.id),
+																	)
+																}
+															/>
+														)}
+													</td>
 													<td>
 														<a
 															href={apiUrl(
@@ -588,6 +698,13 @@ export function ManualWorkspace(props: Props) {
 														</td>
 													)}
 													<td>
+														<button
+															className="button secondary"
+															type="button"
+															onClick={() => void previewCase(item.origin, item.id)}
+														>
+															预览
+														</button>
 														{item.origin === "manual" && (
 															<div className="history-actions">
 																<button
@@ -614,6 +731,41 @@ export function ManualWorkspace(props: Props) {
 										</tbody>
 									</table>
 								</div>
+							)}
+							{casePreview && (
+								<section className="case-preview card">
+									<div className="manual-section-heading">
+										<div>
+											<h3>{casePreview.name} · 输入输出预览</h3>
+											<p>
+												{casePreview.truncated
+													? "只显示前 32 KiB。"
+													: "上传输出与已发布答案并列显示，便于比较。"}
+											</p>
+										</div>
+										<button
+											className="button secondary"
+											type="button"
+											onClick={() => setCasePreview(undefined)}
+										>
+											关闭
+										</button>
+									</div>
+									<div className="case-preview-grid">
+										<div>
+											<strong>输入</strong>
+											<pre>{casePreview.input || "（空输入）"}</pre>
+										</div>
+										<div>
+											<strong>上传输出</strong>
+											<pre>{casePreview.output ?? "（由标程生成）"}</pre>
+										</div>
+										<div>
+											<strong>已发布答案</strong>
+											<pre>{casePreview.verified ?? "（无当前版本）"}</pre>
+										</div>
+									</div>
+								</section>
 							)}
 							{project.orphanOutputs.length > 0 && (
 								<p className="manual-error">缺少同名 .in：{project.orphanOutputs.join("、")}</p>
@@ -927,6 +1079,20 @@ export function ManualWorkspace(props: Props) {
 													{check.caseId ? ` · ${check.caseId}` : ""}
 												</strong>
 												<span>{check.message}</span>
+												{(check.verdict || check.score !== undefined || check.durationMs !== undefined) && (
+													<small className="manual-muted">
+														{[
+															check.verdict,
+															check.score !== undefined ? `${check.score} 分` : undefined,
+															check.durationMs !== undefined ? `${check.durationMs} ms` : undefined,
+														]
+															.filter(Boolean)
+															.join(" · ")}
+													</small>
+												)}
+												{!check.passed && check.logPath && (
+													<small className="manual-muted">原始日志：制题工程 ZIP / {check.logPath}</small>
+												)}
 											</div>
 										))}
 									</div>
@@ -958,16 +1124,6 @@ export function ManualWorkspace(props: Props) {
 									>
 										查看报告 JSON
 									</a>
-									{props.liveHydroConfigured && (
-										<button
-											className="button secondary"
-											type="button"
-											onClick={() => void props.onLiveVerify()}
-											disabled={!!props.busy}
-										>
-											真实 Hydro 实测
-										</button>
-									)}
 								</div>
 							)}
 							{props.release && !currentRelease && (
@@ -977,7 +1133,9 @@ export function ManualWorkspace(props: Props) {
 								<div
 									className={`manual-report-status ${props.release.liveVerification.success ? "passed" : "failed"}`}
 								>
-									<strong>真实 Hydro 实测{props.release.liveVerification.success ? "通过" : "未通过"}</strong>
+									<strong>
+										历史 Hydro 实测：{props.release.liveVerification.success ? "通过" : "未通过"}
+									</strong>
 									<span>
 										{props.release.liveVerification.reference.verdict}
 										{props.release.liveVerification.reference.score !== undefined

@@ -11,10 +11,12 @@ interface Props {
 	onRefresh(): Promise<void>;
 	onOpen(id: string): Promise<void>;
 	onDelete(id: string): Promise<void>;
+	onDeleteRelease(id: string): Promise<void>;
 }
 
 export function RecordsPage(props: Props) {
 	const [pendingDelete, setPendingDelete] = useState<ProjectSnapshot>();
+	const [pendingReleaseDelete, setPendingReleaseDelete] = useState<ManualRelease>();
 	const [exporting, setExporting] = useState("");
 	const [exportMessage, setExportMessage] = useState("");
 	async function exportOne(release: ManualRelease, format: "domjudge" | "fps" | "qduoj"): Promise<void> {
@@ -126,8 +128,9 @@ export function RecordsPage(props: Props) {
 								<th>测试点</th>
 								<th>赛制 / Checker</th>
 								<th>发布时间</th>
-								<th>真实 Hydro</th>
+								<th>历史 Hydro 实测</th>
 								<th>下载</th>
+								<th>操作</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -155,7 +158,7 @@ export function RecordsPage(props: Props) {
 									<td>
 										{item.liveVerification
 											? `${item.liveVerification.success ? "通过" : "未通过"} · ${item.liveVerification.reference.verdict}`
-											: "未运行（可选）"}
+											: "无历史记录"}
 									</td>
 									<td>
 										<div className="history-actions">
@@ -214,6 +217,11 @@ export function RecordsPage(props: Props) {
 											</a>
 										</div>
 									</td>
+									<td>
+										<button className="danger" type="button" onClick={() => setPendingReleaseDelete(item)}>
+											删除包
+										</button>
+									</td>
 								</tr>
 							))}
 						</tbody>
@@ -246,6 +254,43 @@ export function RecordsPage(props: Props) {
 									const id = pendingDelete.id;
 									setPendingDelete(undefined);
 									void props.onDelete(id);
+								}}
+							>
+								确认删除
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+			{pendingReleaseDelete && (
+				<div className="confirmation-backdrop" role="presentation">
+					<div
+						className="card confirmation-dialog"
+						role="alertdialog"
+						aria-modal="true"
+						aria-labelledby="delete-release-title"
+					>
+						<div className="confirmation-heading">
+							<span>删除确认</span>
+							<h2 id="delete-release-title">删除“{pendingReleaseDelete.title}”的这个发布包？</h2>
+						</div>
+						<p>历史下载地址将失效。被竞赛草稿引用的包不可删除。</p>
+						<code>{pendingReleaseDelete.id}</code>
+						<div className="confirmation-actions">
+							<button
+								className="button secondary"
+								type="button"
+								onClick={() => setPendingReleaseDelete(undefined)}
+							>
+								取消
+							</button>
+							<button
+								className="button primary"
+								type="button"
+								onClick={() => {
+									const id = pendingReleaseDelete.id;
+									setPendingReleaseDelete(undefined);
+									void props.onDeleteRelease(id);
 								}}
 							>
 								确认删除

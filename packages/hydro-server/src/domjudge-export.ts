@@ -50,20 +50,33 @@ const runScript = [
 	"",
 ].join("\n");
 
-function spawnDocker(args: string[], timeoutMs: number): Promise<void> {
+function spawnDocker(args: string[], timeoutMs: number, signal?: AbortSignal, containerName?: string): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
+		const command = containerName ? [...args.slice(0, 1), "--name", containerName, ...args.slice(1)] : args;
+		const child = spawn("docker", command, { stdio: ["ignore", "pipe", "pipe"] });
 		const errors: Buffer[] = [];
-		const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+		const stop = () => {
+			if (containerName) {
+				const cleaner = spawn("docker", ["rm", "-f", containerName], { stdio: "ignore" });
+				cleaner.on("error", () => {});
+			}
+			child.kill("SIGKILL");
+		};
+		const timer = setTimeout(stop, timeoutMs);
+		signal?.addEventListener("abort", stop, { once: true });
+		const cleanup = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", stop);
+		};
 		child.stderr.on("data", (chunk: Buffer) => {
 			if (errors.reduce((sum, item) => sum + item.length, 0) < 64 * 1024) errors.push(chunk);
 		});
 		child.once("error", (error) => {
-			clearTimeout(timer);
+			cleanup();
 			reject(error);
 		});
 		child.once("close", (code) => {
-			clearTimeout(timer);
+			cleanup();
 			if (code === 0) resolve();
 			else
 				reject(
@@ -73,7 +86,13 @@ function spawnDocker(args: string[], timeoutMs: number): Promise<void> {
 	});
 }
 
-async function verifyOutputValidator(directory: string, image: string, caseCount: number): Promise<void> {
+async function verifyOutputValidator(
+	directory: string,
+	image: string,
+	caseCount: number,
+	signal?: AbortSignal,
+	containerName?: string,
+): Promise<void> {
 	const verify = [
 		"import pathlib, subprocess, tempfile",
 		"root = pathlib.Path('/work')",
@@ -142,6 +161,8 @@ async function verifyOutputValidator(directory: string, image: string, caseCount
 			"/work/verify.py",
 		],
 		Math.max(120_000, caseCount * 45_000),
+		signal,
+		containerName,
 	);
 }
 
@@ -149,6 +170,7 @@ export async function writeDomjudgeProblemArchive(
 	releaseRoot: string,
 	release: ManualRelease,
 	image: string,
+	options: { signal?: AbortSignal; containerName?: string } = {},
 ): Promise<string> {
 	if (
 		release.scoringMode !== "acm" ||
@@ -235,7 +257,7 @@ export async function writeDomjudgeProblemArchive(
 			await copyFile(join(releaseRoot, "problem.pdf"), path);
 			files.set("problem.pdf", path);
 		}
-		await verifyOutputValidator(stage, image, manifest.cases.length);
+		await verifyOutputValidator(stage, image, manifest.cases.length, options.signal, options.containerName);
 		const temporaryArchive = join(releaseRoot, `.domjudge-${randomUUID()}.zip`);
 		try {
 			await writeStoredArchiveFromFiles(

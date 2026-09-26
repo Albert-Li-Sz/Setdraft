@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
+import { requestJson } from "./api-client.ts";
 import {
 	apiUrl,
+	type BackgroundTask,
 	type ContestDraft,
 	type ContestRelease,
 	isContestReadyRelease,
 	type ManualRelease,
 	responseError,
+	waitForTask,
 } from "./platform.ts";
 
 const defaultBalloons = [
@@ -78,13 +81,6 @@ interface Props {
 	apiOrigin: string;
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-	const response = await fetch(url, init);
-	const value = (await response.json()) as unknown;
-	if (!response.ok) throw new Error(responseError(value));
-	return value as T;
-}
-
 export function ContestsPage({ apiOrigin }: Props) {
 	const [contests, setContests] = useState<ContestDraft[]>([]);
 	const [draft, setDraft] = useState<ContestDraft>();
@@ -151,6 +147,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
+					expectedRevision: next.revision,
 					title: next.title,
 					slug: next.slug,
 					releaseIds: next.releaseIds,
@@ -173,11 +170,15 @@ export function ContestsPage({ apiOrigin }: Props) {
 		setBusy(true);
 		setMessage("正在整理已验证的题包…");
 		try {
-			const result = await requestJson<ContestRelease>(apiUrl(apiOrigin, `/contests/${draft.id}/export`), {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ format }),
-			});
+			const accepted = await requestJson<{ task: BackgroundTask }>(
+				apiUrl(apiOrigin, `/contests/${draft.id}/export`),
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ format }),
+				},
+			);
+			const result = await waitForTask<ContestRelease>(apiOrigin, accepted.task.id);
 			setBundles((items) => [result, ...items]);
 			setMessage(`${format === "hydro" ? "Hydro" : "DOMjudge"} 竞赛包已生成，可在下方下载。`);
 		} catch (error) {

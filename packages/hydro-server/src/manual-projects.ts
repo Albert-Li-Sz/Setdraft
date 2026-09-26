@@ -1,130 +1,43 @@
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { copyFile, mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { DEFAULT_HYDRO_JUDGE_LIMITS, type HydroJudgeLimits, isSafeFlatName } from "@hydro-problem-make/authoring";
 import {
-	buildHydroProblemFiles,
-	DEFAULT_HYDRO_JUDGE_LIMITS,
-	type HydroJudgeLimits,
-	type HydroProblemSpec,
-	isSafeFlatName,
-	parseHydroTimeLimitMs,
-	validateHydroDirectory,
-	validateHydroProblemSpec,
-	writeHydroDirectoryArchive,
-	writeStoredArchiveFromFiles,
-} from "@hydro-problem-make/authoring";
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
-import { type CheckerMode, effectiveChecker } from "./acm-checker.ts";
-import { writeDomjudgeProblemArchive } from "./domjudge-export.ts";
-import { writeLegacyProblemExport } from "./legacy-exports.ts";
-import type { HydroLiveVerificationResult } from "./live-hydro.ts";
-import {
+	type AddedManualCase,
 	type CppLanguage,
 	cppLanguages,
+	type ManualCaseSummary,
 	type ManualProgram,
-	type ManualSandboxReport,
-	runManualSandbox,
-	type SandboxCase,
-} from "./manual-sandbox.ts";
+	type ManualProject,
+	type ManualProjectSnapshot,
+	type ManualRelease,
+	type ManualSubtask,
+} from "@hydro-problem-make/contracts";
+import type { ExecutionContext } from "./execution-context.ts";
+import { ManualProjectError } from "./project-error.ts";
+import { caseOrder, dataStem, hashFile } from "./project-files.ts";
+import { ProjectPipeline } from "./project-pipeline.ts";
+import { ReleaseStore } from "./releases.ts";
+import { WorkspaceDatabase } from "./workspace-db.ts";
+
+export type {
+	AddedManualCase,
+	HistoricHydroVerification,
+	ManualCaseSummary,
+	ManualProject,
+	ManualProjectSnapshot,
+	ManualRelease,
+	ManualSubtask,
+	ManualVerificationReport,
+} from "@hydro-problem-make/contracts";
+export { parseGeneratorScript } from "./project-files.ts";
 
 const projectIdPattern = /^[a-f0-9-]{36}$/;
-const dataNamePattern = /^([A-Za-z0-9][A-Za-z0-9._-]*)\.(in|out|ans)$/;
 const defaultMaxFileBytes = 64 * 1024 * 1024;
 const defaultMaxProjectBytes = 512 * 1024 * 1024;
 const maxTextCaseBytes = 1024 * 1024;
 
-export interface ManualSubtask {
-	id: number;
-	type: "sum" | "min" | "max";
-	score: number;
-}
-
-export interface ManualProject {
-	id: string;
-	scoringMode: "acm" | "oi";
-	revision: number;
-	createdAt: string;
-	updatedAt: string;
-	slug: string;
-	title: string;
-	tags: string[];
-	statement: string;
-	samples: Array<{ input: string; output: string }>;
-	timeLimit: string;
-	memoryLimit: string;
-	reference: ManualProgram;
-	oracle?: ManualProgram;
-	generatorSource: string;
-	generatorStandard: CppLanguage;
-	generatorScript: string;
-	checkerSource: string;
-	checkerMode?: CheckerMode;
-	checkerStandard: CppLanguage;
-	validatorSource: string;
-	validatorStandard: CppLanguage;
-	subtasks: ManualSubtask[];
-	caseSubtasks: Record<string, number>;
-	attachments: Array<{ name: string; contentBase64: string }>;
-	domjudgePdf?: { size: number; sha256: string };
-	generatedFromHash?: string;
-	latestReleaseId?: string;
-	lastReport?: ManualVerificationReport;
-}
-
-export interface ManualCaseSummary {
-	id: string;
-	origin: "manual" | "generated";
-	inputFile: string;
-	outputFile?: string;
-	inputBytes: number;
-	outputBytes?: number;
-	subtaskId: number;
-}
-
-export interface ManualProjectSnapshot extends ManualProject {
-	cases: ManualCaseSummary[];
-	orphanOutputs: string[];
-}
-
-export interface AddedManualCase {
-	inputFile: string;
-	outputFile?: string;
-	project: ManualProjectSnapshot;
-}
-
-export interface ManualVerificationReport extends ManualSandboxReport {
-	revision: number;
-	projectHash: string;
-	issues: Array<{ severity: "error" | "warning"; code: string; path: string; message: string }>;
-	verifiedAt: string;
-}
-
-export interface ManualRelease {
-	id: string;
-	scoringMode: "acm" | "oi";
-	projectId: string;
-	revision: number;
-	projectHash: string;
-	slug: string;
-	title: string;
-	createdAt: string;
-	report: ManualVerificationReport;
-	checkerMode?: CheckerMode;
-	domjudgePdf?: boolean;
-	liveVerification?: HydroLiveVerificationResult;
-}
-
-export class ManualProjectError extends Error {
-	readonly statusCode: number;
-	constructor(message: string, statusCode = 400) {
-		super(message);
-		this.name = "ManualProjectError";
-		this.statusCode = statusCode;
-	}
-}
+export { ManualProjectError } from "./project-error.ts";
 
 function assertProjectId(id: string): void {
 	if (!projectIdPattern.test(id)) throw new ManualProjectError("项目 ID 无效。", 404);
@@ -170,112 +83,9 @@ function readCppLanguage(value: unknown, label: string): CppLanguage {
 	return value as CppLanguage;
 }
 
-function dataStem(name: string): { stem: string; extension: "in" | "out" | "ans" } {
-	const match = dataNamePattern.exec(name);
-	if (!match || !isSafeFlatName(name))
-		throw new ManualProjectError("测试文件名必须是平铺的 .in、.out 或 .ans 文件名。", 400);
-	return { stem: match[1], extension: match[2] as "in" | "out" | "ans" };
-}
-
-/** Parse one gen invocation per line without invoking a shell. */
-export function parseGeneratorScript(script: string): string[][] {
-	const commands: string[][] = [];
-	for (const [index, line] of script.split(/\r?\n/u).entries()) {
-		const tokens: string[] = [];
-		let token = "";
-		let quote: "'" | '"' | undefined;
-		let started = false;
-		let escaped = false;
-		for (const character of line) {
-			if (escaped) {
-				token += character;
-				escaped = false;
-				started = true;
-				continue;
-			}
-			if (character === "\\") {
-				escaped = true;
-				continue;
-			}
-			if (quote) {
-				if (character === quote) quote = undefined;
-				else token += character;
-				continue;
-			}
-			if (character === "'" || character === '"') {
-				quote = character;
-				started = true;
-				continue;
-			}
-			if (character === "#") break;
-			if (/[|;&<>$`]/u.test(character))
-				throw new ManualProjectError(`生成脚本第 ${index + 1} 行包含 Shell 操作符。`);
-			if (/\s/u.test(character)) {
-				if (started) tokens.push(token);
-				token = "";
-				started = false;
-			} else {
-				token += character;
-				started = true;
-			}
-		}
-		if (quote || escaped) throw new ManualProjectError(`生成脚本第 ${index + 1} 行引号或转义不完整。`);
-		if (started) tokens.push(token);
-		if (tokens.length === 0) continue;
-		if (tokens[0] !== "gen") throw new ManualProjectError(`生成脚本第 ${index + 1} 行必须以 gen 开头。`);
-		if (tokens.length > 64 || tokens.some((item) => item.length > 1000)) {
-			throw new ManualProjectError(`生成脚本第 ${index + 1} 行参数过多或过长。`);
-		}
-		commands.push(tokens.slice(1));
-	}
-	return commands;
-}
-
-function generatedHash(project: ManualProject, manualCases: ManualCaseSummary[]): string {
-	return createHash("sha256")
-		.update(
-			JSON.stringify([
-				project.generatorSource,
-				project.generatorStandard,
-				project.generatorScript,
-				project.reference,
-				manualCases.map((item) => item.inputFile).sort(),
-			]),
-		)
-		.digest("hex");
-}
-
-async function hashFile(path: string): Promise<string> {
-	const hash = createHash("sha256");
-	for await (const block of createReadStream(path)) hash.update(block);
-	return hash.digest("hex");
-}
-
-async function fileEntries(directory: string): Promise<Array<{ name: string; size: number }>> {
-	try {
-		const result: Array<{ name: string; size: number }> = [];
-		for (const entry of await readdir(directory, { withFileTypes: true })) {
-			if (!entry.isFile()) throw new ManualProjectError(`项目数据目录包含非普通文件：${entry.name}`);
-			dataStem(entry.name);
-			result.push({ name: entry.name, size: (await stat(join(directory, entry.name))).size });
-		}
-		return result;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-		throw error;
-	}
-}
-
-function caseOrder(left: ManualCaseSummary, right: ManualCaseSummary): number {
-	if (left.origin !== right.origin) return left.origin === "manual" ? -1 : 1;
-	const leftNumber = /^\d+$/u.test(left.id) ? Number(left.id) : Number.POSITIVE_INFINITY;
-	const rightNumber = /^\d+$/u.test(right.id) ? Number(right.id) : Number.POSITIVE_INFINITY;
-	if (leftNumber !== rightNumber) return leftNumber - rightNumber;
-	return left.id.localeCompare(right.id, "en");
-}
-
 export interface ManualProjectStoreOptions {
 	root: string;
+	database?: WorkspaceDatabase;
 	image?: string;
 	judgeLimits?: HydroJudgeLimits;
 	maxFileBytes?: number;
@@ -283,15 +93,21 @@ export interface ManualProjectStoreOptions {
 }
 
 export class ManualProjectStore {
+	readonly pipeline: ProjectPipeline;
+	readonly releases: ReleaseStore;
 	readonly root: string;
+	readonly database: WorkspaceDatabase;
 	readonly image: string;
 	readonly judgeLimits: HydroJudgeLimits;
 	readonly maxFileBytes: number;
 	readonly maxProjectBytes: number;
 	private readonly busy = new Set<string>();
+	private readonly documentVersions = new WeakMap<object, number>();
 
 	constructor(options: ManualProjectStoreOptions) {
 		this.root = resolve(options.root);
+		this.database = options.database ?? new WorkspaceDatabase(this.root);
+		if (this.database.root !== this.root) throw new Error("Workspace database root must match the project root.");
 		this.image = options.image ?? "hydro-problem-make/sandbox:local";
 		this.judgeLimits = options.judgeLimits ?? DEFAULT_HYDRO_JUDGE_LIMITS;
 		this.maxFileBytes = options.maxFileBytes ?? defaultMaxFileBytes;
@@ -301,19 +117,28 @@ export class ManualProjectStore {
 		if (!Number.isSafeInteger(this.maxProjectBytes) || this.maxProjectBytes < this.maxFileBytes) {
 			throw new Error("maxProjectBytes must be an integer at least as large as maxFileBytes.");
 		}
+		this.pipeline = new ProjectPipeline(this);
+		this.releases = new ReleaseStore(this);
 	}
 
-	private projectDirectory(id: string): string {
+	projectDirectory(id: string): string {
 		assertProjectId(id);
 		return join(this.root, "projects", id);
 	}
 
-	private releaseDirectory(id: string): string {
+	releaseDirectory(id: string): string {
 		assertReleaseId(id);
 		return join(this.root, "releases", id);
 	}
 
+	dataFile(id: string, origin: "manual" | "generated", name: string): string {
+		const path = this.database.filePath(origin, id, name);
+		if (!path) throw new ManualProjectError(`测试文件 ${name} 不存在于数据索引。`, 404);
+		return path;
+	}
+
 	async create(scoringMode: "acm" | "oi"): Promise<ManualProjectSnapshot> {
+		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		const id = randomUUID();
 		const now = new Date().toISOString();
 		const project: ManualProject = {
@@ -348,12 +173,12 @@ export class ManualProjectStore {
 		return this.get(id);
 	}
 
-	private async load(id: string): Promise<ManualProject> {
+	load(id: string): ManualProject {
 		try {
-			const stored = JSON.parse(
-				await readFile(join(this.projectDirectory(id), "project.json"), "utf8"),
-			) as ManualProject;
-			return {
+			const document = this.database.getVersioned<ManualProject>("project", id);
+			if (!document) throw new ManualProjectError("项目不存在。", 404);
+			const { value: stored, version } = document;
+			const project = {
 				...stored,
 				scoringMode: stored.scoringMode ?? "oi",
 				checkerMode: stored.checkerMode ?? (stored.checkerSource.trim() ? "custom" : "text"),
@@ -361,24 +186,46 @@ export class ManualProjectStore {
 				checkerStandard: stored.checkerStandard ?? "cpp17",
 				validatorStandard: stored.validatorStandard ?? "cpp17",
 			};
+			if (version !== undefined) this.documentVersions.set(project, version);
+			return project;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ManualProjectError("项目不存在。", 404);
 			throw error;
 		}
 	}
 
-	private async save(project: ManualProject): Promise<void> {
-		const path = join(this.projectDirectory(project.id), "project.json");
-		const temporary = `${path}.${randomUUID()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(project, null, 2)}\n`);
-		await rename(temporary, path);
+	save(project: ManualProject, context?: ExecutionContext): void {
+		const knownVersion = this.documentVersions.get(project);
+		const expectedVersion = knownVersion ?? this.database.version("project", project.id) ?? -1;
+		try {
+			this.database.transaction(() => {
+				context?.signal.throwIfAborted();
+				this.assertTaskAccess(project.id, context);
+				this.database.put("project", project.id, project, expectedVersion);
+			});
+		} catch (error) {
+			if (String(error).includes("VERSION_CONFLICT")) {
+				throw new ManualProjectError("草稿版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
+			}
+			throw error;
+		}
+		this.documentVersions.set(project, expectedVersion + 1);
 	}
 
-	private async caseList(project: ManualProject): Promise<{ cases: ManualCaseSummary[]; orphanOutputs: string[] }> {
+	private async assertExpectedRevision(project: ManualProject, expectedRevision?: number): Promise<void> {
+		if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) {
+			throw new ManualProjectError("草稿版本无效。", 422);
+		}
+		if (expectedRevision !== undefined && expectedRevision !== project.revision) {
+			throw new ManualProjectError("草稿版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
+		}
+	}
+
+	caseList(project: ManualProject): { cases: ManualCaseSummary[]; orphanOutputs: string[] } {
 		const cases: ManualCaseSummary[] = [];
 		const orphanOutputs: string[] = [];
 		for (const origin of ["manual", "generated"] as const) {
-			const files = await fileEntries(join(this.projectDirectory(project.id), origin));
+			const files = this.database.fileEntries(origin, project.id);
 			const byName = new Map(files.map((item) => [item.name, item.size]));
 			for (const file of files) {
 				const { stem, extension } = dataStem(file.name);
@@ -409,21 +256,16 @@ export class ManualProjectStore {
 	}
 
 	async get(id: string): Promise<ManualProjectSnapshot> {
-		const project = await this.load(id);
-		return { ...project, ...(await this.caseList(project)) };
+		return this.snapshot(id);
+	}
+
+	snapshot(id: string): ManualProjectSnapshot {
+		const project = this.load(id);
+		return { ...project, ...this.caseList(project) };
 	}
 
 	async list(): Promise<ManualProjectSnapshot[]> {
-		const directory = join(this.root, "projects");
-		let ids: string[];
-		try {
-			ids = (await readdir(directory, { withFileTypes: true }))
-				.filter((entry) => entry.isDirectory() && projectIdPattern.test(entry.name))
-				.map((entry) => entry.name);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-			throw error;
-		}
+		const ids = this.database.list<ManualProject>("project").map((item) => item.id);
 		return (await Promise.all(ids.map((id) => this.get(id)))).sort((left, right) =>
 			right.updatedAt.localeCompare(left.updatedAt),
 		);
@@ -433,6 +275,9 @@ export class ManualProjectStore {
 		this.assertNotBusy(id);
 		const project = await this.load(id);
 		const input = record(value, "项目草稿");
+		if (input.expectedRevision !== undefined && input.expectedRevision !== project.revision) {
+			throw new ManualProjectError("草稿版本已变化，请检查最新内容后重试。", 409, await this.get(id));
+		}
 		if (input.scoringMode !== undefined && input.scoringMode !== project.scoringMode) {
 			throw new ManualProjectError("题目赛制在创建后不可更改；请新建题目。", 422);
 		}
@@ -524,28 +369,41 @@ export class ManualProjectStore {
 		return this.get(id);
 	}
 
-	private assertNotBusy(id: string): void {
+	assertNotBusy(id: string, context?: ExecutionContext): void {
+		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		if (this.busy.has(id)) throw new ManualProjectError("项目正在生成或验证，请稍后重试。", 409);
+		this.assertTaskAccess(id, context);
 	}
 
-	private async projectDataBytes(id: string): Promise<number> {
-		let total = 0;
-		for (const source of ["manual", "generated"] as const) {
-			for (const item of await fileEntries(join(this.projectDirectory(id), source))) total += item.size;
+	lock(id: string, context?: ExecutionContext): () => void {
+		this.assertNotBusy(id, context);
+		this.busy.add(id);
+		return () => this.busy.delete(id);
+	}
+
+	private assertTaskAccess(id: string, context?: ExecutionContext): void {
+		const running = this.database.db
+			.prepare("SELECT id FROM tasks WHERE resource=? AND state='running'")
+			.get(`project:${id}`) as { id: string } | undefined;
+		if (running && running.id !== context?.id) {
+			throw new ManualProjectError("项目正在生成或验证，请稍后重试。", 409);
 		}
-		return total;
+	}
+
+	projectDataBytes(id: string): number {
+		return ["manual", "generated"]
+			.flatMap((kind) => this.database.fileEntries(kind, id))
+			.reduce((sum, file) => sum + file.size, 0);
 	}
 
 	async addTextCase(id: string, value: unknown): Promise<AddedManualCase> {
 		this.assertNotBusy(id);
 		this.busy.add(id);
-		let stage: string | undefined;
-		let inputTarget: string | undefined;
-		let outputTarget: string | undefined;
-		let committed = false;
+
 		try {
 			const project = await this.load(id);
 			const request = record(value, "手动测试点");
+			await this.assertExpectedRevision(project, request.expectedRevision as number | undefined);
 			if (typeof request.input !== "string") throw new ManualProjectError("请输入测试输入文本；无输入题可留空。");
 			if (request.output !== undefined && typeof request.output !== "string") {
 				throw new ManualProjectError("期望输出必须是文本。");
@@ -583,177 +441,153 @@ export class ManualProjectStore {
 			if ((await this.projectDataBytes(id)) + input.byteLength + (output?.byteLength ?? 0) > this.maxProjectBytes) {
 				throw new ManualProjectError(`项目数据总量不能超过 ${this.maxProjectBytes} 字节。`, 413);
 			}
-			const directory = join(this.projectDirectory(id), "manual");
-			await mkdir(directory, { recursive: true });
-			stage = await mkdtemp(join(this.projectDirectory(id), ".case-"));
-			await writeFile(join(stage, inputFile), input);
 			const outputFile = output === undefined ? undefined : `${stem}.out`;
-			if (outputFile && output !== undefined) await writeFile(join(stage, outputFile), output);
-			inputTarget = join(directory, inputFile);
-			await rename(join(stage, inputFile), inputTarget);
-			if (outputFile) {
-				outputTarget = join(directory, outputFile);
-				await rename(join(stage, outputFile), outputTarget);
-			}
 			project.caseSubtasks[`manual:${stem}`] = subtaskId as number;
-			project.revision += 1;
+			project.revision++;
 			project.updatedAt = new Date().toISOString();
-			await this.save(project);
-			committed = true;
-			return { inputFile, outputFile, project: { ...project, ...(await this.caseList(project)) } };
-		} catch (error) {
-			if (!committed) {
-				if (inputTarget) await rm(inputTarget, { force: true });
-				if (outputTarget) await rm(outputTarget, { force: true });
-			}
-			throw error;
+			await this.database.commitFiles(
+				[
+					{ ownerKind: "manual", ownerId: id, name: inputFile, source: { bytes: input } },
+					...(outputFile && output !== undefined
+						? [{ ownerKind: "manual", ownerId: id, name: outputFile, source: { bytes: output } }]
+						: []),
+				],
+				() => this.save(project),
+			);
+			return { inputFile, outputFile, project: this.snapshot(id) };
 		} finally {
-			if (stage) await rm(stage, { recursive: true, force: true });
 			this.busy.delete(id);
 		}
 	}
 
-	async upload(id: string, name: string, request: IncomingMessage): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
-		this.busy.add(id);
+	private async receiveFile(
+		id: string,
+		request: AsyncIterable<Uint8Array | string>,
+	): Promise<{ path: string; size: number }> {
+		const directory = this.projectDirectory(id);
+		await mkdir(directory, { recursive: true });
+		const path = join(directory, `.upload-${randomUUID()}`);
+		const file = await open(path, "wx");
+		let size = 0;
+		let received = false;
 		try {
-			await this.load(id);
-			dataStem(name);
-			const directory = join(this.projectDirectory(id), "manual");
-			await mkdir(directory, { recursive: true });
-			const target = join(directory, name);
-			const currentBytes = await this.projectDataBytes(id);
-			const previous = await stat(target)
-				.then((item) => item.size)
-				.catch(() => 0);
-			const temporary = `${target}.${randomUUID()}.tmp`;
-			const file = await open(temporary, "wx");
-			let size = 0;
-			try {
-				for await (const raw of request) {
-					const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-					size += bytes.byteLength;
-					if (size > this.maxFileBytes)
-						throw new ManualProjectError(`单个数据文件不能超过 ${this.maxFileBytes} 字节。`, 413);
-					let offset = 0;
-					while (offset < bytes.byteLength) {
-						const { bytesWritten } = await file.write(bytes, offset, bytes.byteLength - offset);
-						if (bytesWritten === 0) throw new Error("数据文件写入中断。");
-						offset += bytesWritten;
-					}
+			for await (const raw of request) {
+				const bytes = Buffer.from(raw);
+				size += bytes.length;
+				if (size > this.maxFileBytes)
+					throw new ManualProjectError(`单个文件不能超过 ${this.maxFileBytes} 字节。`, 413);
+				let offset = 0;
+				while (offset < bytes.length) {
+					const { bytesWritten } = await file.write(bytes, offset, bytes.length - offset);
+					if (!bytesWritten) throw new Error("文件写入中断。");
+					offset += bytesWritten;
 				}
-			} catch (error) {
-				await file.close();
-				await rm(temporary, { force: true });
-				throw error;
 			}
+			received = true;
+			return { path, size };
+		} finally {
 			await file.close();
-			if (currentBytes - previous + size > this.maxProjectBytes) {
-				await rm(temporary, { force: true });
-				throw new ManualProjectError(`项目数据总量不能超过 ${this.maxProjectBytes} 字节。`, 413);
-			}
-			await rename(temporary, target);
-			const project = await this.load(id);
-			project.revision += 1;
-			project.updatedAt = new Date().toISOString();
-			await this.save(project);
-			return this.get(id);
-		} finally {
-			this.busy.delete(id);
+			if (!received) await rm(path, { force: true });
 		}
 	}
 
-	async uploadDomjudgePdf(id: string, request: IncomingMessage): Promise<ManualProjectSnapshot> {
+	async upload(
+		id: string,
+		name: string,
+		request: AsyncIterable<Uint8Array | string>,
+		expectedRevision?: number,
+	): Promise<ManualProjectSnapshot> {
 		this.assertNotBusy(id);
 		this.busy.add(id);
-		const directory = join(this.projectDirectory(id), "domjudge");
-		const target = join(directory, "problem.pdf");
-		const temporary = `${target}.${randomUUID()}.tmp`;
-		const backup = `${target}.${randomUUID()}.bak`;
-		let originalExists = false;
-		let replaced = false;
-		let committed = false;
+		let path: string | undefined;
 		try {
-			const project = await this.load(id);
-			if (project.scoringMode !== "acm") {
-				throw new ManualProjectError("只有 ACM 题目可以上传 DOMjudge PDF。", 422);
-			}
-			await mkdir(directory, { recursive: true });
-			const file = await open(temporary, "wx");
-			let size = 0;
-			try {
-				for await (const raw of request) {
-					const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-					size += bytes.byteLength;
-					if (size > this.maxFileBytes) throw new ManualProjectError("PDF 超过单文件大小限制。", 413);
-					let offset = 0;
-					while (offset < bytes.byteLength) {
-						const result = await file.write(bytes, offset, bytes.byteLength - offset);
-						if (result.bytesWritten <= 0) throw new Error("PDF 写入中断。");
-						offset += result.bytesWritten;
-					}
-				}
-			} finally {
-				await file.close();
-			}
+			const project = this.load(id);
+			await this.assertExpectedRevision(project, expectedRevision);
+			dataStem(name);
+			const uploaded = await this.receiveFile(id, request);
+			path = uploaded.path;
+			const previous = this.database.fileEntries("manual", id).find((entry) => entry.name === name)?.size ?? 0;
+			if (this.projectDataBytes(id) - previous + uploaded.size > this.maxProjectBytes)
+				throw new ManualProjectError(`项目数据总量不能超过 ${this.maxProjectBytes} 字节。`, 413);
+			project.revision++;
+			project.updatedAt = new Date().toISOString();
+			await this.database.commitFiles([{ ownerKind: "manual", ownerId: id, name, source: { path } }], () =>
+				this.save(project),
+			);
+			return this.snapshot(id);
+		} finally {
+			this.busy.delete(id);
+			if (path) await rm(path, { force: true });
+		}
+	}
+
+	async uploadDomjudgePdf(
+		id: string,
+		request: AsyncIterable<Uint8Array | string>,
+		expectedRevision?: number,
+	): Promise<ManualProjectSnapshot> {
+		this.assertNotBusy(id);
+		this.busy.add(id);
+		let path: string | undefined;
+		try {
+			const project = this.load(id);
+			await this.assertExpectedRevision(project, expectedRevision);
+			if (project.scoringMode !== "acm") throw new ManualProjectError("只有 ACM 题目可以上传 DOMjudge PDF。", 422);
+			const uploaded = await this.receiveFile(id, request);
+			path = uploaded.path;
+			const source = await open(path, "r");
 			const header = Buffer.alloc(5);
-			const source = await open(temporary, "r");
 			try {
-				await source.read(header, 0, header.length, 0);
+				await source.read(header, 0, 5, 0);
 			} finally {
 				await source.close();
 			}
 			if (!header.equals(Buffer.from("%PDF-"))) throw new ManualProjectError("上传文件不是 PDF。", 422);
-			const sha256 = await hashFile(temporary);
-			try {
-				await copyFile(target, backup);
-				originalExists = true;
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-			await rename(temporary, target);
-			replaced = true;
-			project.domjudgePdf = { size, sha256 };
-			project.revision += 1;
+			project.domjudgePdf = { size: uploaded.size, sha256: await hashFile(path) };
+			project.revision++;
 			project.updatedAt = new Date().toISOString();
-			await this.save(project);
-			committed = true;
-			return this.get(id);
-		} catch (error) {
-			if (replaced && !committed) {
-				if (originalExists) await rename(backup, target);
-				else await rm(target, { force: true });
-			}
-			throw error;
+			await this.database.commitFiles(
+				[{ ownerKind: "pdf", ownerId: id, name: "problem.pdf", source: { path } }],
+				() => this.save(project),
+			);
+			return this.snapshot(id);
 		} finally {
-			await rm(temporary, { force: true });
-			await rm(backup, { force: true });
 			this.busy.delete(id);
+			if (path) await rm(path, { force: true });
 		}
 	}
 
-	async deleteDomjudgePdf(id: string): Promise<ManualProjectSnapshot> {
+	async deleteDomjudgePdf(id: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
 		this.assertNotBusy(id);
-		const project = await this.load(id);
-		await rm(join(this.projectDirectory(id), "domjudge", "problem.pdf"), { force: true });
+		const project = this.load(id);
+		await this.assertExpectedRevision(project, expectedRevision);
 		delete project.domjudgePdf;
-		project.revision += 1;
+		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		await this.save(project);
-		return this.get(id);
+		this.database.transaction(() => {
+			this.save(project);
+			this.database.removeFile("pdf", id, "problem.pdf");
+		});
+		return this.snapshot(id);
 	}
 
 	async domjudgePdfFile(id: string): Promise<{ path: string; size: number }> {
 		const project = await this.load(id);
 		if (!project.domjudgePdf) throw new ManualProjectError("尚未上传 DOMjudge PDF。", 404);
-		return { path: join(this.projectDirectory(id), "domjudge", "problem.pdf"), size: project.domjudgePdf.size };
+		return {
+			path:
+				this.database.filePath("pdf", id, "problem.pdf") ??
+				join(this.projectDirectory(id), "domjudge", "problem.pdf"),
+			size: project.domjudgePdf.size,
+		};
 	}
 
 	async file(id: string, name: string, origin?: ManualCaseSummary["origin"]): Promise<{ path: string; size: number }> {
 		await this.load(id);
 		dataStem(name);
 		for (const source of origin ? [origin] : (["manual", "generated"] as const)) {
-			const path = join(this.projectDirectory(id), source, name);
+			const path = this.database.filePath(source, id, name);
+			if (!path) continue;
 			try {
 				const info = await stat(path);
 				if (info.isFile()) return { path, size: info.size };
@@ -764,495 +598,152 @@ export class ManualProjectStore {
 		throw new ManualProjectError("数据文件不存在。", 404);
 	}
 
-	async deleteFile(id: string, name: string): Promise<ManualProjectSnapshot> {
+	async deleteFile(id: string, name: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
 		this.assertNotBusy(id);
-		const project = await this.load(id);
 		dataStem(name);
-		await rm(join(this.projectDirectory(id), "manual", name), { force: true });
-		project.revision += 1;
+		const project = this.load(id);
+		await this.assertExpectedRevision(project, expectedRevision);
+		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		await this.save(project);
-		return this.get(id);
+		this.database.transaction(() => {
+			this.save(project);
+			this.database.removeFile("manual", id, name);
+		});
+		return this.snapshot(id);
 	}
 
-	private limits(project: ManualProject): { timeLimitMs: number; memoryLimitMb: number } {
-		const timeLimitMs = parseHydroTimeLimitMs(project.timeLimit);
-		const memory = /^(\d+(?:\.\d+)?)(k|m|g|kb|mb|gb)$/iu.exec(project.memoryLimit);
-		const memoryLimitMb = memory
-			? Math.ceil(
-					Number(memory[1]) *
-						(memory[2].toLowerCase().startsWith("g")
-							? 1024
-							: memory[2].toLowerCase().startsWith("k")
-								? 1 / 1024
-								: 1),
-				)
-			: NaN;
-		if (
-			!timeLimitMs ||
-			timeLimitMs < 50 ||
-			timeLimitMs > 10_000 ||
-			!Number.isSafeInteger(memoryLimitMb) ||
-			memoryLimitMb < 32 ||
-			memoryLimitMb > 512
-		) {
-			throw new ManualProjectError("本地沙箱要求时间 50–10000 ms、内存 32–512 MiB。", 422);
-		}
-		return { timeLimitMs, memoryLimitMb };
-	}
-
-	async generate(id: string): Promise<{ project: ManualProjectSnapshot; report: ManualSandboxReport }> {
+	async deleteCases(id: string, stems: string[], expectedRevision?: number): Promise<ManualProjectSnapshot> {
 		this.assertNotBusy(id);
-		this.busy.add(id);
-		let stage: string | undefined;
-		try {
-			const project = await this.load(id);
-			if (!project.reference.code.trim()) throw new ManualProjectError("请先添加标准程序。", 422);
-			if (!project.generatorSource.trim()) throw new ManualProjectError("请上传或填写 Gen 源码。", 422);
-			const commands = parseGeneratorScript(project.generatorScript);
-			if (commands.length === 0) throw new ManualProjectError("生成脚本没有 gen 命令。", 422);
-			const { cases } = await this.caseList(project);
-			const manual = cases.filter((item) => item.origin === "manual");
-			if (manual.length + commands.length > this.judgeLimits.maxTestCases)
-				throw new ManualProjectError("生成后测试点超过评测机上限。", 422);
-			const numericMax = Math.max(
-				0,
-				...manual.filter((item) => /^\d+$/u.test(item.id)).map((item) => Number(item.id)),
-			);
-			const startNumber = Math.max(manual.length, numericMax) + 1;
-			stage = await mkdtemp(join(this.projectDirectory(id), ".generate-"));
-			const report = await runManualSandbox({
-				mode: "generate",
-				stage,
-				image: this.image,
-				reference: project.reference,
-				oracle: project.oracle,
-				generator: project.generatorSource,
-				generatorStandard: project.generatorStandard,
-				commands,
-				startNumber,
-				checker: effectiveChecker(project.checkerMode, project.checkerSource),
-				checkerStandard: project.checkerStandard,
-				validator: project.validatorSource,
-				validatorStandard: project.validatorStandard,
-				maxFileBytes: this.maxFileBytes,
-				...this.limits(project),
-			});
-			if (!report.success) return { project: await this.get(id), report };
-			const previousBytes = (await fileEntries(join(this.projectDirectory(id), "generated"))).reduce(
-				(sum, item) => sum + item.size,
-				0,
-			);
-			const newBytes = (await fileEntries(join(stage, "generated"))).reduce((sum, item) => sum + item.size, 0);
-			if ((await this.projectDataBytes(id)) - previousBytes + newBytes > this.maxProjectBytes) {
-				throw new ManualProjectError("生成数据超过项目容量上限。", 413);
-			}
-			const destination = join(this.projectDirectory(id), "generated");
-			const backup = join(this.projectDirectory(id), `.generated-backup-${randomUUID()}`);
-			await rename(destination, backup).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "ENOENT") throw error;
-			});
-			try {
-				await rename(join(stage, "generated"), destination);
-			} catch (error) {
-				await rename(backup, destination).catch(() => {});
-				throw error;
-			}
-			await rm(backup, { recursive: true, force: true });
-			project.generatedFromHash = generatedHash(project, manual);
-			project.revision += 1;
-			project.updatedAt = new Date().toISOString();
-			await this.save(project);
-			return { project: await this.get(id), report };
-		} finally {
-			if (stage) await rm(stage, { recursive: true, force: true });
-			this.busy.delete(id);
-		}
+		const project = this.load(id);
+		await this.assertExpectedRevision(project, expectedRevision);
+		if (!stems.length || stems.length > 500 || new Set(stems).size !== stems.length)
+			throw new ManualProjectError("请选择有效的测试点。", 422);
+		const cases = this.caseList(project).cases.filter((item) => item.origin === "manual");
+		const selected = stems.map((stem) => {
+			const item = cases.find((entry) => entry.id === stem);
+			if (!item) throw new ManualProjectError(`手动测试点 ${stem} 不存在。`, 404);
+			return item;
+		});
+		for (const item of selected) delete project.caseSubtasks[`manual:${item.id}`];
+		project.revision++;
+		project.updatedAt = new Date().toISOString();
+		this.database.transaction(() => {
+			this.save(project);
+			for (const item of selected)
+				for (const name of [item.inputFile, item.outputFile])
+					if (name) this.database.removeFile("manual", id, name);
+		});
+		return this.snapshot(id);
 	}
 
-	private async projectHash(project: ManualProject, cases: ManualCaseSummary[]): Promise<string> {
-		const hash = createHash("sha256").update(
-			JSON.stringify({
-				slug: project.slug,
-				scoringMode: project.scoringMode,
-				title: project.title,
-				tags: project.tags,
-				statement: project.statement,
-				samples: project.samples,
-				timeLimit: project.timeLimit,
-				memoryLimit: project.memoryLimit,
-				reference: project.reference,
-				oracle: project.oracle,
-				generatorSource: project.generatorSource,
-				generatorStandard: project.generatorStandard,
-				generatorScript: project.generatorScript,
-				checkerSource: project.checkerSource,
-				checkerMode: project.checkerMode,
-				checkerStandard: project.checkerStandard,
-				validatorSource: project.validatorSource,
-				validatorStandard: project.validatorStandard,
-				subtasks: project.subtasks,
-				caseSubtasks: project.caseSubtasks,
-				attachments: project.attachments,
-				domjudgePdf: project.domjudgePdf,
-			}),
-		);
-		for (const item of cases) {
-			const directory = join(this.projectDirectory(project.id), item.origin);
-			hash
-				.update(item.origin)
-				.update(item.inputFile)
-				.update(await hashFile(join(directory, item.inputFile)));
-			if (item.outputFile) hash.update(item.outputFile).update(await hashFile(join(directory, item.outputFile)));
-		}
-		return hash.digest("hex");
-	}
-
-	private spec(project: ManualProject, cases: ManualCaseSummary[]): HydroProblemSpec {
-		return {
-			type: "default",
-			slug: project.slug,
-			title: project.title,
-			tags: project.tags,
-			language: "zh",
-			statement: formatHydroStatement(project),
-			timeLimit: project.timeLimit,
-			memoryLimit: project.memoryLimit,
-			checker: { type: "testlib", source: effectiveChecker(project.checkerMode, project.checkerSource) ?? "" },
-			attachments: project.attachments.map((item) => ({
-				name: item.name,
-				content: Buffer.from(item.contentBase64, "base64"),
-			})),
-			subtasks: project.subtasks.map((subtask) => ({
-				...subtask,
-				cases: cases
-					.filter((item) => item.subtaskId === subtask.id)
-					.map((item) => ({
-						inputFile: item.inputFile,
-						input: "",
-						outputFile: item.outputFile ?? `${item.id}.out`,
-						output: "",
-					})),
-			})),
-		};
-	}
-
-	async finalize(id: string): Promise<{ release?: ManualRelease; report: ManualVerificationReport }> {
+	async clearGenerated(id: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
 		this.assertNotBusy(id);
-		this.busy.add(id);
-		let stage: string | undefined;
-		let releaseDirectory: string | undefined;
-		try {
-			const project = await this.load(id);
-			if (!project.reference.code.trim()) throw new ManualProjectError("标准程序是打包前的必填项。", 422);
-			if (!effectiveChecker(project.checkerMode, project.checkerSource)) {
-				throw new ManualProjectError("请选择文本比对 Checker，或提供 C++ testlib Checker 源码。", 422);
-			}
-			if (
-				project.scoringMode === "acm" &&
-				(project.subtasks.length !== 1 ||
-					project.subtasks[0].id !== 1 ||
-					project.subtasks[0].type !== "min" ||
-					project.subtasks[0].score !== 100)
-			) {
-				throw new ManualProjectError("ACM 题目仅允许一个 100 分 min 分组。", 422);
-			}
-			const { cases, orphanOutputs } = await this.caseList(project);
-			if (orphanOutputs.length)
-				throw new ManualProjectError(`存在没有对应 .in 的输出文件：${orphanOutputs.join(", ")}`, 422);
-			if (cases.length === 0) throw new ManualProjectError("请先上传测试数据或运行 Gen。", 422);
-			if (project.scoringMode === "acm" && cases.some((item) => item.subtaskId !== 1)) {
-				throw new ManualProjectError("ACM 题目的所有测试点必须位于唯一分组。", 422);
-			}
-			if (cases.some((item) => item.origin === "generated")) {
-				if (
-					project.generatedFromHash !==
-					generatedHash(
-						project,
-						cases.filter((item) => item.origin === "manual"),
-					)
-				) {
-					throw new ManualProjectError("Gen、脚本、标程或手动测试点编号已修改，请重新生成数据。", 422);
-				}
-				const names = new Set<string>();
-				for (const item of cases) {
-					for (const name of [item.inputFile, item.outputFile ?? `${item.id}.out`]) {
-						if (names.has(name)) throw new ManualProjectError(`测试文件 ${name} 重名，请重新生成数据。`, 422);
-						names.add(name);
-					}
-				}
-			}
-			const spec = this.spec(project, cases);
-			const structural = validateHydroProblemSpec(spec, this.judgeLimits);
-			if (!structural.valid)
-				throw new ManualProjectError(
-					structural.issues.map((item) => `${item.path}: ${item.message}`).join("\n"),
-					422,
-				);
-			stage = await mkdtemp(join(this.projectDirectory(id), ".verify-"));
-			const sandboxCases: SandboxCase[] = cases.map((item) => ({
-				id: item.id,
-				inputPath: join(this.projectDirectory(id), item.origin, item.inputFile),
-				outputPath: item.outputFile ? join(this.projectDirectory(id), item.origin, item.outputFile) : undefined,
-				outputName: item.outputFile ?? `${item.id}.out`,
-			}));
-			const sandbox = await runManualSandbox({
-				mode: "finalize",
-				stage,
-				image: this.image,
-				reference: project.reference,
-				oracle: project.oracle,
-				generatorStandard: project.generatorStandard,
-				checker: effectiveChecker(project.checkerMode, project.checkerSource),
-				checkerStandard: project.checkerStandard,
-				validator: project.validatorSource,
-				validatorStandard: project.validatorStandard,
-				cases: sandboxCases,
-				samples: project.samples,
-				maxFileBytes: this.maxFileBytes,
-				...this.limits(project),
-			});
-			const report: ManualVerificationReport = {
-				...sandbox,
-				revision: project.revision,
-				projectHash: await this.projectHash(project, cases),
-				issues: structural.issues,
-				verifiedAt: new Date().toISOString(),
-			};
-			project.lastReport = report;
-			await this.save(project);
-			if (!report.success) return { report };
-
-			const releaseId = randomUUID();
-			releaseDirectory = this.releaseDirectory(releaseId);
-			await mkdir(join(releaseDirectory, "hydro", project.slug), { recursive: true });
-			const hydroRoot = join(releaseDirectory, "hydro", project.slug);
-			for (const [name, content] of buildHydroProblemFiles(spec, this.judgeLimits)) {
-				const path = join(hydroRoot, name);
-				await mkdir(join(path, ".."), { recursive: true });
-				await writeFile(path, content);
-			}
-			for (const item of cases) {
-				await copyFile(
-					join(this.projectDirectory(id), item.origin, item.inputFile),
-					join(hydroRoot, "testdata", item.inputFile),
-				);
-				await copyFile(
-					join(stage, "verified", item.outputFile ?? `${item.id}.out`),
-					join(hydroRoot, "testdata", item.outputFile ?? `${item.id}.out`),
-				);
-			}
-			const directoryReport = await validateHydroDirectory(hydroRoot, { judgeLimits: this.judgeLimits });
-			if (!directoryReport.valid)
-				throw new ManualProjectError(directoryReport.issues.map((item) => item.message).join("\n"), 422);
-			await writeHydroDirectoryArchive(hydroRoot, join(releaseDirectory, "hydro.zip"), {
-				judgeLimits: this.judgeLimits,
-			});
-
-			const sourceRoot = join(releaseDirectory, "source");
-			await mkdir(sourceRoot, { recursive: true });
-			const sourceFiles = new Map<string, string>();
-			const sourceTexts: Record<string, string> = {
-				"project.json": JSON.stringify(project, null, 2),
-				"report.json": JSON.stringify(report, null, 2),
-				"reference.txt": project.reference.code,
-				"generator.cc": project.generatorSource,
-				"generate.txt": project.generatorScript,
-				"checker.cc": effectiveChecker(project.checkerMode, project.checkerSource) ?? "",
-				"validator.cc": project.validatorSource,
-				"oracle.txt": project.oracle?.code ?? "",
-			};
-			for (const [name, content] of Object.entries(sourceTexts)) {
-				const path = join(sourceRoot, name);
-				await writeFile(path, content);
-				sourceFiles.set(name, path);
-			}
-			if (project.domjudgePdf) {
-				const pdfSource = join(this.projectDirectory(id), "domjudge", "problem.pdf");
-				if ((await hashFile(pdfSource)) !== project.domjudgePdf.sha256) {
-					throw new ManualProjectError("DOMjudge PDF 已在项目目录外被修改，请重新上传。", 422);
-				}
-				await copyFile(pdfSource, join(releaseDirectory, "problem.pdf"));
-				const sourceTarget = join(sourceRoot, "problem.pdf");
-				await copyFile(pdfSource, sourceTarget);
-				sourceFiles.set("problem.pdf", sourceTarget);
-			}
-			for (const item of cases) {
-				for (const name of [item.inputFile, item.outputFile].filter(
-					(value): value is string => value !== undefined,
-				)) {
-					const relative = `data/${item.origin}/${name}`;
-					const target = join(sourceRoot, relative);
-					await mkdir(join(target, ".."), { recursive: true });
-					await copyFile(join(this.projectDirectory(id), item.origin, name), target);
-					sourceFiles.set(relative, target);
-				}
-				const verifiedName = item.outputFile ?? `${item.id}.out`;
-				const verifiedRelative = `data/verified/${verifiedName}`;
-				const verifiedTarget = join(sourceRoot, verifiedRelative);
-				await mkdir(join(verifiedTarget, ".."), { recursive: true });
-				await copyFile(join(hydroRoot, "testdata", verifiedName), verifiedTarget);
-				sourceFiles.set(verifiedRelative, verifiedTarget);
-			}
-			for (const name of ["testlib.h", "LICENSE"]) {
-				const source = fileURLToPath(new URL(`../sandbox/testlib/${name}`, import.meta.url));
-				const relative = `testlib/${name}`;
-				const target = join(sourceRoot, relative);
-				await mkdir(join(target, ".."), { recursive: true });
-				await copyFile(source, target);
-				sourceFiles.set(relative, target);
-			}
-			const fileHashes = Object.fromEntries(
-				await Promise.all([...sourceFiles].map(async ([name, path]) => [name, await hashFile(path)] as const)),
-			);
-			const manifest = {
-				projectId: id,
-				revision: project.revision,
-				projectHash: report.projectHash,
-				sandboxImage: this.image,
-				toolchain: { cpp: "GCC 16.2.0", python: "Python 3.14", java: "Java 21" },
-				languages: {
-					reference: project.reference.language,
-					oracle: project.oracle?.language,
-					generator: project.generatorStandard,
-					checker: project.checkerStandard,
-					validator: project.validatorStandard,
-				},
-				testlibCommit: "1e4e8a24c79c6bad3becbdb5a332ffc352b7d5dd",
-				generatorCommands: project.generatorScript.trim() ? parseGeneratorScript(project.generatorScript) : [],
-				cases: cases.map((item) => ({
-					id: item.id,
-					origin: item.origin,
-					inputFile: item.inputFile,
-					outputFile: item.outputFile ?? `${item.id}.out`,
-					subtaskId: item.subtaskId,
-				})),
-				files: fileHashes,
-			};
-			const manifestPath = join(sourceRoot, "manifest.json");
-			await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-			sourceFiles.set("manifest.json", manifestPath);
-			await writeStoredArchiveFromFiles(
-				join(releaseDirectory, "source.zip"),
-				`${project.slug}.authoring`,
-				sourceFiles,
-			);
-			const release: ManualRelease = {
-				id: releaseId,
-				scoringMode: project.scoringMode,
-				projectId: id,
-				revision: project.revision,
-				projectHash: report.projectHash,
-				slug: project.slug,
-				title: project.title,
-				createdAt: new Date().toISOString(),
-				report,
-				checkerMode: project.checkerMode,
-				domjudgePdf: Boolean(project.domjudgePdf),
-			};
-			await writeFile(join(releaseDirectory, "release.json"), `${JSON.stringify(release, null, 2)}\n`);
-			project.latestReleaseId = releaseId;
-			await this.save(project);
-			releaseDirectory = undefined;
-			return { release, report };
-		} finally {
-			if (stage) await rm(stage, { recursive: true, force: true });
-			if (releaseDirectory) await rm(releaseDirectory, { recursive: true, force: true });
-			this.busy.delete(id);
-		}
+		const project = this.load(id);
+		await this.assertExpectedRevision(project, expectedRevision);
+		project.generatedFromHash = undefined;
+		project.revision++;
+		project.updatedAt = new Date().toISOString();
+		this.database.transaction(() => {
+			this.save(project);
+			this.database.removeOwnerFiles("generated", id);
+		});
+		return this.snapshot(id);
 	}
 
-	async release(id: string): Promise<ManualRelease> {
-		try {
-			return JSON.parse(await readFile(join(this.releaseDirectory(id), "release.json"), "utf8")) as ManualRelease;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ManualProjectError("发布记录不存在。", 404);
-			throw error;
-		}
-	}
-
-	async listReleases(): Promise<ManualRelease[]> {
-		let entries: string[];
-		try {
-			entries = (await readdir(join(this.root, "releases"), { withFileTypes: true }))
-				.filter((entry) => entry.isDirectory() && projectIdPattern.test(entry.name))
-				.map((entry) => entry.name);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-			throw error;
-		}
-		return (await Promise.all(entries.map((id) => this.release(id)))).sort((left, right) =>
-			right.createdAt.localeCompare(left.createdAt),
+	async renumberPreview(id: string): Promise<Array<{ from: string; to: string }>> {
+		const project = await this.load(id);
+		const cases = (await this.caseList(project)).cases;
+		const numeric = cases.filter((item) => item.origin === "manual" && /^\d+$/u.test(item.id)).sort(caseOrder);
+		const reserved = new Set(
+			cases.filter((item) => item.origin !== "manual" || !/^\d+$/u.test(item.id)).map((item) => item.id),
 		);
+		return numeric.map((item, index) => {
+			const to = String(index + 1);
+			if (reserved.has(to))
+				throw new ManualProjectError(`编号 ${to} 已被自定义或 Gen 测试点占用，请先移除冲突数据。`, 409);
+			return { from: item.id, to };
+		});
 	}
 
-	async releaseReference(id: string): Promise<ManualProgram> {
-		await this.release(id);
-		const snapshot = JSON.parse(
-			await readFile(join(this.releaseDirectory(id), "source", "project.json"), "utf8"),
-		) as ManualProject;
-		return snapshot.reference;
-	}
-
-	async recordLiveVerification(id: string, result: HydroLiveVerificationResult): Promise<ManualRelease> {
-		const release = await this.release(id);
-		const updated = { ...release, liveVerification: result };
-		const target = join(this.releaseDirectory(id), "release.json");
-		const temporary = `${target}.${randomUUID()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(updated, null, 2)}\n`);
-		await rename(temporary, target);
-		return updated;
-	}
-
-	async exportDomjudge(id: string): Promise<{ path: string; size: number; name: string }> {
-		const release = await this.release(id);
-		try {
-			await writeDomjudgeProblemArchive(this.releaseDirectory(id), release, this.image);
-		} catch (error) {
-			throw new ManualProjectError(error instanceof Error ? error.message : "DOMjudge 导出失败。", 422);
+	async renumberCases(id: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
+		this.assertNotBusy(id);
+		const project = this.load(id);
+		await this.assertExpectedRevision(project, expectedRevision);
+		const preview = (await this.renumberPreview(id)).filter((item) => item.from !== item.to);
+		if (!preview.length) return this.snapshot(id);
+		const names = new Set(this.database.fileEntries("manual", id).map((file) => file.name));
+		const changes = preview.flatMap(({ from, to }) =>
+			["in", "out", "ans"]
+				.filter((extension) => names.has(`${from}.${extension}`))
+				.map((extension) => ({ from: `${from}.${extension}`, to: `${to}.${extension}` })),
+		);
+		const originalAssignments = { ...project.caseSubtasks };
+		for (const item of preview) delete project.caseSubtasks[`manual:${item.from}`];
+		for (const item of preview) {
+			const subtask = originalAssignments[`manual:${item.from}`];
+			if (subtask !== undefined) project.caseSubtasks[`manual:${item.to}`] = subtask;
 		}
-		return this.releaseFile(id, "domjudge");
+		project.revision++;
+		project.updatedAt = new Date().toISOString();
+		this.database.transaction(() => {
+			this.save(project);
+			this.database.renameFiles("manual", id, changes);
+		});
+		return this.snapshot(id);
 	}
 
-	async exportLegacy(id: string, format: "fps" | "qduoj"): Promise<{ path: string; size: number; name: string }> {
-		const release = await this.release(id);
-		try {
-			await writeLegacyProblemExport(this.releaseDirectory(id), release, format);
-		} catch (error) {
-			throw new ManualProjectError(error instanceof Error ? error.message : "题目格式导出失败。", 422);
-		}
-		return this.releaseFile(id, format);
-	}
-
-	async releaseFile(
+	async casePreview(
 		id: string,
-		kind: "hydro" | "source" | "domjudge" | "fps" | "qduoj",
-	): Promise<{ path: string; size: number; name: string }> {
-		const release = await this.release(id);
-		const path = join(this.releaseDirectory(id), `${kind}.${kind === "fps" ? "xml" : "zip"}`);
-		let size: number;
-		try {
-			size = (await stat(path)).size;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ManualProjectError("该格式尚未导出。", 404);
-			throw error;
-		}
+		origin: "manual" | "generated",
+		stem: string,
+	): Promise<{ input: string; output?: string; verified?: string; truncated: boolean }> {
+		const project = await this.get(id);
+		const item = project.cases.find((entry) => entry.origin === origin && entry.id === stem);
+		if (!item) throw new ManualProjectError("测试点不存在。", 404);
+		const read = async (path: string) => {
+			const bytes = await readFile(path);
+			return { text: bytes.subarray(0, 32 * 1024).toString("utf8"), truncated: bytes.length > 32 * 1024 };
+		};
+		const input = await read(this.dataFile(id, origin, item.inputFile));
+		const output = item.outputFile ? await read(this.dataFile(id, origin, item.outputFile)) : undefined;
+		const released = project.latestReleaseId
+			? await this.releases.release(project.latestReleaseId).catch(() => undefined)
+			: undefined;
+		const verified =
+			released?.revision === project.revision
+				? await read(
+						join(
+							this.releaseDirectory(released.id),
+							"hydro",
+							released.slug,
+							"testdata",
+							item.outputFile ?? `${stem}.out`,
+						),
+					).catch(() => undefined)
+				: undefined;
 		return {
-			path,
-			size,
-			name: `${release.slug}.${kind === "source" ? "authoring" : kind}.${kind === "fps" ? "xml" : "zip"}`,
+			input: input.text,
+			output: output?.text,
+			verified: verified?.text,
+			truncated: input.truncated || !!output?.truncated || !!verified?.truncated,
 		};
 	}
 
 	async delete(id: string): Promise<void> {
-		this.assertNotBusy(id);
-		await this.load(id);
-		const releases = await readdir(join(this.root, "releases"), { withFileTypes: true }).catch(() => []);
-		for (const entry of releases) {
-			if (!entry.isDirectory() || !projectIdPattern.test(entry.name)) continue;
-			const release = await this.release(entry.name);
-			if (release.projectId === id) await rm(this.releaseDirectory(entry.name), { recursive: true, force: true });
-		}
+		const releases = this.database.transaction(() => {
+			this.assertNotBusy(id);
+			this.load(id);
+			const releases = this.database.list<ManualRelease>("release").filter((item) => item.projectId === id);
+			for (const release of releases) {
+				this.database.delete("release", release.id);
+				this.database.removeOwnerFiles("release-file", release.id);
+			}
+			for (const kind of ["manual", "generated", "pdf"]) this.database.removeOwnerFiles(kind, id);
+			this.database.delete("project", id);
+			return releases;
+		});
+		for (const release of releases) await rm(this.releaseDirectory(release.id), { recursive: true, force: true });
 		await rm(this.projectDirectory(id), { recursive: true, force: true });
+		await this.database.pruneBlobs();
 	}
 }
