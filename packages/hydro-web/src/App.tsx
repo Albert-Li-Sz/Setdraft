@@ -1,5 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { RevisionConflict, requestJson } from "./api-client.ts";
+import { Icon } from "./Icon.tsx";
+import { LocaleSwitcher, type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	apiUrl,
 	type BackgroundTask,
@@ -14,6 +16,7 @@ import {
 } from "./platform.ts";
 import { projectContextSnapshot } from "./problem.ts";
 import { useProjectSession } from "./use-project-session.ts";
+import { WorkspaceHome } from "./WorkspaceHome.tsx";
 
 const AiChatPage = lazy(() => import("./AiChatPage.tsx").then((module) => ({ default: module.AiChatPage })));
 const ContestsPage = lazy(() => import("./ContestsPage.tsx").then((module) => ({ default: module.ContestsPage })));
@@ -27,6 +30,7 @@ const TasksPage = lazy(() => import("./TasksPage.tsx").then((module) => ({ defau
 const currentProjectKey = "hydro-problem-make.project-id";
 
 export function App() {
+	const { t } = useLocale();
 	const [page, setPage] = useState<PageRoute>(() => pageFromHash(window.location.hash));
 	const apiOrigin = "";
 	const selection = useRef<AbortController | undefined>(undefined);
@@ -40,12 +44,12 @@ export function App() {
 	const [busy, setBusy] = useState<"upload" | "generate" | "finalize">();
 	const [activeTask, setActiveTask] = useState<BackgroundTask>();
 	const [recordsLoading, setRecordsLoading] = useState(false);
-	const [recordsMessage, setRecordsMessage] = useState("");
+	const [recordsMessage, setRecordsMessage] = useState<UiMessage>("");
 	const [recordsTone, setRecordsTone] = useState<"passed" | "failed">("passed");
-	const [notice, setNotice] = useState("草稿自动保存在本地服务端。请添加标准程序与测试数据。");
+	const [notice, setNotice] = useState<UiMessage>("草稿自动保存在本地服务端。请添加标准程序与测试数据。");
 	const [noticeTone, setNoticeTone] = useState<"pending" | "passed" | "failed">("pending");
 
-	const showNotice = useCallback((message: string, tone: "pending" | "passed" | "failed" = "pending"): void => {
+	const showNotice = useCallback((message: UiMessage, tone: "pending" | "passed" | "failed" = "pending"): void => {
 		setNotice(message);
 		setNoticeTone(tone);
 	}, []);
@@ -193,7 +197,7 @@ export function App() {
 			const latest = projectRef.current;
 			openSession(latest?.id === id && latest.revision > selected.revision ? latest : selected);
 
-			showNotice(`已打开“${selected.title || "未命名题目"}”。`, "passed");
+			showNotice(uiMessage("已打开“{0}”。", selected.title || uiMessage("未命名题目")), "passed");
 			window.location.hash = "workspace";
 		} catch (error) {
 			if (controller.signal.aborted) return;
@@ -263,7 +267,7 @@ export function App() {
 				setCurrentProject(snapshot);
 			}
 			setReport(undefined);
-			showNotice(`已上传 ${files.length} 个测试文件。`, "passed");
+			showNotice(uiMessage("已上传 {0} 个测试文件。", files.length), "passed");
 		} catch (error) {
 			if (signal.aborted) return;
 			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
@@ -301,7 +305,14 @@ export function App() {
 			setCurrentProject(result.project);
 			setReport(undefined);
 			showNotice(
-				`已添加 ${result.inputFile}${result.outputFile ? ` 与 ${result.outputFile}` : "，输出将在验证时由标程生成"}。${current.cases.some((item) => item.origin === "generated") ? "已有 Gen 数据，请重跑 Gen 后再打包。" : ""}`,
+				uiMessage(
+					"已添加 {0}{1}。{2}",
+					result.inputFile,
+					result.outputFile ? uiMessage(" 与 {0}", result.outputFile) : uiMessage("，输出将在验证时由标程生成"),
+					current.cases.some((item) => item.origin === "generated")
+						? uiMessage("已有 Gen 数据，请重跑 Gen 后再打包。")
+						: "",
+				),
 				"passed",
 			);
 		} catch (error) {
@@ -446,7 +457,7 @@ export function App() {
 			signal.throwIfAborted();
 			setCurrentProject(snapshot);
 			setReport(undefined);
-			showNotice(`已删除 ${name}。`, "passed");
+			showNotice(uiMessage("已删除 {0}。", name), "passed");
 		} catch (error) {
 			if (signal.aborted) return;
 			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
@@ -483,8 +494,12 @@ export function App() {
 			setReport(result.report);
 			showNotice(
 				result.report.success
-					? `生成 ${result.report.generatedCount} 个测试点，标准程序${result.report.oracleCount ? "与第二标准程序交叉核验" : "运行"}通过。`
-					: "Gen 或数据检查失败，上一批生成点已保留。请查看验证报告。",
+					? uiMessage(
+							"生成 {0} 个测试点，标准程序{1}通过。",
+							result.report.generatedCount,
+							result.report.oracleCount ? uiMessage("与第二标准程序交叉核验") : uiMessage("运行"),
+						)
+					: uiMessage("Gen 或数据检查失败，上一批生成点已保留。请查看验证报告。"),
 				result.report.success ? "passed" : "failed",
 			);
 		} catch (error) {
@@ -543,33 +558,43 @@ export function App() {
 		<>
 			<header className="site-header">
 				<div className="header-inner">
-					<a className="brand" href="#workspace" aria-label="Hydro Problem Make 首页">
-						<span className="brand-mark">H</span>
-						<span>Hydro Problem Make</span>
+					<a className="brand" href="#workspace" aria-label={t("Hydro Problem Make 首页")}>
+						<span className="brand-mark" aria-hidden="true">
+							<i />
+							<i />
+							<i />
+						</span>
+						<span className="brand-wordmark">
+							Hydro<span>PROBLEM MAKE</span>
+						</span>
 					</a>
-					<nav className="main-nav" aria-label="主导航">
+					<nav className="main-nav" aria-label={t("主导航")}>
 						<a className={page === "workspace" ? "active" : ""} href="#workspace">
-							制题工作台
+							{t("制题工作台")}
 						</a>
 						<a className={page === "chat" ? "active" : ""} href="#chat">
-							AI 对话
+							{t("AI 对话")}
 						</a>
 						<a className={page === "records" ? "active" : ""} href="#records">
-							制题记录
+							{t("制题记录")}
 						</a>
 						<a className={page === "contests" ? "active" : ""} href="#contests">
-							竞赛
+							{t("竞赛")}
 						</a>
 						<a className={page === "tasks" ? "active" : ""} href="#tasks">
-							任务{activeTask && ["queued", "running"].includes(activeTask.state) ? " · 进行中" : ""}
+							{t("任务")}
+							{activeTask && ["queued", "running"].includes(activeTask.state) ? t(" · 进行中") : ""}
 						</a>
 						<a className={page === "settings" ? "active" : ""} href="#settings">
-							设置
+							{t("设置")}
 						</a>
 					</nav>
+					<div className="header-tools">
+						<LocaleSwitcher />
+					</div>
 				</div>
 			</header>
-			<Suspense fallback={<main className="page manual-muted">正在打开页面…</main>}>
+			<Suspense fallback={<main className="page page-loading">{t("正在打开页面…")}</main>}>
 				{page === "workspace" &&
 					(project ? (
 						<ManualWorkspace
@@ -596,16 +621,12 @@ export function App() {
 							onNew={async () => setChoosingScoringMode(true)}
 						/>
 					) : (
-						<main className="page workspace-empty">
-							<section className="card workspace-empty-card">
-								<div className="eyebrow">Hydro Problem Make</div>
-								<h1>开始创建题目</h1>
-								<p>选择赛制后进入制题工作台。已有草稿请从“制题记录”中打开。</p>
-								<button className="button primary" type="button" onClick={() => setChoosingScoringMode(true)}>
-									新建题目
-								</button>
-							</section>
-						</main>
+						<WorkspaceHome
+							projects={projects}
+							sandbox={sandbox}
+							onNew={() => setChoosingScoringMode(true)}
+							onOpen={openProject}
+						/>
 					))}
 				{page === "chat" && (
 					<AiChatPage
@@ -648,19 +669,33 @@ export function App() {
 						aria-labelledby="scoring-mode-title"
 					>
 						<div className="confirmation-heading">
-							<span>新建题目</span>
-							<h2 id="scoring-mode-title">选择赛制</h2>
+							<span>{t("新建题目")}</span>
+							<h2 id="scoring-mode-title">{t("选择赛制")}</h2>
 						</div>
-						<p>ACM 须全部测试点通过，可导出 DOMjudge；OI 按子任务计分，仅进入 Hydro 竞赛包。创建后赛制固定。</p>
+						<p>{t("选择适合这道题的计分方式。创建后赛制固定。")}</p>
+						<div className="scoring-options">
+							<button type="button" onClick={() => void newProject("acm")}>
+								<span className="scoring-symbol">ACM</span>
+								<span className="scoring-copy">
+									<strong>{t("全部通过")}</strong>
+									<small className="scoring-description">
+										{t("所有测试点通过即得分。支持 Hydro 与 DOMjudge。")}
+									</small>
+								</span>
+								<Icon name="arrow" />
+							</button>
+							<button type="button" onClick={() => void newProject("oi")}>
+								<span className="scoring-symbol">OI</span>
+								<span className="scoring-copy">
+									<strong>{t("子任务计分")}</strong>
+									<small className="scoring-description">{t("按子任务分配分值。支持 Hydro。")}</small>
+								</span>
+								<Icon name="arrow" />
+							</button>
+						</div>
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setChoosingScoringMode(false)}>
-								取消
-							</button>
-							<button className="button secondary" type="button" onClick={() => void newProject("oi")}>
-								OI
-							</button>
-							<button className="button primary" type="button" onClick={() => void newProject("acm")}>
-								ACM
+								{t("取消")}
 							</button>
 						</div>
 					</div>
@@ -675,16 +710,18 @@ export function App() {
 						aria-labelledby="conflict-title"
 					>
 						<div className="confirmation-heading">
-							<span>版本冲突</span>
-							<h2 id="conflict-title">草稿已在其他窗口更新</h2>
+							<span>{t("版本冲突")}</span>
+							<h2 id="conflict-title">{t("草稿已在其他窗口更新")}</h2>
 						</div>
 						<p>
-							服务器版本为 {conflictSnapshot.revision}
-							。加载前可复制当前编辑内容；加载会替换当前窗口未保存的修改。
+							{t(
+								"服务器版本为 {0}。加载前可复制当前编辑内容；加载会替换当前窗口未保存的修改。",
+								conflictSnapshot.revision,
+							)}
 						</p>
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setConflictSnapshot(undefined)}>
-								保留当前内容
+								{t("保留当前内容")}
 							</button>
 							<button
 								className="button primary"
@@ -694,13 +731,17 @@ export function App() {
 									setConflictSnapshot(undefined);
 								}}
 							>
-								加载服务器版本
+								{t("加载服务器版本")}
 							</button>
 						</div>
 					</div>
 				</div>
 			)}
-			<footer>Hydro Problem Make · 文件式数据流水线 · C++ testlib SPJ</footer>
+			<footer className="site-footer">
+				<span className="footer-name">Hydro Problem Make</span>
+				<span className="footer-tagline">{t("专注出题，自在创作。")}</span>
+				<span className="footer-detail">LOCAL WORKSPACE</span>
+			</footer>
 		</>
 	);
 }

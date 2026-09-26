@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
+import { useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type TaskEvent } from "./platform.ts";
 
 function checkDetails(data: unknown): { caseId?: string; passed?: boolean } {
@@ -28,6 +29,7 @@ const stateNames: Record<BackgroundTask["state"], string> = {
 };
 
 export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
+	const { t, locale } = useLocale();
 	const [tasks, setTasks] = useState<BackgroundTask[]>([]);
 	const [selected, setSelected] = useState<string>();
 	const [events, setEvents] = useState<TaskEvent[]>([]);
@@ -106,23 +108,23 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 	const task = tasks.find((item) => item.id === selected);
 	return (
 		<main className="page tasks-page" id="tasks">
-			<div className="breadcrumb">工作区 / 任务</div>
+			<div className="breadcrumb">{t("工作区 / 任务")}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">后台流水线</div>
-					<h1>任务状态</h1>
-					<p>离开制题页面后，生成、验证和导出仍会继续。</p>
+					<div className="eyebrow">{t("后台流水线")}</div>
+					<h1>{t("任务状态")}</h1>
+					<p>{t("离开制题页面后，生成、验证和导出仍会继续。")}</p>
 				</div>
 			</section>
 			{error && (
 				<output className="notice failed" role="alert">
-					{error}
+					{t(error)}
 				</output>
 			)}
 			<div className="tasks-layout">
-				<aside className="card tasks-list" aria-label="任务列表">
+				<aside className="card tasks-list" aria-label={t("任务列表")}>
 					{tasks.length === 0 ? (
-						<div className="tasks-empty">暂无任务。运行 Gen 或验证打包后会显示在这里。</div>
+						<div className="tasks-empty">{t("暂无任务。运行 Gen 或验证打包后会显示在这里。")}</div>
 					) : (
 						tasks.map((item) => (
 							<button
@@ -131,9 +133,9 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 								type="button"
 								onClick={() => setSelected(item.id)}
 							>
-								<span>{taskNames[item.kind]}</span>
+								<span>{t(taskNames[item.kind])}</span>
 								<small>
-									{stateNames[item.state]} · {new Date(item.createdAt).toLocaleString()}
+									{t(stateNames[item.state])} · {new Date(item.createdAt).toLocaleString(locale)}
 								</small>
 							</button>
 						))
@@ -145,11 +147,11 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 							<div className="tasks-detail-head">
 								<div>
 									<div className="eyebrow">{task.kind}</div>
-									<h2>{taskNames[task.kind]}</h2>
+									<h2>{t(taskNames[task.kind])}</h2>
 									<span
 										className={`status-badge ${task.state === "succeeded" ? "online" : task.state === "failed" ? "offline" : ""}`}
 									>
-										{stateNames[task.state]}
+										{t(stateNames[task.state])}
 									</span>
 								</div>
 								<div className="heading-actions">
@@ -160,7 +162,7 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 											disabled={busy}
 											onClick={() => void action("cancel")}
 										>
-											取消任务
+											{t("取消任务")}
 										</button>
 									)}
 									{["failed", "cancelled", "stale", "interrupted"].includes(task.state) && (
@@ -170,12 +172,12 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 											disabled={busy}
 											onClick={() => void action("retry")}
 										>
-											重试
+											{t("重试")}
 										</button>
 									)}
 								</div>
 							</div>
-							{task.error && <p className="tasks-error">{task.error}</p>}
+							{task.error && <p className="tasks-error">{t(task.error)}</p>}
 							<div className="tasks-events" role="log" aria-live="polite">
 								{events.map((item) => {
 									const details = checkDetails(item.data);
@@ -184,7 +186,7 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 											key={item.sequence}
 											className={`tasks-event ${details.passed === false ? "failed" : ""}`}
 										>
-											<time>{new Date(item.createdAt).toLocaleTimeString()}</time>
+											<time>{new Date(item.createdAt).toLocaleTimeString(locale)}</time>
 											<span>
 												{details.caseId ? `#${details.caseId} · ` : ""}
 												{item.message}
@@ -195,7 +197,7 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 							</div>
 						</>
 					) : (
-						<div className="tasks-empty">选择任务查看运行日志与验证进度。</div>
+						<div className="tasks-empty">{t("选择任务查看运行日志与验证进度。")}</div>
 					)}
 				</section>
 			</div>

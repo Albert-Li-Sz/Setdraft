@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
+import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	apiUrl,
 	type BackgroundTask,
@@ -27,6 +28,7 @@ function BalloonEditor(props: {
 	title: string;
 	onSave(name: string, rgb: string): void;
 }) {
+	const { t } = useLocale();
 	const [name, setName] = useState(props.name);
 	const [rgb, setRgb] = useState(props.rgb);
 	useEffect(() => {
@@ -36,9 +38,9 @@ function BalloonEditor(props: {
 	return (
 		<div className="contest-balloon-fields">
 			<label className="field">
-				<span>颜色名称</span>
+				<span>{t("颜色名称")}</span>
 				<input
-					aria-label={`${props.title} 气球颜色名称`}
+					aria-label={t("{0} 气球颜色名称", props.title)}
 					value={name}
 					maxLength={40}
 					disabled={props.disabled}
@@ -49,7 +51,7 @@ function BalloonEditor(props: {
 				<span>RGB</span>
 				<input
 					type="color"
-					aria-label={`${props.title} 气球 RGB`}
+					aria-label={t("{0} 气球 RGB", props.title)}
 					value={rgb}
 					disabled={props.disabled}
 					onChange={(event) => setRgb(event.target.value)}
@@ -60,7 +62,7 @@ function BalloonEditor(props: {
 				disabled={props.disabled || (name === props.name && rgb.toUpperCase() === props.rgb.toUpperCase())}
 				onClick={() => props.onSave(name.trim(), rgb)}
 			>
-				保存颜色
+				{t("保存颜色")}
 			</button>
 		</div>
 	);
@@ -82,6 +84,7 @@ interface Props {
 }
 
 export function ContestsPage({ apiOrigin }: Props) {
+	const { t, locale } = useLocale();
 	const [contests, setContests] = useState<ContestDraft[]>([]);
 	const [draft, setDraft] = useState<ContestDraft>();
 	const [releases, setReleases] = useState<ManualRelease[]>([]);
@@ -90,7 +93,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 	const [slug, setSlug] = useState("");
 	const [candidateId, setCandidateId] = useState("");
 	const [busy, setBusy] = useState(false);
-	const [message, setMessage] = useState("");
+	const [message, setMessage] = useState<UiMessage>("");
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [createOpen, setCreateOpen] = useState(false);
 	const [historyOpen, setHistoryOpen] = useState(false);
@@ -180,7 +183,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 			);
 			const result = await waitForTask<ContestRelease>(apiOrigin, accepted.task.id);
 			setBundles((items) => [result, ...items]);
-			setMessage(`${format === "hydro" ? "Hydro" : "DOMjudge"} 竞赛包已生成，可在下方下载。`);
+			setMessage(uiMessage("{0} 竞赛包已生成，可在下方下载。", format === "hydro" ? "Hydro" : "DOMjudge"));
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "竞赛导出失败。");
 		} finally {
@@ -218,16 +221,16 @@ export function ContestsPage({ apiOrigin }: Props) {
 
 	return (
 		<main className="page" id="contests">
-			<div className="breadcrumb">题库 / 竞赛</div>
+			<div className="breadcrumb">{t("题库 / 竞赛")}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">已验证题目 · 题序 · 气球颜色</div>
-					<h1>竞赛打包</h1>
-					<p>Hydro 包可包含 ACM 和 OI 题；DOMjudge 包仅接受 ACM 题。竞赛赛程在目标平台设置。</p>
+					<div className="eyebrow">{t("已验证题目 · 题序 · 气球颜色")}</div>
+					<h1>{t("竞赛打包")}</h1>
+					<p>{t("Hydro 包可包含 ACM 和 OI 题；DOMjudge 包仅接受 ACM 题。竞赛赛程在目标平台设置。")}</p>
 				</div>
 				<div className="heading-actions">
 					<button className="button secondary" type="button" onClick={() => setHistoryOpen(true)}>
-						历史竞赛包
+						{t("历史竞赛包")}
 					</button>
 					<button
 						className="button primary"
@@ -238,19 +241,19 @@ export function ContestsPage({ apiOrigin }: Props) {
 							setCreateOpen(true);
 						}}
 					>
-						新建竞赛
+						{t("新建竞赛")}
 					</button>
 				</div>
 			</section>
 			{message && (
 				<output className="notice pending" aria-live="polite">
 					<span className="notice-dot" />
-					{message}
+					{t(message)}
 				</output>
 			)}
 			<div className="contest-layout">
 				<aside className="card contest-sidebar">
-					<h2>竞赛草稿</h2>
+					<h2>{t("竞赛草稿")}</h2>
 					<div className="contest-list">
 						{contests.map((item) => (
 							<button
@@ -263,10 +266,10 @@ export function ContestsPage({ apiOrigin }: Props) {
 								}}
 							>
 								<strong>{item.title}</strong>
-								<small>{item.releaseIds.length} 题</small>
+								<small>{t("题目数量：{0}", item.releaseIds.length)}</small>
 							</button>
 						))}
-						{contests.length === 0 && <p className="manual-muted">暂无竞赛草稿。</p>}
+						{contests.length === 0 && <p className="manual-muted">{t("暂无竞赛草稿。")}</p>}
 					</div>
 				</aside>
 				<section className="card contest-main">
@@ -276,20 +279,20 @@ export function ContestsPage({ apiOrigin }: Props) {
 								<div>
 									<h2>{draft.title}</h2>
 									<p>
-										{draft.slug} · {selected.length} 题
+										{draft.slug} · {t("题目数量：{0}", selected.length)}
 									</p>
 								</div>
 								<button className="text-button danger" type="button" onClick={() => setDeleteOpen(true)}>
-									删除草稿
+									{t("删除草稿")}
 								</button>
 							</div>
 							<div className="contest-add-row">
 								<select
-									aria-label="选择已验证题目"
+									aria-label={t("选择已验证题目")}
 									value={candidateId}
 									onChange={(event) => setCandidateId(event.target.value)}
 								>
-									<option value="">选择已发布题目…</option>
+									<option value="">{t("选择已发布题目…")}</option>
 									{candidates.map((item) => (
 										<option key={item.id} value={item.id}>
 											{item.title} · {item.scoringMode?.toUpperCase()} · v{item.revision}
@@ -306,26 +309,27 @@ export function ContestsPage({ apiOrigin }: Props) {
 										setCandidateId("");
 									}}
 								>
-									加入题目
+									{t("加入题目")}
 								</button>
 							</div>
 							{oldReleaseCount > 0 && (
 								<p className="manual-muted">
-									{oldReleaseCount} 个旧发布版本需重新通过完整 Checker 验证后才能加入竞赛。
+									{oldReleaseCount}
+									{t("个旧发布版本需重新通过完整 Checker 验证后才能加入竞赛。")}
 								</p>
 							)}
 							{selected.length === 0 ? (
-								<p className="manual-muted">尚未加入题目。请先在制题工作台完整验证并发布。</p>
+								<p className="manual-muted">{t("尚未加入题目。请先在制题工作台完整验证并发布。")}</p>
 							) : (
 								<div className="history-table-wrap">
 									<table className="history-table">
 										<thead>
 											<tr>
-												<th>题序</th>
-												<th>题目版本</th>
-												<th>赛制</th>
-												<th>气球颜色</th>
-												<th>操作</th>
+												<th>{t("题序")}</th>
+												<th>{t("题目版本")}</th>
+												<th>{t("赛制")}</th>
+												<th>{t("气球颜色")}</th>
+												<th>{t("操作")}</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -340,7 +344,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 															{item.slug} · v{item.revision}
 														</code>
 													</td>
-													<td>{item.scoringMode?.toUpperCase() ?? "旧版"}</td>
+													<td>{item.scoringMode?.toUpperCase() ?? t("旧版")}</td>
 													<td>
 														{item.scoringMode === "acm" ? (
 															<BalloonEditor
@@ -364,7 +368,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 																}
 															/>
 														) : (
-															"Hydro 专用"
+															t("Hydro 专用")
 														)}
 													</td>
 													<td>
@@ -378,7 +382,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 																	void update({ ...draft, releaseIds: next });
 																}}
 															>
-																上移
+																{t("上移")}
 															</button>
 															<button
 																type="button"
@@ -389,7 +393,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 																	void update({ ...draft, releaseIds: next });
 																}}
 															>
-																下移
+																{t("下移")}
 															</button>
 															<button
 																className="danger"
@@ -410,7 +414,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 																	});
 																}}
 															>
-																移出
+																{t("移出")}
 															</button>
 														</div>
 													</td>
@@ -427,7 +431,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 									disabled={busy || selected.length === 0 || !allReady}
 									onClick={() => void exportBundle("hydro")}
 								>
-									导出 Hydro 多题包
+									{t("导出 Hydro 多题包")}
 								</button>
 								<button
 									className="button secondary"
@@ -435,16 +439,16 @@ export function ContestsPage({ apiOrigin }: Props) {
 									disabled={busy || selected.length === 0 || !allReady || !allAcm}
 									onClick={() => void exportBundle("domjudge")}
 								>
-									导出 DOMjudge 竞赛包
+									{t("导出 DOMjudge 竞赛包")}
 								</button>
 							</div>
-							{!allAcm && <p className="manual-muted">当前包含 OI 题目，只能导出 Hydro 竞赛包。</p>}
+							{!allAcm && <p className="manual-muted">{t("当前包含 OI 题目，只能导出 Hydro 竞赛包。")}</p>}
 							{!allReady && (
-								<p className="manual-muted">当前包含旧版或已删除的发布记录，请移出并重新发布题目。</p>
+								<p className="manual-muted">{t("当前包含旧版或已删除的发布记录，请移出并重新发布题目。")}</p>
 							)}
 						</>
 					) : (
-						<p className="manual-muted">创建竞赛后，按题序加入已验证的题目。</p>
+						<p className="manual-muted">{t("创建竞赛后，按题序加入已验证的题目。")}</p>
 					)}
 				</section>
 			</div>
@@ -461,34 +465,34 @@ export function ContestsPage({ apiOrigin }: Props) {
 						}}
 					>
 						<div className="confirmation-heading">
-							<span>竞赛草稿</span>
-							<h2 id="contest-create-title">新建竞赛</h2>
+							<span>{t("竞赛草稿")}</span>
+							<h2 id="contest-create-title">{t("新建竞赛")}</h2>
 						</div>
 						<label className="field">
-							<span>竞赛名称</span>
+							<span>{t("竞赛名称")}</span>
 							<input
 								value={title}
 								onChange={(event) => setTitle(event.target.value)}
-								placeholder="例如 校内练习赛"
+								placeholder={t("例如 校内练习赛")}
 								required
 							/>
 						</label>
 						<label className="field">
-							<span>目录标识</span>
+							<span>{t("目录标识")}</span>
 							<input
 								value={slug}
 								onChange={(event) => setSlug(event.target.value)}
-								placeholder="例如 practice-2026"
+								placeholder={t("例如 practice-2026")}
 								required
 							/>
 						</label>
-						<p>目录标识只使用字母、数字、点、下划线和连字符。</p>
+						<p>{t("目录标识只使用字母、数字、点、下划线和连字符。")}</p>
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setCreateOpen(false)}>
-								取消
+								{t("取消")}
 							</button>
 							<button className="button primary" type="submit" disabled={busy}>
-								{busy ? "创建中…" : "创建竞赛"}
+								{busy ? t("创建中…") : t("创建竞赛")}
 							</button>
 						</div>
 					</form>
@@ -503,26 +507,27 @@ export function ContestsPage({ apiOrigin }: Props) {
 						aria-labelledby="contest-history-title"
 					>
 						<div className="confirmation-heading">
-							<span>竞赛打包</span>
-							<h2 id="contest-history-title">历史竞赛包</h2>
+							<span>{t("竞赛打包")}</span>
+							<h2 id="contest-history-title">{t("历史竞赛包")}</h2>
 						</div>
-						<p>与题目发布版本绑定；删除竞赛草稿后仍可下载。</p>
+						<p>{t("与题目发布版本绑定；删除竞赛草稿后仍可下载。")}</p>
 						{bundles.length === 0 ? (
-							<p className="manual-muted">尚无历史竞赛包。</p>
+							<p className="manual-muted">{t("尚无历史竞赛包。")}</p>
 						) : (
 							<div className="contest-history-list">
 								{bundles.map((item) => (
 									<div className="contest-bundle" key={item.id}>
 										<span>
 											<strong>{item.title}</strong> · {item.format === "hydro" ? "Hydro" : "DOMjudge"} ·{" "}
-											{item.problems.length} 题 · {new Date(item.createdAt).toLocaleString("zh-CN")}
+											{t("题目数量：{0}", item.problems.length)} ·
+											{new Date(item.createdAt).toLocaleString(locale)}
 										</span>
 										<a
 											className="button secondary button-link"
 											href={apiUrl(apiOrigin, `/contest-releases/${item.id}/download`)}
 											download={`${item.slug}.${item.format}.contest.zip`}
 										>
-											下载
+											{t("下载")}
 										</a>
 									</div>
 								))}
@@ -530,7 +535,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 						)}
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setHistoryOpen(false)}>
-								关闭
+								{t("关闭")}
 							</button>
 						</div>
 					</div>
@@ -545,16 +550,16 @@ export function ContestsPage({ apiOrigin }: Props) {
 						aria-labelledby="contest-delete-title"
 					>
 						<div className="confirmation-heading">
-							<span>删除确认</span>
-							<h2 id="contest-delete-title">删除“{draft.title}”？</h2>
+							<span>{t("删除确认")}</span>
+							<h2 id="contest-delete-title">{t("删除“{0}”？", draft.title)}</h2>
 						</div>
-						<p>将删除竞赛草稿。历史上已导出的竞赛包仍可下载。</p>
+						<p>{t("将删除竞赛草稿。历史上已导出的竞赛包仍可下载。")}</p>
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setDeleteOpen(false)}>
-								取消
+								{t("取消")}
 							</button>
 							<button className="button primary" type="button" disabled={busy} onClick={() => void remove()}>
-								确认删除
+								{t("确认删除")}
 							</button>
 						</div>
 					</div>

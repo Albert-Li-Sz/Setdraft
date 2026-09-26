@@ -4,6 +4,8 @@ import { requestJson as jsonRequest } from "./api-client.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
+import { Icon } from "./Icon.tsx";
+import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	type AiConfiguration,
 	apiUrl,
@@ -63,6 +65,7 @@ function newestChats(chats: ChatSummary[]): ChatSummary[] {
 }
 
 export function AiChatPage(props: Props) {
+	const { t } = useLocale();
 	const [chats, setChats] = useState<ChatSummary[]>([]);
 	const [chat, setChat] = useState<ChatConversation>();
 	const [configuration, setConfiguration] = useState<AiConfiguration>();
@@ -78,7 +81,7 @@ export function AiChatPage(props: Props) {
 	const [busy, setBusy] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [historyCollapsed, setHistoryCollapsed] = useState(false);
-	const [message, setMessage] = useState("正在读取本地对话…");
+	const [message, setMessage] = useState<UiMessage>("正在读取本地对话…");
 	const [messageTone, setMessageTone] = useState<"pending" | "passed" | "failed">("pending");
 	const controllerRef = useRef<AbortController | undefined>(undefined);
 	const activeRequestRef = useRef<{ chatId: string; requestId: string } | undefined>(undefined);
@@ -89,7 +92,7 @@ export function AiChatPage(props: Props) {
 	const sendingRef = useRef(false);
 	const readingImagesRef = useRef(false);
 
-	const showMessage = useCallback((value: string, tone: "pending" | "passed" | "failed" = "pending"): void => {
+	const showMessage = useCallback((value: UiMessage, tone: "pending" | "passed" | "failed" = "pending"): void => {
 		setMessage(value);
 		setMessageTone(tone);
 	}, []);
@@ -206,7 +209,7 @@ export function AiChatPage(props: Props) {
 	}
 
 	async function remove(id: string): Promise<void> {
-		if (!window.confirm("删除这条 AI 对话及其全部消息？此操作无法撤销。")) return;
+		if (!window.confirm(t("删除这条 AI 对话及其全部消息？此操作无法撤销。"))) return;
 		try {
 			const response = await fetch(apiUrl(props.apiOrigin, `/chats/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
@@ -239,7 +242,7 @@ export function AiChatPage(props: Props) {
 				throw new Error("每条消息的图片合计不能超过 12 MiB。");
 			}
 			setImages((current) => [...current, ...added]);
-			showMessage(`已添加 ${added.length} 张图片；发送时将交给当前模型分析。`, "passed");
+			showMessage(uiMessage("已添加 {0} 张图片；发送时将交给当前模型分析。", added.length), "passed");
 		} catch (error) {
 			showMessage(error instanceof Error ? error.message : "图片读取失败。", "failed");
 		} finally {
@@ -462,11 +465,11 @@ export function AiChatPage(props: Props) {
 
 	return (
 		<main className="page manual-chat-page" id="chat">
-			<div className="breadcrumb">工作区 / AI 对话</div>
+			<div className="breadcrumb">{t("工作区 / AI 对话")}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">独立助手</div>
-					<h1>AI 对话</h1>
+					<div className="eyebrow">{t("独立助手")}</div>
+					<h1>{t("AI 对话")}</h1>
 				</div>
 				<button
 					className="button secondary"
@@ -478,24 +481,24 @@ export function AiChatPage(props: Props) {
 					}
 					disabled={busy}
 				>
-					新建对话
+					{t("新建对话")}
 				</button>
 			</section>
 			<output className={`notice ${props.configured ? messageTone : "failed"}`} aria-live="polite">
 				<span className="notice-dot" />
-				{props.configured ? message : "请先在设置中配置 AI API。"}
+				{props.configured ? t(message) : t("请先在设置中配置 AI API。")}
 			</output>
 			<div className={`manual-chat-layout${historyCollapsed ? " history-collapsed" : ""}`}>
-				<aside className="card manual-chat-list" aria-label="对话记录">
+				<aside className="card manual-chat-list" aria-label={t("对话记录")}>
 					<div className="manual-chat-list-heading">
-						{!historyCollapsed && <span>对话记录</span>}
+						{!historyCollapsed && <span>{t("对话记录")}</span>}
 						<button
 							type="button"
 							className="manual-chat-list-toggle"
-							aria-label={historyCollapsed ? "展开对话记录" : "折叠对话记录"}
+							aria-label={historyCollapsed ? t("展开对话记录") : t("折叠对话记录")}
 							aria-controls="manual-chat-history"
 							aria-expanded={!historyCollapsed}
-							title={historyCollapsed ? "展开对话记录" : "折叠对话记录"}
+							title={historyCollapsed ? t("展开对话记录") : t("折叠对话记录")}
 							onClick={() => setHistoryCollapsed((current) => !current)}
 						>
 							{historyCollapsed ? "›" : "‹"}
@@ -504,7 +507,7 @@ export function AiChatPage(props: Props) {
 					<div className="manual-chat-list-items" id="manual-chat-history" hidden={historyCollapsed}>
 						{chats.length === 0 && (
 							<p className="manual-chat-list-empty">
-								{loading ? "正在读取对话…" : "暂无对话。点击“新建对话”开始。"}
+								{loading ? t("正在读取对话…") : t("暂无对话。点击“新建对话”开始。")}
 							</p>
 						)}
 						{chats.map((item) => (
@@ -515,10 +518,10 @@ export function AiChatPage(props: Props) {
 								<button
 									className="text-button danger"
 									type="button"
-									aria-label={`删除 ${item.title}`}
+									aria-label={t("删除 {0}", item.title)}
 									onClick={() => void remove(item.id)}
 								>
-									删除
+									{t("删除")}
 								</button>
 							</div>
 						))}
@@ -538,11 +541,11 @@ export function AiChatPage(props: Props) {
 								<article className={`manual-chat-message ${item.role}`} key={item.id}>
 									<div className="manual-chat-message-heading">
 										<strong>
-											{item.role === "user" ? "你" : item.modelId ? `AI · ${item.modelId}` : "AI"}
+											{item.role === "user" ? t("你") : item.modelId ? `AI · ${item.modelId}` : "AI"}
 										</strong>
 										{item.content && (
 											<button type="button" onClick={() => void copyMessage(item.id, item.content)}>
-												{copiedMessageId === item.id ? "已复制" : "复制"}
+												{copiedMessageId === item.id ? t("已复制") : t("复制")}
 											</button>
 										)}
 									</div>
@@ -565,17 +568,17 @@ export function AiChatPage(props: Props) {
 											))}
 										</div>
 									)}
-									{item.contextSnapshot && <small>已附带当前题目只读快照</small>}
+									{item.contextSnapshot && <small>{t("已附带当前题目只读快照")}</small>}
 									{item.usage && (
-										<small>
-											输入 {item.usage.input} · 输出 {item.usage.output} tokens
-										</small>
+										<small>{t("输入 {0} · 输出 {1} tokens", item.usage.input, item.usage.output)}</small>
 									)}
 								</article>
 							))
 						) : !busy ? (
 							<div className="manual-chat-empty">
-								可以直接提问，也可以勾选当前题目快照，让模型看到题面与标程。
+								<Icon name="spark" />
+								<h2>{t("一起，把想法想清楚。")}</h2>
+								<p>{t("可以直接提问，也可以勾选当前题目快照，让模型看到题面与标程。")}</p>
 							</div>
 						) : null}
 						{(busy || streaming) && (
@@ -583,21 +586,25 @@ export function AiChatPage(props: Props) {
 								<div className="manual-chat-message-heading">
 									<strong>
 										{busy
-											? `AI · ${configuration?.profiles.find((item) => item.id === selectedProfileId)?.modelId ?? "生成中"} · 生成中`
+											? t(
+													"AI · {0} · 生成中",
+													configuration?.profiles.find((item) => item.id === selectedProfileId)?.modelId ??
+														t("生成中"),
+												)
 											: streamFailed
-												? "AI · 生成中断（未保存）"
+												? t("AI · 生成中断（未保存）")
 												: "AI"}
 									</strong>
 									{streaming && (
 										<button type="button" onClick={() => void copyMessage("stream", streaming)}>
-											{copiedMessageId === "stream" ? "已复制" : "复制"}
+											{copiedMessageId === "stream" ? t("已复制") : t("复制")}
 										</button>
 									)}
 								</div>
 								{streaming ? (
 									<ChatMarkdown content={streaming} />
 								) : (
-									<p className="manual-chat-waiting">正在等待模型输出…</p>
+									<p className="manual-chat-waiting">{t("正在等待模型输出…")}</p>
 								)}
 							</article>
 						)}
@@ -607,7 +614,7 @@ export function AiChatPage(props: Props) {
 							value={input}
 							disabled={busy}
 							onChange={(event) => setInput(event.target.value)}
-							placeholder="输入问题，或粘贴图片…"
+							placeholder={t("输入问题，或粘贴图片…")}
 							onPaste={(event) => {
 								const files = Array.from(event.clipboardData.items)
 									.filter((item) => item.kind === "file" && item.type.startsWith("image/"))
@@ -647,7 +654,7 @@ export function AiChatPage(props: Props) {
 										<span title={image.name}>{image.name}</span>
 										<button
 											type="button"
-											aria-label={`移除 ${image.name}`}
+											aria-label={t("移除 {0}", image.name)}
 											disabled={busy}
 											onClick={() =>
 												setImages((current) => current.filter((item) => item.localId !== image.localId))
@@ -667,12 +674,12 @@ export function AiChatPage(props: Props) {
 									disabled={!props.projectSnapshot}
 									onChange={(event) => setAttachProject(event.target.checked)}
 								/>
-								附带当前题面与标程
+								{t("附带当前题面与标程")}
 							</label>
 							<label className="manual-chat-profile">
-								<span>模型</span>
+								<span>{t("模型")}</span>
 								<select
-									aria-label="当前对话模型"
+									aria-label={t("当前对话模型")}
 									value={selectedProfileId}
 									disabled={busy || !configuration?.profiles.length}
 									onChange={(event) => setSelectedProfileId(event.target.value)}
@@ -690,7 +697,7 @@ export function AiChatPage(props: Props) {
 								disabled={busy || readingImages}
 								onClick={() => imageInputRef.current?.click()}
 							>
-								上传图片
+								{t("上传图片")}
 							</button>
 							<input
 								ref={imageInputRef}
@@ -707,12 +714,12 @@ export function AiChatPage(props: Props) {
 							/>
 							{busy && (
 								<button className="button secondary" type="button" onClick={() => void stopGeneration()}>
-									停止生成
+									{t("停止生成")}
 								</button>
 							)}
 							{!busy && failedRequest && (
 								<button className="button secondary" type="button" onClick={() => void resumeFailed()}>
-									{streamFailed ? "重试并续接" : "续接回复"}
+									{streamFailed ? t("重试并续接") : t("续接回复")}
 								</button>
 							)}
 							<button
@@ -727,11 +734,11 @@ export function AiChatPage(props: Props) {
 								}
 								onClick={() => void send()}
 							>
-								{busy ? "回复中…" : "发送"}
+								{busy ? t("回复中…") : t("发送")}
 							</button>
 						</div>
 						<p className="manual-chat-context-note">
-							同一对话自动保留上下文 · Enter 发送 · Shift+Enter 换行 · 可粘贴图片
+							{t("同一对话自动保留上下文 · Enter 发送 · Shift+Enter 换行 · 可粘贴图片")}
 						</p>
 					</div>
 				</section>

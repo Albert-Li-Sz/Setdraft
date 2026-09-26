@@ -44,6 +44,7 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const languageRef = useRef(new Compartment());
+	const labelRef = useRef(new Compartment());
 	const onChangeRef = useRef(onChange);
 	const applyingExternalRef = useRef(false);
 	const initialPropsRef = useRef({ value, language, ariaLabel });
@@ -57,7 +58,7 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 			extensions: [
 				basicSetup,
 				EditorState.tabSize.of(4),
-				EditorView.contentAttributes.of({ "aria-label": initialPropsRef.current.ariaLabel }),
+				labelRef.current.of(EditorView.contentAttributes.of({ "aria-label": initialPropsRef.current.ariaLabel })),
 				languageRef.current.of(languageSupport(initialPropsRef.current.language)),
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged && !applyingExternalRef.current) {
@@ -88,6 +89,12 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 	useEffect(() => {
 		viewRef.current?.dispatch({ effects: languageRef.current.reconfigure(languageSupport(language)) });
 	}, [language]);
+
+	useEffect(() => {
+		viewRef.current?.dispatch({
+			effects: labelRef.current.reconfigure(EditorView.contentAttributes.of({ "aria-label": ariaLabel })),
+		});
+	}, [ariaLabel]);
 
 	let lineCount = 1;
 	for (let index = 0; index < value.length && lineCount < previewLines; index++) {

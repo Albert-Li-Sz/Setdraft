@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
+import { type UiMessage, useLocale } from "./i18n.tsx";
 import { ProblemPreview } from "./ProblemPreview.tsx";
 import {
 	apiUrl,
@@ -31,7 +32,7 @@ interface Props {
 	sandbox?: SandboxStatus;
 	busy: Busy;
 	saveStatus: string;
-	notice: string;
+	notice: UiMessage;
 	noticeTone: "pending" | "passed" | "failed";
 	onEdit(change: (current: ProjectSnapshot) => ProjectSnapshot): void;
 	onUpload(files: File[]): Promise<void>;
@@ -57,6 +58,7 @@ function CodeEditor(props: {
 	syntax?: "cpp" | "gen-script";
 	previewLines?: number;
 }) {
+	const { t } = useLocale();
 	return (
 		<section className="manual-code-block">
 			<div className="manual-code-heading">
@@ -67,19 +69,19 @@ function CodeEditor(props: {
 				<div className="manual-code-actions">
 					{props.standard && (
 						<select
-							aria-label={`${props.label}C++标准`}
+							aria-label={t("{0}C++标准", props.label)}
 							value={props.standard}
 							onChange={(event) => props.onStandardChange?.(event.target.value as CppLanguage)}
 						>
 							{cppLanguageOptions.map((option) => (
 								<option value={option.value} key={option.value}>
-									{option.label}
+									{t(option.label)}
 								</option>
 							))}
 						</select>
 					)}
 					<label className="button secondary manual-file-button">
-						上传源码
+						{t("上传源码")}
 						<input
 							type="file"
 							accept={props.accept ?? ".cpp,.cc,.cxx,.txt"}
@@ -110,31 +112,32 @@ function ProgramEditor(props: {
 	optional?: boolean;
 	onChange(language: ProgramLanguage, code: string): void;
 }) {
+	const { t } = useLocale();
 	return (
 		<section className="manual-code-block">
 			<div className="manual-code-heading">
 				<div>
 					<h3>
 						{props.label}
-						{props.optional && <span className="manual-optional">可选</span>}
+						{props.optional && <span className="manual-optional">{t("可选")}</span>}
 					</h3>
 				</div>
 				<div className="manual-code-actions">
 					<select
-						aria-label={`${props.label}语言`}
+						aria-label={t("{0}语言", props.label)}
 						value={props.language}
 						onChange={(event) => props.onChange(event.target.value as ProgramLanguage, props.code)}
 					>
 						{cppLanguageOptions.map((option) => (
 							<option value={option.value} key={option.value}>
-								{option.label}
+								{t(option.label)}
 							</option>
 						))}
 						<option value="python3">Python 3</option>
 						<option value="java">Java</option>
 					</select>
 					<label className="button secondary manual-file-button">
-						上传程序
+						{t("上传程序")}
 						<input
 							type="file"
 							accept=".cpp,.cc,.cxx,.py,.java,.txt"
@@ -166,13 +169,14 @@ function ProgramEditor(props: {
 				language={props.language}
 				previewLines={20}
 				onChange={(code) => props.onChange(props.language, code)}
-				ariaLabel={`${props.label}源码`}
+				ariaLabel={t("{0}源码", props.label)}
 			/>
 		</section>
 	);
 }
 
 export function ManualWorkspace(props: Props) {
+	const { t } = useLocale();
 	const { project } = props;
 	const [tab, setTab] = useState<Tab>("statement");
 	const [programSection, setProgramSection] = useState<ProgramSection>("reference");
@@ -184,7 +188,7 @@ export function ManualWorkspace(props: Props) {
 	const [caseOutput, setCaseOutput] = useState("");
 	const [caseSubtaskId, setCaseSubtaskId] = useState(1);
 	const [includeCaseOutput, setIncludeCaseOutput] = useState(false);
-	const [caseError, setCaseError] = useState("");
+	const [caseError, setCaseError] = useState<UiMessage>("");
 	const [caseSubmitting, setCaseSubmitting] = useState(false);
 	const [selectedCases, setSelectedCases] = useState<string[]>([]);
 	const [casePreview, setCasePreview] = useState<{
@@ -194,7 +198,7 @@ export function ManualWorkspace(props: Props) {
 		verified?: string;
 		truncated: boolean;
 	}>();
-	const [caseAction, setCaseAction] = useState("");
+	const [caseAction, setCaseAction] = useState<UiMessage>("");
 	const caseSubmissionRef = useRef(false);
 	const isAcm = project.scoringMode === "acm";
 	async function previewCase(origin: "manual" | "generated", stem: string): Promise<void> {
@@ -229,7 +233,10 @@ export function ManualWorkspace(props: Props) {
 			}
 			if (
 				!window.confirm(
-					`确认按下列映射重新编号？\n${changes.map((item) => `${item.from}.in → ${item.to}.in`).join("\n")}\n已有 Gen 数据时请重新生成。`,
+					t(
+						"确认按下列映射重新编号？\n{0}\n已有 Gen 数据时请重新生成。",
+						changes.map((item) => `${item.from}.in → ${item.to}.in`).join("\n"),
+					),
 				)
 			)
 				return;
@@ -291,12 +298,18 @@ export function ManualWorkspace(props: Props) {
 
 	return (
 		<main className="page" id="workspace">
-			<div className="breadcrumb">题库 / 制题工作台 / {project.title || "未命名题目"}</div>
+			<div className="breadcrumb">
+				{t("题库 / 制题工作台 / ")}
+				{project.title || t("未命名题目")}
+			</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">手工制题 · {isAcm ? "ACM" : "OI"} · Docker</div>
-					<h1>{project.title || "新建题目"}</h1>
-					<p>上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。</p>
+					<div className="eyebrow">
+						{t("手工制题 · ")}
+						{isAcm ? "ACM" : "OI"} · Docker
+					</div>
+					<h1>{project.title || t("新建题目")}</h1>
+					<p>{t("上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。")}</p>
 				</div>
 				<div className="heading-actions">
 					<button
@@ -305,7 +318,7 @@ export function ManualWorkspace(props: Props) {
 						onClick={() => void props.onNew()}
 						disabled={!!props.busy}
 					>
-						新建题目
+						{t("新建题目")}
 					</button>
 					<button
 						className="button primary"
@@ -316,7 +329,7 @@ export function ManualWorkspace(props: Props) {
 						}}
 						disabled={!!props.busy || !project.reference.code.trim()}
 					>
-						{props.busy === "finalize" ? "验证中…" : "验证并打包"}
+						{props.busy === "finalize" ? t("验证中…") : t("验证并打包")}
 					</button>
 					{props.release && (
 						<a
@@ -324,49 +337,79 @@ export function ManualWorkspace(props: Props) {
 							href={apiUrl(props.apiOrigin, `/releases/${props.release.id}/hydro`)}
 							download={`${props.release.slug}.hydro.zip`}
 						>
-							下载 Hydro 包{currentRelease ? "" : "（历史版本）"}
+							{t("下载 Hydro 包")}
+							{currentRelease ? "" : t("（历史版本）")}
 						</a>
 					)}
 				</div>
 			</section>
 			<output className={`notice ${props.noticeTone}`} aria-live="polite">
 				<span className="notice-dot" />
-				{props.notice} · {props.saveStatus}
+				{t(props.notice)} · {t(props.saveStatus)}
 			</output>
 			<div className="manual-layout">
 				<section className="card workspace-card">
-					<div className="tabs" role="tablist" aria-label="制题步骤">
+					<div className="tabs" role="tablist" aria-label={t("制题步骤")}>
 						{tabItems.map((item) => (
 							<button
 								key={item.id}
 								className={tab === item.id ? "active" : ""}
 								type="button"
+								role="tab"
+								id={`authoring-tab-${item.id}`}
+								aria-controls={`authoring-panel-${item.id}`}
+								aria-selected={tab === item.id}
+								tabIndex={tab === item.id ? 0 : -1}
 								onClick={() => setTab(item.id)}
+								onKeyDown={(event) => {
+									const index = tabItems.findIndex((entry) => entry.id === item.id);
+									const nextIndex =
+										event.key === "ArrowRight"
+											? (index + 1) % tabItems.length
+											: event.key === "ArrowLeft"
+												? (index + tabItems.length - 1) % tabItems.length
+												: event.key === "Home"
+													? 0
+													: event.key === "End"
+														? tabItems.length - 1
+														: undefined;
+									if (nextIndex === undefined) return;
+									event.preventDefault();
+									const next = tabItems[nextIndex];
+									setTab(next.id);
+									document.getElementById(`authoring-tab-${next.id}`)?.focus();
+								}}
 							>
-								{item.label}
+								{t(item.label)}
 								{item.count !== undefined && <span className="tab-count">{item.count}</span>}
 							</button>
 						))}
 					</div>
 					{tab === "statement" && (
-						<div className="manual-statement">
+						<div
+							className="manual-statement"
+							role="tabpanel"
+							id="authoring-panel-statement"
+							aria-labelledby="authoring-tab-statement"
+						>
 							<div className="editor-grid">
 								<div className="editor-pane">
 									<div className="pane-heading">
-										<strong>Markdown 题面</strong>
-										<span>样例单独管理，不写入私有测试点</span>
+										<strong>{t("Markdown 题面")}</strong>
+										<span>{t("样例单独管理，不写入私有测试点")}</span>
 									</div>
 									<textarea
 										className="statement-editor"
+										aria-label={t("Markdown 题面")}
 										value={project.statement}
 										onChange={(event) => set("statement", event.target.value)}
-										placeholder="粘贴题目描述、输入格式、输出格式和约束…"
+										placeholder={t("粘贴题目描述、输入格式、输出格式和约束…")}
 										spellCheck={false}
 									/>
 								</div>
 								<div className="preview-pane">
 									<div className="pane-heading">
-										<strong>Hydro 题面预览</strong>
+										<strong>{t("Hydro 题面预览")}</strong>
 									</div>
 									<ProblemPreview project={project} />
 								</div>
@@ -374,21 +417,24 @@ export function ManualWorkspace(props: Props) {
 							<div className="manual-section">
 								<div className="manual-section-heading">
 									<div>
-										<h2>公开样例</h2>
-										<p>只会出现在题面中，不会自动作为私有测试数据。</p>
+										<h2>{t("公开样例")}</h2>
+										<p>{t("只会出现在题面中，不会自动作为私有测试数据。")}</p>
 									</div>
 									<button
 										className="button secondary"
 										type="button"
 										onClick={() => set("samples", [...project.samples, { input: "", output: "" }])}
 									>
-										添加样例
+										{t("添加样例")}
 									</button>
 								</div>
 								{project.samples.map((sample, index) => (
 									<div className="test-card" key={sampleKeys.current.keys[index]}>
 										<div className="test-card-heading">
-											<strong>样例 {index + 1}</strong>
+											<strong>
+												{t("样例 ")}
+												{index + 1}
+											</strong>
 											<button
 												className="text-button danger"
 												type="button"
@@ -400,12 +446,12 @@ export function ManualWorkspace(props: Props) {
 													);
 												}}
 											>
-												删除
+												{t("删除")}
 											</button>
 										</div>
 										<div className="test-columns">
 											<label>
-												<span>输入</span>
+												<span>{t("输入")}</span>
 												<textarea
 													value={sample.input}
 													onChange={(event) =>
@@ -419,7 +465,7 @@ export function ManualWorkspace(props: Props) {
 												/>
 											</label>
 											<label>
-												<span>输出</span>
+												<span>{t("输出")}</span>
 												<textarea
 													value={sample.output}
 													onChange={(event) =>
@@ -439,13 +485,19 @@ export function ManualWorkspace(props: Props) {
 						</div>
 					)}
 					{tab === "data" && (
-						<div className="tab-body manual-tab-body">
+						<div
+							className="tab-body manual-tab-body"
+							role="tabpanel"
+							id="authoring-panel-data"
+							aria-labelledby="authoring-tab-data"
+						>
 							<div className="info-strip">
-								一次选择多个 .in、.out、.ans 文件，按同名主干配对。.in
-								必需；未提供输出时由标程生成，已提供输出时由标程核对。单文件上限 64 MiB，项目默认上限 512 MiB。
+								{t(
+									"一次选择多个 .in、.out、.ans 文件，按同名主干配对。.in 必需；未提供输出时由标程生成，已提供输出时由标程核对。单文件上限 64 MiB，项目默认上限 512 MiB。",
+								)}
 							</div>
 							<label className="button secondary manual-file-button">
-								上传测试文件
+								{t("上传测试文件")}
 								<input
 									type="file"
 									accept=".in,.out,.ans"
@@ -489,30 +541,30 @@ export function ManualWorkspace(props: Props) {
 							>
 								<div className="manual-case-form-heading">
 									<div>
-										<h2>手动添加测试点</h2>
-										<p>输入留空会创建真正的空文件；空格与换行会原样保存。</p>
+										<h2>{t("手动添加测试点")}</h2>
+										<p>{t("输入留空会创建真正的空文件；空格与换行会原样保存。")}</p>
 									</div>
-									<span>每个文本栏最多 1 MiB</span>
+									<span>{t("每个文本栏最多 1 MiB")}</span>
 								</div>
 								<div className="manual-case-form-meta">
 									<label className="field">
-										<span>输入文件名</span>
+										<span>{t("输入文件名")}</span>
 										<input
 											value={caseName}
 											onChange={(event) => setCaseName(event.target.value)}
-											placeholder="留空自动编号，如 3.in"
+											placeholder={t("留空自动编号，如 3.in")}
 										/>
 									</label>
 									{!isAcm && (
 										<label className="field">
-											<span>所属子任务</span>
+											<span>{t("所属子任务")}</span>
 											<select
 												value={selectedCaseSubtaskId}
 												onChange={(event) => setCaseSubtaskId(Number(event.target.value))}
 											>
 												{project.subtasks.map((subtask) => (
 													<option key={subtask.id} value={subtask.id}>
-														子任务 {subtask.id}
+														{t("子任务 {0}", subtask.id)}
 													</option>
 												))}
 											</select>
@@ -521,48 +573,48 @@ export function ManualWorkspace(props: Props) {
 								</div>
 								<div className="manual-case-form-text">
 									<label className="field">
-										<span>测试输入</span>
+										<span>{t("测试输入")}</span>
 										<textarea
 											value={caseInput}
 											onChange={(event) => setCaseInput(event.target.value)}
-											placeholder="在这里输入测试数据；无输入题可留空"
+											placeholder={t("在这里输入测试数据；无输入题可留空")}
 											spellCheck={false}
 										/>
 									</label>
 									<label className="field">
-										<span>期望输出（可选）</span>
+										<span>{t("期望输出（可选）")}</span>
 										<span className="manual-case-output-toggle">
 											<input
 												type="checkbox"
 												checked={includeCaseOutput}
 												onChange={(event) => setIncludeCaseOutput(event.target.checked)}
 											/>
-											填写期望输出；留空则建立零字节 .out
+											{t("填写期望输出；留空则建立零字节 .out")}
 										</span>
 										<textarea
 											value={caseOutput}
 											onChange={(event) => setCaseOutput(event.target.value)}
 											disabled={!includeCaseOutput}
-											placeholder={includeCaseOutput ? "可留空" : "未勾选时由标准程序生成"}
+											placeholder={includeCaseOutput ? t("可留空") : t("未勾选时由标准程序生成")}
 											spellCheck={false}
 										/>
 									</label>
 								</div>
 								<div className="manual-case-form-actions">
-									{caseError && <p role="alert">{caseError}</p>}
+									{caseError && <p role="alert">{t(caseError)}</p>}
 									<button
 										className="button primary"
 										type="submit"
 										disabled={!!props.busy || caseSubmitting || project.subtasks.length === 0}
 									>
-										{caseSubmitting ? "保存中…" : "添加测试点"}
+										{caseSubmitting ? t("保存中…") : t("添加测试点")}
 									</button>
 								</div>
 							</form>
 							<div className="manual-section-heading">
 								<div>
-									<h2>测试点</h2>
-									<p>生成点排在手动点后；重跑 Gen 原子替换上一批生成点。</p>
+									<h2>{t("测试点")}</h2>
+									<p>{t("生成点排在手动点后；重跑 Gen 原子替换上一批生成点。")}</p>
 								</div>
 								<div className="heading-actions">
 									<button
@@ -571,25 +623,25 @@ export function ManualWorkspace(props: Props) {
 										disabled={!!props.busy}
 										onClick={() => void renumber()}
 									>
-										重新编号
+										{t("重新编号")}
 									</button>
 									<button
 										className="button secondary"
 										type="button"
 										disabled={!!props.busy || !project.cases.some((item) => item.origin === "generated")}
 										onClick={() => {
-											if (window.confirm("移除本题全部 Gen 数据？手动测试点会保留。"))
+											if (window.confirm(t("移除本题全部 Gen 数据？手动测试点会保留。")))
 												void props.onManageCases("clear-generated");
 										}}
 									>
-										移除 Gen 数据
+										{t("移除 Gen 数据")}
 									</button>
 									<button
 										className="button secondary danger"
 										type="button"
 										disabled={!!props.busy || selectedCases.length === 0}
 										onClick={() => {
-											if (window.confirm(`删除所选 ${selectedCases.length} 个手动测试点及其输出？`))
+											if (window.confirm(t("删除所选 {0} 个手动测试点及其输出？", selectedCases.length)))
 												void props
 													.onManageCases("batch-delete", selectedCases)
 													.then(() => setSelectedCases([]))
@@ -598,28 +650,28 @@ export function ManualWorkspace(props: Props) {
 													);
 										}}
 									>
-										批量删除（{selectedCases.length}）
+										{t("批量删除（{0}）", selectedCases.length)}
 									</button>
 								</div>
 							</div>
 							{caseAction && (
 								<output className="notice pending" aria-live="polite">
-									{caseAction}
+									{t(caseAction)}
 								</output>
 							)}
 							{project.cases.length === 0 ? (
-								<p className="manual-muted">尚无私有测试点。</p>
+								<p className="manual-muted">{t("尚无私有测试点。")}</p>
 							) : (
 								<div className="history-table-wrap">
 									<table className="history-table">
 										<thead>
 											<tr>
-												<th aria-label="选择" />
-												<th>输入</th>
-												<th>输出</th>
-												<th>来源</th>
-												{!isAcm && <th>子任务</th>}
-												<th>操作</th>
+												<th aria-label={t("选择")} />
+												<th>{t("输入")}</th>
+												<th>{t("输出")}</th>
+												<th>{t("来源")}</th>
+												{!isAcm && <th>{t("子任务")}</th>}
+												<th>{t("操作")}</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -629,7 +681,7 @@ export function ManualWorkspace(props: Props) {
 														{item.origin === "manual" && (
 															<input
 																type="checkbox"
-																aria-label={`选择 ${item.inputFile}`}
+																aria-label={t("选择 {0}", item.inputFile)}
 																checked={selectedCases.includes(item.id)}
 																onChange={(event) =>
 																	setSelectedCases((current) =>
@@ -665,14 +717,14 @@ export function ManualWorkspace(props: Props) {
 																{item.outputFile}
 															</a>
 														) : (
-															"标程生成"
+															t("标程生成")
 														)}
 													</td>
-													<td>{item.origin === "manual" ? "手动" : "Gen"}</td>
+													<td>{item.origin === "manual" ? t("手动") : "Gen"}</td>
 													{!isAcm && (
 														<td>
 															<select
-																aria-label={`${item.inputFile} 所属子任务`}
+																aria-label={t("{0} 所属子任务", item.inputFile)}
 																value={item.subtaskId}
 																onChange={(event) =>
 																	props.onEdit((current) => ({
@@ -703,7 +755,7 @@ export function ManualWorkspace(props: Props) {
 															type="button"
 															onClick={() => void previewCase(item.origin, item.id)}
 														>
-															预览
+															{t("预览")}
 														</button>
 														{item.origin === "manual" && (
 															<div className="history-actions">
@@ -712,7 +764,7 @@ export function ManualWorkspace(props: Props) {
 																	className="danger"
 																	onClick={() => void props.onDeleteFile(item.inputFile)}
 																>
-																	删除输入
+																	{t("删除输入")}
 																</button>
 																{item.outputFile && (
 																	<button
@@ -720,7 +772,7 @@ export function ManualWorkspace(props: Props) {
 																		className="danger"
 																		onClick={() => void props.onDeleteFile(item.outputFile!)}
 																	>
-																		删除输出
+																		{t("删除输出")}
 																	</button>
 																)}
 															</div>
@@ -736,11 +788,14 @@ export function ManualWorkspace(props: Props) {
 								<section className="case-preview card">
 									<div className="manual-section-heading">
 										<div>
-											<h3>{casePreview.name} · 输入输出预览</h3>
+											<h3>
+												{casePreview.name}
+												{t(" · 输入输出预览")}
+											</h3>
 											<p>
 												{casePreview.truncated
-													? "只显示前 32 KiB。"
-													: "上传输出与已发布答案并列显示，便于比较。"}
+													? t("只显示前 32 KiB。")
+													: t("上传输出与已发布答案并列显示，便于比较。")}
 											</p>
 										</div>
 										<button
@@ -748,36 +803,39 @@ export function ManualWorkspace(props: Props) {
 											type="button"
 											onClick={() => setCasePreview(undefined)}
 										>
-											关闭
+											{t("关闭")}
 										</button>
 									</div>
 									<div className="case-preview-grid">
 										<div>
-											<strong>输入</strong>
-											<pre>{casePreview.input || "（空输入）"}</pre>
+											<strong>{t("输入")}</strong>
+											<pre>{casePreview.input || t("（空输入）")}</pre>
 										</div>
 										<div>
-											<strong>上传输出</strong>
-											<pre>{casePreview.output ?? "（由标程生成）"}</pre>
+											<strong>{t("上传输出")}</strong>
+											<pre>{casePreview.output ?? t("（由标程生成）")}</pre>
 										</div>
 										<div>
-											<strong>已发布答案</strong>
-											<pre>{casePreview.verified ?? "（无当前版本）"}</pre>
+											<strong>{t("已发布答案")}</strong>
+											<pre>{casePreview.verified ?? t("（无当前版本）")}</pre>
 										</div>
 									</div>
 								</section>
 							)}
 							{project.orphanOutputs.length > 0 && (
-								<p className="manual-error">缺少同名 .in：{project.orphanOutputs.join("、")}</p>
+								<p className="manual-error">
+									{t("缺少同名 .in：")}
+									{project.orphanOutputs.join("、")}
+								</p>
 							)}
 							{isAcm ? (
-								<div className="info-strip">ACM 判题：所有测试点均须通过。</div>
+								<div className="info-strip">{t("ACM 判题：所有测试点均须通过。")}</div>
 							) : (
 								<section className="manual-section">
 									<div className="manual-section-heading">
 										<div>
-											<h2>OI 子任务</h2>
-											<p>各子任务分值之和为 100；测试点按 sum、min 或 max 汇总。</p>
+											<h2>{t("OI 子任务")}</h2>
+											<p>{t("各子任务分值之和为 100；测试点按 sum、min 或 max 汇总。")}</p>
 										</div>
 										<button
 											className="button secondary"
@@ -787,13 +845,13 @@ export function ManualWorkspace(props: Props) {
 												set("subtasks", [...project.subtasks, { id: nextId, type: "sum", score: 0 }]);
 											}}
 										>
-											添加子任务
+											{t("添加子任务")}
 										</button>
 									</div>
 									{project.subtasks.map((subtask) => (
 										<div className="manual-case-form-meta" key={subtask.id}>
 											<label className="field">
-												<span>子任务 {subtask.id} 分值</span>
+												<span>{t("子任务 {0} 分值", subtask.id)}</span>
 												<input
 													type="number"
 													min="0"
@@ -812,7 +870,7 @@ export function ManualWorkspace(props: Props) {
 												/>
 											</label>
 											<label className="field">
-												<span>计分方式</span>
+												<span>{t("计分方式")}</span>
 												<select
 													value={subtask.type}
 													onChange={(event) =>
@@ -845,7 +903,7 @@ export function ManualWorkspace(props: Props) {
 													)
 												}
 											>
-												删除
+												{t("删除")}
 											</button>
 										</div>
 									))}
@@ -854,28 +912,33 @@ export function ManualWorkspace(props: Props) {
 						</div>
 					)}
 					{tab === "generator" && (
-						<div className="tab-body manual-tab-body">
+						<div
+							className="tab-body manual-tab-body"
+							role="tabpanel"
+							id="authoring-panel-generator"
+							aria-labelledby="authoring-tab-generator"
+						>
 							<div className="info-strip">
-								Gen 使用所选 C++ 标准编译，沙箱内提供 testlib.h。脚本每行一条 gen 命令，支持引号参数和 #
-								注释，不执行 Shell
-								管道或变量展开。相同参数会重跑并比对输入哈希；填写第二标准程序后还会交叉核验输出。
+								{t(
+									"Gen 使用所选 C++ 标准编译，沙箱内提供 testlib.h。脚本每行一条 gen 命令，支持引号参数和 # 注释，不执行 Shell 管道或变量展开。相同参数会重跑并比对输入哈希；填写第二标准程序后还会交叉核验输出。",
+								)}
 							</div>
 							<div className="manual-generator-layout">
 								<CodeEditor
-									label="数据生成器 Gen"
+									label={t("数据生成器 Gen")}
 									value={project.generatorSource}
 									onChange={(value) => set("generatorSource", value)}
 									standard={project.generatorStandard}
 									onStandardChange={(standard) => set("generatorStandard", standard)}
-									help="可直接 #include &quot;testlib.h&quot;，编译后的命令固定为 gen。"
+									help={t('可直接 #include "testlib.h"，编译后的命令固定为 gen。')}
 								/>
 								<CodeEditor
-									label="生成脚本"
+									label={t("生成脚本")}
 									value={project.generatorScript}
 									onChange={(value) => set("generatorScript", value)}
 									syntax="gen-script"
 									accept=".txt,.sh,.gen"
-									help="示例：gen large 1000000 100；每行生成一个测试点。"
+									help={t("示例：gen large 1000000 100；每行生成一个测试点。")}
 								/>
 							</div>
 							<div className="manual-generate-actions">
@@ -890,20 +953,26 @@ export function ManualWorkspace(props: Props) {
 										!project.reference.code.trim()
 									}
 								>
-									{props.busy === "generate" ? "生成中…" : "生成并验证"}
+									{props.busy === "generate" ? t("生成中…") : t("生成并验证")}
 								</button>
 							</div>
 						</div>
 					)}
 					{tab === "programs" && (
-						<div className="tab-body manual-tab-body">
+						<div
+							className="tab-body manual-tab-body"
+							role="tabpanel"
+							id="authoring-panel-programs"
+							aria-labelledby="authoring-tab-programs"
+						>
 							<div className="info-strip">
-								标准程序和 Checker 必填；第二标准程序可选，用于独立核验输出。默认 Checker 按 Hydro
-								文本规则比较，也可选择预设或自定义 C++ testlib Checker。
+								{t(
+									"标准程序和 Checker 必填；第二标准程序可选，用于独立核验输出。默认 Checker 按 Hydro 文本规则比较，也可选择预设或自定义 C++ testlib Checker。",
+								)}
 							</div>
 							<div className="manual-program-layout">
-								<nav className="manual-program-menu" aria-label="程序与 SPJ 分区">
-									<div className="manual-program-menu-title">程序文件</div>
+								<nav className="manual-program-menu" aria-label={t("程序与 SPJ 分区")}>
+									<div className="manual-program-menu-title">{t("程序文件")}</div>
 									{programSections.map((section) => (
 										<button
 											key={section.id}
@@ -912,15 +981,17 @@ export function ManualWorkspace(props: Props) {
 											aria-current={programSection === section.id ? "true" : undefined}
 											onClick={() => setProgramSection(section.id)}
 										>
-											<span>{section.label}</span>
-											<small>{section.filled ? "已填写" : section.required ? "必填" : "可选"}</small>
+											<span>{t(section.label)}</span>
+											<small>
+												{section.filled ? t("已填写") : section.required ? t("必填") : t("可选")}
+											</small>
 										</button>
 									))}
 								</nav>
 								<div className="manual-program-panel">
 									{programSection === "reference" && (
 										<ProgramEditor
-											label="标准程序"
+											label={t("标准程序")}
 											language={project.reference.language}
 											code={project.reference.code}
 											onChange={(language, code) => set("reference", { language, code })}
@@ -928,7 +999,7 @@ export function ManualWorkspace(props: Props) {
 									)}
 									{programSection === "oracle" && (
 										<ProgramEditor
-											label="第二标准程序"
+											label={t("第二标准程序")}
 											optional
 											language={project.oracle?.language ?? "cpp17"}
 											code={project.oracle?.code ?? ""}
@@ -941,8 +1012,8 @@ export function ManualWorkspace(props: Props) {
 										<>
 											<div className="manual-checker-presets">
 												<div className="manual-checker-presets-heading">
-													<strong>预设 Checker</strong>
-													<span>点击导入可编辑的 testlib 源码，发布前仍需完整验证。</span>
+													<strong>{t("预设 Checker")}</strong>
+													<span>{t("点击导入可编辑的 testlib 源码，发布前仍需完整验证。")}</span>
 												</div>
 												<div className="manual-checker-preset-list">
 													{checkerPresets.map((preset) => (
@@ -952,13 +1023,15 @@ export function ManualWorkspace(props: Props) {
 															onClick={() => importCheckerPreset(preset)}
 														>
 															<strong>{preset.label}</strong>
-															<span>{preset.description}</span>
+															<span>{t(preset.description)}</span>
 														</button>
 													))}
 												</div>
 												{pendingCheckerPreset?.projectId === project.id && (
 													<div className="manual-checker-replace" role="alert">
-														<span>导入 {pendingCheckerPreset.preset.label} 会覆盖现有 SPJ 源码。</span>
+														<span>
+															{t("导入 {0} 会覆盖现有 SPJ 源码。", t(pendingCheckerPreset.preset.label))}
+														</span>
 														<button
 															className="button primary"
 															type="button"
@@ -971,35 +1044,35 @@ export function ManualWorkspace(props: Props) {
 																setPendingCheckerPreset(undefined);
 															}}
 														>
-															确认覆盖
+															{t("确认覆盖")}
 														</button>
 														<button
 															className="button secondary"
 															type="button"
 															onClick={() => setPendingCheckerPreset(undefined)}
 														>
-															取消
+															{t("取消")}
 														</button>
 													</div>
 												)}
 											</div>
 											<div className="manual-checker-preset-list">
 												<button type="button" onClick={() => set("checkerMode", "text")}>
-													<strong>默认文本比对</strong>
-													<span>统一换行，忽略行尾空格与末尾空行</span>
+													<strong>{t("默认文本比对")}</strong>
+													<span>{t("统一换行，忽略行尾空格与末尾空行")}</span>
 												</button>
 												<button type="button" onClick={() => set("checkerMode", "custom")}>
-													<strong>自定义 Checker</strong>
-													<span>编辑 C++ testlib 判定代码</span>
+													<strong>{t("自定义 Checker")}</strong>
+													<span>{t("编辑 C++ testlib 判定代码")}</span>
 												</button>
 											</div>
 											<p className="manual-muted">
-												当前：
+												{t("当前：")}
 												{project.checkerMode === "text"
-													? "文本比对 Checker"
+													? t("文本比对 Checker")
 													: project.checkerMode === "custom"
-														? "自定义 Checker"
-														: "旧草稿尚未选择 Checker"}
+														? t("自定义 Checker")
+														: t("旧草稿尚未选择 Checker")}
 											</p>
 											{project.checkerMode === "custom" && (
 												<CodeEditor
@@ -1008,7 +1081,7 @@ export function ManualWorkspace(props: Props) {
 													onChange={(value) => set("checkerSource", value)}
 													standard={project.checkerStandard}
 													onStandardChange={(standard) => set("checkerStandard", standard)}
-													help="使用 registerTestlibCmd(argc, argv)，正确输出必须得到满分。"
+													help={t("使用 registerTestlibCmd(argc, argv)，正确输出必须得到满分。")}
 													previewLines={20}
 												/>
 											)}
@@ -1016,12 +1089,12 @@ export function ManualWorkspace(props: Props) {
 									)}
 									{programSection === "validator" && (
 										<CodeEditor
-											label="输入校验器 · C++ testlib validator"
+											label={t("输入校验器 · C++ testlib validator")}
 											value={project.validatorSource}
 											onChange={(value) => set("validatorSource", value)}
 											standard={project.validatorStandard}
 											onStandardChange={(standard) => set("validatorStandard", standard)}
-											help="使用 registerValidation(argc, argv) 校验所有正式输入。"
+											help={t("使用 registerValidation(argc, argv) 校验所有正式输入。")}
 											previewLines={20}
 										/>
 									)}
@@ -1030,11 +1103,20 @@ export function ManualWorkspace(props: Props) {
 						</div>
 					)}
 					{tab === "validation" && (
-						<div className="tab-body manual-tab-body">
+						<div
+							className="tab-body manual-tab-body"
+							role="tabpanel"
+							id="authoring-panel-validation"
+							aria-labelledby="authoring-tab-validation"
+						>
 							<div className="manual-section-heading">
 								<div>
-									<h2>完整验证</h2>
-									<p>编译、生成复现、输入校验、标准程序、可选第二标准程序与 Checker 判定均通过后才发放包。</p>
+									<h2>{t("完整验证")}</h2>
+									<p>
+										{t(
+											"编译、生成复现、输入校验、标准程序、可选第二标准程序与 Checker 判定均通过后才发放包。",
+										)}
+									</p>
 								</div>
 								<button
 									className="button primary"
@@ -1042,7 +1124,7 @@ export function ManualWorkspace(props: Props) {
 									onClick={() => void props.onFinalize()}
 									disabled={!!props.busy || !project.reference.code.trim()}
 								>
-									{props.busy === "finalize" ? "验证中…" : "验证并打包"}
+									{props.busy === "finalize" ? t("验证中…") : t("验证并打包")}
 								</button>
 							</div>
 							{report ? (
@@ -1051,21 +1133,21 @@ export function ManualWorkspace(props: Props) {
 										<strong>
 											{report.mode === "generate"
 												? report.success
-													? "Gen 生成与验证通过 · 尚需完整验证"
-													: "Gen 生成或验证未通过"
+													? t("Gen 生成与验证通过 · 尚需完整验证")
+													: t("Gen 生成或验证未通过")
 												: reportIsCurrent
 													? report.success
-														? "本地完整验证通过"
-														: "本地验证未通过"
-													: "历史验证报告 · 当前草稿待验证"}
+														? t("本地完整验证通过")
+														: t("本地验证未通过")
+													: t("历史验证报告 · 当前草稿待验证")}
 										</strong>
 										<span>
-											版本 {report.revision ?? "—"} · {report.caseCount} 个测试点 · 标程已运行
+											{t("版本 {0} · {1} 个测试点 · 标程已运行", report.revision ?? "—", report.caseCount)}
 											{report.oracleCount
-												? ` · 第二标准程序核验 ${report.oracleCount} 点`
-												: " · 未提供第二标准程序"}
-											{report.validatorUsed ? " · 输入校验器已运行" : " · 输入约束未经校验"}
-											{report.checkerUsed ? " · SPJ 已测试" : ""}
+												? t(" · 第二标准程序核验 {0} 点", report.oracleCount)
+												: t(" · 未提供第二标准程序")}
+											{report.validatorUsed ? t(" · 输入校验器已运行") : t(" · 输入约束未经校验")}
+											{report.checkerUsed ? t(" · SPJ 已测试") : ""}
 										</span>
 									</div>
 									<div className="manual-check-list">
@@ -1075,15 +1157,16 @@ export function ManualWorkspace(props: Props) {
 												className={`manual-check ${check.passed ? "passed" : "failed"}`}
 											>
 												<strong>
-													{check.passed ? "通过" : "失败"} · {checkLabels[check.stage] ?? check.stage}
+													{check.passed ? t("通过") : t("失败")} ·{" "}
+													{t(checkLabels[check.stage] ?? check.stage)}
 													{check.caseId ? ` · ${check.caseId}` : ""}
 												</strong>
-												<span>{check.message}</span>
+												<span>{t(check.message)}</span>
 												{(check.verdict || check.score !== undefined || check.durationMs !== undefined) && (
 													<small className="manual-muted">
 														{[
 															check.verdict,
-															check.score !== undefined ? `${check.score} 分` : undefined,
+															check.score !== undefined ? t("{0} 分", check.score) : undefined,
 															check.durationMs !== undefined ? `${check.durationMs} ms` : undefined,
 														]
 															.filter(Boolean)
@@ -1091,14 +1174,17 @@ export function ManualWorkspace(props: Props) {
 													</small>
 												)}
 												{!check.passed && check.logPath && (
-													<small className="manual-muted">原始日志：制题工程 ZIP / {check.logPath}</small>
+													<small className="manual-muted">
+														{t("原始日志：制题工程 ZIP / ")}
+														{check.logPath}
+													</small>
 												)}
 											</div>
 										))}
 									</div>
 								</>
 							) : (
-								<p className="manual-muted">尚未运行完整验证。</p>
+								<p className="manual-muted">{t("尚未运行完整验证。")}</p>
 							)}
 							{props.release && (
 								<div className="manual-release-actions">
@@ -1107,14 +1193,14 @@ export function ManualWorkspace(props: Props) {
 										href={apiUrl(props.apiOrigin, `/releases/${props.release.id}/hydro`)}
 										download={`${props.release.slug}.hydro.zip`}
 									>
-										下载 Hydro 包
+										{t("下载 Hydro 包")}
 									</a>
 									<a
 										className="button secondary button-link"
 										href={apiUrl(props.apiOrigin, `/releases/${props.release.id}/source`)}
 										download={`${props.release.slug}.authoring.zip`}
 									>
-										下载制题工程
+										{t("下载制题工程")}
 									</a>
 									<a
 										className="button secondary button-link"
@@ -1122,24 +1208,25 @@ export function ManualWorkspace(props: Props) {
 										target="_blank"
 										rel="noreferrer"
 									>
-										查看报告 JSON
+										{t("查看报告 JSON")}
 									</a>
 								</div>
 							)}
 							{props.release && !currentRelease && (
-								<p className="manual-muted">当前草稿已修改；上方下载的是此前验证通过的版本。</p>
+								<p className="manual-muted">{t("当前草稿已修改；上方下载的是此前验证通过的版本。")}</p>
 							)}
 							{props.release?.liveVerification && (
 								<div
 									className={`manual-report-status ${props.release.liveVerification.success ? "passed" : "failed"}`}
 								>
 									<strong>
-										历史 Hydro 实测：{props.release.liveVerification.success ? "通过" : "未通过"}
+										{t("历史 Hydro 实测：")}
+										{props.release.liveVerification.success ? t("通过") : t("未通过")}
 									</strong>
 									<span>
 										{props.release.liveVerification.reference.verdict}
 										{props.release.liveVerification.reference.score !== undefined
-											? ` · ${props.release.liveVerification.reference.score} 分`
+											? t(" · {0} 分", props.release.liveVerification.reference.score)
 											: ""}
 										{` · ${props.release.liveVerification.message}`}
 									</span>
@@ -1150,36 +1237,39 @@ export function ManualWorkspace(props: Props) {
 				</section>
 				<aside className="manual-sidebar">
 					<section className="card manual-side-card">
-						<h2>题目配置</h2>
-						<p>赛制：{isAcm ? "ACM（全部通过）" : "OI（子任务计分）"}</p>
+						<h2>{t("题目配置")}</h2>
+						<p>
+							{t("赛制：")}
+							{isAcm ? t("ACM（全部通过）") : t("OI（子任务计分）")}
+						</p>
 						<label className="field">
-							<span>题目标题</span>
+							<span>{t("题目标题")}</span>
 							<input
 								value={project.title}
 								onChange={(event) => set("title", event.target.value)}
-								placeholder="例如 A + B"
+								placeholder={t("例如 A + B")}
 							/>
 						</label>
 						<label className="field">
-							<span>目录标识 slug</span>
+							<span>{t("目录标识 slug")}</span>
 							<input
 								value={project.slug}
 								onChange={(event) => set("slug", event.target.value)}
-								placeholder="例如 a-plus-b"
+								placeholder={t("例如 a-plus-b")}
 								spellCheck={false}
 							/>
 						</label>
 						<label className="field">
-							<span>标签</span>
+							<span>{t("标签")}</span>
 							<input
 								value={project.tags.join(", ")}
 								onChange={(event) => set("tags", parseTags(event.target.value))}
-								placeholder="入门, 模拟"
+								placeholder={t("入门, 模拟")}
 							/>
 						</label>
 						<div className="manual-limit-grid">
 							<label className="field">
-								<span>时间限制</span>
+								<span>{t("时间限制")}</span>
 								<input
 									value={project.timeLimit}
 									onChange={(event) => set("timeLimit", event.target.value)}
@@ -1187,7 +1277,7 @@ export function ManualWorkspace(props: Props) {
 								/>
 							</label>
 							<label className="field">
-								<span>内存限制</span>
+								<span>{t("内存限制")}</span>
 								<input
 									value={project.memoryLimit}
 									onChange={(event) => set("memoryLimit", event.target.value)}
@@ -1197,10 +1287,10 @@ export function ManualWorkspace(props: Props) {
 						</div>
 					</section>
 					<section className="card manual-side-card">
-						<h2>题面附件</h2>
-						<p>在题面中使用 file://文件名 引用。</p>
+						<h2>{t("题面附件")}</h2>
+						<p>{t("在题面中使用 file://文件名 引用。")}</p>
 						<label className="button secondary manual-file-button">
-							上传附件
+							{t("上传附件")}
 							<input
 								type="file"
 								multiple
@@ -1224,7 +1314,7 @@ export function ManualWorkspace(props: Props) {
 										)
 									}
 								>
-									删除
+									{t("删除")}
 								</button>
 							</div>
 						))}
@@ -1232,9 +1322,9 @@ export function ManualWorkspace(props: Props) {
 					{isAcm && (
 						<section className="card manual-side-card">
 							<h2>DOMjudge PDF</h2>
-							<p>DOMjudge 包默认不含题面；上传 PDF 后才会附带原文件。</p>
+							<p>{t("DOMjudge 包默认不含题面；上传 PDF 后才会附带原文件。")}</p>
 							<label className="button secondary manual-file-button">
-								{project.domjudgePdf ? "替换 PDF" : "上传 PDF"}
+								{project.domjudgePdf ? t("替换 PDF") : t("上传 PDF")}
 								<input
 									type="file"
 									accept="application/pdf,.pdf"
@@ -1259,19 +1349,22 @@ export function ManualWorkspace(props: Props) {
 										type="button"
 										onClick={() => void props.onDeleteDomjudgePdf()}
 									>
-										删除
+										{t("删除")}
 									</button>
 								</div>
 							)}
 						</section>
 					)}
 					<section className="card manual-side-card">
-						<h2>运行状态</h2>
-						<p>{props.sandbox?.message ?? "正在检测 Linux 沙箱…"}</p>
-						<p>草稿版本：{project.revision}</p>
+						<h2>{t("运行状态")}</h2>
+						<p>{props.sandbox?.message ? t(props.sandbox.message) : t("正在检测 Linux 沙箱…")}</p>
+						<p>{t("草稿版本：{0}", project.revision)}</p>
 						<p>
-							测试点：{project.cases.length}（Gen{" "}
-							{project.cases.filter((item) => item.origin === "generated").length}）
+							{t(
+								"测试点：{0}（Gen {1}）",
+								project.cases.length,
+								project.cases.filter((item) => item.origin === "generated").length,
+							)}
 						</p>
 					</section>
 				</aside>
