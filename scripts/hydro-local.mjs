@@ -13,6 +13,7 @@ const dataRoot = join(root, ".hydro-problem-make");
 const runtimeRoot = join(dataRoot, "runtime");
 const image = "hydro-problem-make/sandbox:local";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmRegistry = process.env.HYDRO_NPM_REGISTRY?.trim() || "https://registry.npmmirror.com";
 const services = {
 	api: { script: "dev:hydro-api", port: 4321, url: "http://127.0.0.1:4321/api/health" },
 	web: { script: "dev:hydro-web", port: 5173, url: "http://127.0.0.1:5173/" },
@@ -43,6 +44,24 @@ function run(command, args) {
 	const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
 	if (result.error) throw result.error;
 	if (result.status !== 0) throw new Error(`${command} 退出码 ${result.status ?? "未知"}。`);
+}
+
+function npmArgs(args) {
+	return ["--registry", npmRegistry, ...args];
+}
+
+function runNpm(args) {
+	run(npm, npmArgs(args));
+}
+
+function hasValidModelData() {
+	const result = spawnSync(
+		npm,
+		npmArgs(["run", "check:model-data", "--workspace=@earendil-works/pi-ai"]),
+		{ cwd: root, stdio: "ignore" },
+	);
+	if (result.error) throw result.error;
+	return result.status === 0;
 }
 
 function output(command, args) {
@@ -222,7 +241,19 @@ async function startAll() {
 }
 
 function installDependencies() {
-	run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+	runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+	if (!hasValidModelData()) {
+		console.log("模型数据缺失或校验失败，正在生成模型数据。");
+		runNpm(["run", "hydrate-model-data", "--workspace=@earendil-works/pi-ai"]);
+	}
+	runNpm(["run", "check:model-data", "--workspace=@earendil-works/pi-ai"]);
+	runNpm(["run", "build:offline", "--workspace=@earendil-works/pi-ai"]);
+	for (const workspace of [
+		"@earendil-works/pi-telemetry",
+		"@hydro-problem-make/authoring",
+		"@hydro-problem-make/server",
+		"@hydro-problem-make/web",
+	]) runNpm(["run", "build", `--workspace=${workspace}`]);
 	run("docker", ["build", "-t", image, "packages/hydro-server/sandbox"]);
 }
 
@@ -239,7 +270,7 @@ function checkUpgrade() {
 function printDryRun(command, options) {
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
-		console.log(`将执行 npm ci --ignore-scripts --no-audit --no-fund、docker build -t ${image} packages/hydro-server/sandbox，然后启动 API 与网页。`);
+		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再执行 pi-ai 离线构建、其余工作区构建、docker build -t ${image} packages/hydro-server/sandbox，然后启动 API 与网页。`);
 	} else if (command === "uninstall") {
 		console.log(`将停止托管服务、删除 ${image} 镜像及 ${runtimeRoot}。`);
 		if (options.has("--purge-data")) console.log(`还将永久删除 ${dataRoot}。`);

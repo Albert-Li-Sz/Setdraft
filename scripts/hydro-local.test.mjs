@@ -16,11 +16,24 @@ test("quick install and upgrade dry runs list the exact preparation steps", () =
 	const install = command("sh", [join(root, "install.sh"), "--dry-run"]);
 	assert.equal(install.status, 0, install.stderr);
 	assert.match(install.stdout, /npm ci --ignore-scripts/);
+	assert.match(install.stdout, /npm 镜像 https:\/\/registry\.npmmirror\.com/);
+	assert.match(install.stdout, /模型数据缺失时先补齐/);
 	assert.match(install.stdout, /docker build -t hydro-problem-make\/sandbox:local/);
 	const upgrade = command("sh", [join(root, "upgrade.sh"), "--dry-run"]);
 	assert.equal(upgrade.status, 0, upgrade.stderr);
 	assert.match(upgrade.stdout, /git fetch origin main/);
 	assert.match(upgrade.stdout, /git merge --ff-only FETCH_HEAD/);
+});
+
+test("model catalog loads its JSON snapshot before the API starts", () => {
+	const models = command(process.execPath, [
+		"--import",
+		"tsx",
+		"--input-type=module",
+		"-e",
+		'import { MODELS } from "./packages/ai/src/models.generated.ts"; if (!MODELS["amazon-bedrock"]) throw new Error("Bedrock models missing");',
+	]);
+	assert.equal(models.status, 0, models.stderr);
 });
 
 test("uninstall dry run makes data and dependency deletion explicit", () => {

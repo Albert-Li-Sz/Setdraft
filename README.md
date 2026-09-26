@@ -14,8 +14,9 @@ cd Hydro-Problem-Maker-Agent
 ./install.sh
 ```
 
-安装脚本执行 `npm ci --ignore-scripts`、构建 GCC 16.2 沙箱并启动服务。网页地址是
-`http://127.0.0.1:5173/`，API 地址是 `http://127.0.0.1:4321/`。
+安装脚本使用 `https://registry.npmmirror.com` 安装依赖，校验仓库内的模型数据快照，
+构建工作区和 GCC 16.2 沙箱后启动服务。可用 `HYDRO_NPM_REGISTRY` 覆盖 npm 镜像地址。
+网页地址是 `http://127.0.0.1:5173/`，API 地址是 `http://127.0.0.1:4321/`。
 
 ```bash
 ./upgrade.sh                 # 检查干净的 main 分支后快进更新并重启
