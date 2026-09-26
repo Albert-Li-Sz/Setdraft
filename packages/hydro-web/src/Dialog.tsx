@@ -1,0 +1,77 @@
+import { type ReactNode, useEffect, useRef } from "react";
+
+export function Dialog({
+	open,
+	onClose,
+	labelledBy,
+	children,
+}: {
+	open: boolean;
+	onClose(): void;
+	labelledBy: string;
+	children: ReactNode;
+}) {
+	const ref = useRef<HTMLDialogElement>(null);
+	useEffect(() => {
+		const dialog = ref.current;
+		if (!dialog) return;
+		if (open && !dialog.open) dialog.showModal();
+		if (!dialog.open) return;
+		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			if (!open) dialog.close();
+			return;
+		}
+		const animation = dialog.animate(
+			open
+				? [
+						{ opacity: 0, transform: "translateY(18px) scale(0.96)" },
+						{ opacity: 1, transform: "translateY(0) scale(1)" },
+					]
+				: [
+						{ opacity: 1, transform: "translateY(0) scale(1)" },
+						{ opacity: 0, transform: "translateY(8px) scale(0.98)" },
+					],
+			{ duration: open ? 420 : 180, easing: open ? "cubic-bezier(0.16, 1, 0.3, 1)" : "ease-in", fill: "forwards" },
+		);
+		void animation.finished
+			.then(() => {
+				if (!open) dialog.close();
+			})
+			.catch(() => {
+				/* A rapid reopen cancels the previous transition. */
+			});
+		return () => animation.cancel();
+	}, [open]);
+	return (
+		<dialog
+			ref={ref}
+			className="card confirmation-dialog motion-dialog"
+			aria-labelledby={labelledBy}
+			data-closing={!open}
+			inert={!open}
+			onCancel={(event) => {
+				event.preventDefault();
+				onClose();
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Escape") {
+					event.preventDefault();
+					onClose();
+				}
+			}}
+			onClick={(event) => {
+				if (event.target !== event.currentTarget) return;
+				const bounds = event.currentTarget.getBoundingClientRect();
+				if (
+					event.clientX < bounds.left ||
+					event.clientX > bounds.right ||
+					event.clientY < bounds.top ||
+					event.clientY > bounds.bottom
+				)
+					onClose();
+			}}
+		>
+			{children}
+		</dialog>
+	);
+}

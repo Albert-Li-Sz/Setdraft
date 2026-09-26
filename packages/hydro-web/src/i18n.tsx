@@ -84,11 +84,10 @@ export function useLocale() {
 export function LocaleSwitcher() {
 	const { locale, setLocale, t } = useLocale();
 	return (
-		<fieldset className="locale-switcher" aria-label={t("界面语言")}>
+		<fieldset className="locale-switcher" data-locale={locale} aria-label={t("界面语言")}>
 			<button type="button" lang="zh-CN" aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>
 				中文
 			</button>
-			<span aria-hidden="true" />
 			<button type="button" lang="en" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>
 				EN
 			</button>

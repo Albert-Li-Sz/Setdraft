@@ -1,130 +1,172 @@
+import { useState } from "react";
 import { Icon } from "./Icon.tsx";
-import { useLocale } from "./i18n.tsx";
+import { type UiMessage, useLocale } from "./i18n.tsx";
 import type { ProjectSnapshot, SandboxStatus } from "./platform.ts";
 
-const workflowSteps = [
-	{ number: "01", icon: "file", title: "写下题目", description: "用 Markdown 编写题面，整理样例与思路。" },
-	{ number: "02", icon: "code", title: "打磨数据", description: "导入测试点，或用生成器覆盖每一种边界。" },
-	{ number: "03", icon: "layers", title: "验证与发布", description: "在隔离沙箱中验证，导出可交付的题目包。" },
+const shortcuts = [
+	{ href: "#records", icon: "files", label: "制题记录", description: "草稿与发布包" },
+	{ href: "#chat", icon: "chat", label: "AI 对话", description: "题目讨论与代码分析" },
+	{ href: "#contests", icon: "layers", label: "竞赛", description: "组题与竞赛包导出" },
 ] as const;
 
 export function WorkspaceHome({
 	projects,
 	sandbox,
+	message,
 	onNew,
 	onOpen,
 }: {
 	projects: ProjectSnapshot[];
 	sandbox?: SandboxStatus;
+	message?: UiMessage;
 	onNew(): void;
 	onOpen(id: string): Promise<void>;
 }) {
 	const { t, locale } = useLocale();
-	const recent = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 3);
+	const [opening, setOpening] = useState<string>();
+	const recent = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+	async function open(id: string) {
+		setOpening(id);
+		try {
+			await onOpen(id);
+		} finally {
+			setOpening(undefined);
+		}
+	}
 	return (
-		<main className="page studio-home">
-			<section className="studio-hero">
-				<div className="studio-intro">
-					<div className="eyebrow">
-						<span className="eyebrow-line" />
-						{t("为出题者，留一处专注的空间")}
+		<main className="page workspace-home">
+			<section className="home-heading">
+				<div>
+					<div className="home-location">
+						<Icon name="grid" />
+						{t("本地工作区")}
 					</div>
-					<h1>
-						{t("把灵感，")}
-						<br />
-						<span>{t("写成好题。")}</span>
-					</h1>
-					<p className="studio-description">
-						{t("从第一行题面，到最后一次验证。让创作井然有序，让每一道题都准备就绪。")}
-					</p>
-					<div className="studio-actions">
-						<button className="button primary" type="button" onClick={onNew}>
-							<Icon name="plus" />
-							{t("新建题目")}
-							<Icon name="arrow" />
-						</button>
-						<a className="studio-text-link" href="#records">
-							{t("打开制题记录")}
-							<span aria-hidden="true">↗</span>
-						</a>
-					</div>
-					<div className="studio-meta">
-						<span className={`service-dot ${sandbox?.available ? "ready" : ""}`} />
-						{sandbox?.available ? t("本地沙箱就绪") : sandbox ? t("沙箱尚未就绪") : t("正在连接工作区")}
-						<span className="meta-divider" />
-						{t("数据保存在本机")}
-					</div>
+					<h1>{t("工作台")}</h1>
+					<p>{t("管理题目、测试数据与发布包。")}</p>
 				</div>
-				<div className="studio-object" aria-hidden="true">
-					<div className="object-coordinate">HYDRO / 01</div>
-					<div className="object-sheet object-sheet-back" />
-					<div className="object-sheet object-sheet-middle" />
-					<div className="object-sheet object-sheet-front">
-						<div className="object-sheet-header">
-							<span>PROBLEM / A</span>
-							<Icon name="file" />
-						</div>
-						<div className="object-formula">
-							a <span>+</span> b
-						</div>
-						<div className="object-lines">
-							<i />
-							<i />
-							<i />
-						</div>
-						<div className="object-code">
-							<span>01</span>
-							<code>read(a, b)</code>
-							<span>02</span>
-							<code>return a + b</code>
-						</div>
-						<div className="object-sheet-footer">
-							<span>INPUT → OUTPUT</span>
-							<Icon name="check" />
-						</div>
-					</div>
-					<div className="object-caption">
-						<span />
-						{t("每一步，都有依据。")}
-					</div>
-				</div>
+				<button className="button primary" type="button" onClick={onNew}>
+					<Icon name="plus" />
+					{t("新建题目")}
+				</button>
 			</section>
-			<section className="studio-workflow" aria-label={t("制题流程")}>
-				{workflowSteps.map((step) => (
-					<div className="studio-step" key={step.number}>
-						<div className="studio-step-top">
-							<span>{step.number}</span>
-							<Icon name={step.icon} />
+			<section className="home-shortcuts" aria-label={t("快捷入口")}>
+				{shortcuts.map((shortcut) => (
+					<a className="home-shortcut" href={shortcut.href} key={shortcut.href}>
+						<span className="shortcut-icon">
+							<Icon name={shortcut.icon} />
+						</span>
+						<div>
+							<h2>{t(shortcut.label)}</h2>
+							<p>{t(shortcut.description)}</p>
 						</div>
-						<h2>{t(step.title)}</h2>
-						<p>{t(step.description)}</p>
-					</div>
+						<Icon name="arrow" className="shortcut-arrow" />
+					</a>
 				))}
 			</section>
-			{recent.length > 0 && (
-				<section className="studio-recent">
-					<div className="studio-section-heading">
-						<h2>{t("继续创作")}</h2>
+			<div className="home-layout">
+				<section className="card home-projects">
+					<div className="home-section-heading">
+						<h2>
+							{t("最近草稿")}
+							<span>{projects.length}</span>
+						</h2>
 						<a href="#records">
-							{t("全部草稿")} <span aria-hidden="true">↗</span>
+							{t("查看全部")}
+							<Icon name="arrow" />
 						</a>
 					</div>
-					{recent.map((project) => (
-						<button
-							type="button"
-							className="studio-recent-row"
-							key={project.id}
-							onClick={() => void onOpen(project.id)}
-						>
-							<Icon name="file" />
-							<strong>{project.title || t("未命名题目")}</strong>
-							<span>{project.scoringMode.toUpperCase()}</span>
-							<time dateTime={project.updatedAt}>{new Date(project.updatedAt).toLocaleDateString(locale)}</time>
-							<Icon name="arrow" className="studio-recent-arrow" />
-						</button>
-					))}
+					{message && (
+						<output className="notice failed" role="alert">
+							{t(message)}
+						</output>
+					)}
+					{recent.length > 0 ? (
+						<div className="home-project-list">
+							{recent.map((project) => (
+								<button
+									type="button"
+									className="home-project-row"
+									key={project.id}
+									disabled={!!opening}
+									aria-busy={opening === project.id}
+									onClick={() => void open(project.id)}
+								>
+									<span className="project-file-icon">
+										<Icon name="file" />
+									</span>
+									<span className="project-row-copy">
+										<strong>{project.title || t("未命名题目")}</strong>
+										<small className="project-row-meta">
+											{project.scoringMode.toUpperCase()}
+											<span>·</span>
+											{t("测试点 {0}", project.cases.length)}
+											<span>·</span>
+											{t("版本 {0}", project.revision)}
+										</small>
+									</span>
+									<time dateTime={project.updatedAt}>
+										{new Date(project.updatedAt).toLocaleDateString(locale, {
+											month: "short",
+											day: "numeric",
+										})}
+									</time>
+									<Icon
+										name={opening === project.id ? "loader" : "arrow"}
+										className={opening === project.id ? "loading-icon" : "project-row-arrow"}
+									/>
+								</button>
+							))}
+						</div>
+					) : (
+						<div className="home-empty">
+							<Icon name="files" />
+							<h3>{t("暂无草稿")}</h3>
+							<p>{t("新建题目后，草稿将显示在这里。")}</p>
+						</div>
+					)}
 				</section>
-			)}
+				<aside className="home-side">
+					<section className="card home-environment">
+						<div className="home-environment-heading">
+							<span className="environment-icon">
+								<Icon name="terminal" />
+							</span>
+							<h2>{t("运行环境")}</h2>
+						</div>
+						<dl>
+							<div>
+								<dt>{t("本地沙箱")}</dt>
+								<dd>
+									<span className={`environment-dot ${sandbox?.available ? "ready" : ""}`} />
+									{sandbox?.available ? t("已就绪") : sandbox ? t("未就绪") : t("检测中")}
+								</dd>
+							</div>
+							<div>
+								<dt>{t("数据存储")}</dt>
+								<dd>{t("本机")}</dd>
+							</div>
+							<div>
+								<dt>{t("支持赛制")}</dt>
+								<dd>ACM / OI</dd>
+							</div>
+						</dl>
+						<a className="home-settings-link" href="#settings">
+							{t("环境设置")}
+							<Icon name="arrow" />
+						</a>
+					</section>
+					<a href="#tasks" className="card home-task-link">
+						<span className="shortcut-icon">
+							<Icon name="activity" />
+						</span>
+						<span>
+							<strong>{t("任务状态")}</strong>
+							<small className="home-task-caption">{t("查看后台任务进度")}</small>
+						</span>
+						<Icon name="arrow" className="shortcut-arrow" />
+					</a>
+				</aside>
+			</div>
 		</main>
 	);
 }

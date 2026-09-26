@@ -1,7 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { RevisionConflict, requestJson } from "./api-client.ts";
+import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { LocaleSwitcher, type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
+import { Navigation } from "./Navigation.tsx";
 import {
 	apiUrl,
 	type BackgroundTask,
@@ -568,27 +570,7 @@ export function App() {
 							Hydro<span>PROBLEM MAKE</span>
 						</span>
 					</a>
-					<nav className="main-nav" aria-label={t("主导航")}>
-						<a className={page === "workspace" ? "active" : ""} href="#workspace">
-							{t("制题工作台")}
-						</a>
-						<a className={page === "chat" ? "active" : ""} href="#chat">
-							{t("AI 对话")}
-						</a>
-						<a className={page === "records" ? "active" : ""} href="#records">
-							{t("制题记录")}
-						</a>
-						<a className={page === "contests" ? "active" : ""} href="#contests">
-							{t("竞赛")}
-						</a>
-						<a className={page === "tasks" ? "active" : ""} href="#tasks">
-							{t("任务")}
-							{activeTask && ["queued", "running"].includes(activeTask.state) ? t(" · 进行中") : ""}
-						</a>
-						<a className={page === "settings" ? "active" : ""} href="#settings">
-							{t("设置")}
-						</a>
-					</nav>
+					<Navigation page={page} taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)} />
 					<div className="header-tools">
 						<LocaleSwitcher />
 					</div>
@@ -624,6 +606,7 @@ export function App() {
 						<WorkspaceHome
 							projects={projects}
 							sandbox={sandbox}
+							message={recordsTone === "failed" ? recordsMessage : undefined}
 							onNew={() => setChoosingScoringMode(true)}
 							onOpen={openProject}
 						/>
@@ -660,47 +643,42 @@ export function App() {
 					/>
 				)}
 			</Suspense>
-			{choosingScoringMode && (
-				<div className="confirmation-backdrop" role="presentation">
-					<div
-						className="card confirmation-dialog"
-						role="dialog"
-						aria-modal="true"
-						aria-labelledby="scoring-mode-title"
-					>
-						<div className="confirmation-heading">
-							<span>{t("新建题目")}</span>
-							<h2 id="scoring-mode-title">{t("选择赛制")}</h2>
-						</div>
-						<p>{t("选择适合这道题的计分方式。创建后赛制固定。")}</p>
-						<div className="scoring-options">
-							<button type="button" onClick={() => void newProject("acm")}>
-								<span className="scoring-symbol">ACM</span>
-								<span className="scoring-copy">
-									<strong>{t("全部通过")}</strong>
-									<small className="scoring-description">
-										{t("所有测试点通过即得分。支持 Hydro 与 DOMjudge。")}
-									</small>
-								</span>
-								<Icon name="arrow" />
-							</button>
-							<button type="button" onClick={() => void newProject("oi")}>
-								<span className="scoring-symbol">OI</span>
-								<span className="scoring-copy">
-									<strong>{t("子任务计分")}</strong>
-									<small className="scoring-description">{t("按子任务分配分值。支持 Hydro。")}</small>
-								</span>
-								<Icon name="arrow" />
-							</button>
-						</div>
-						<div className="confirmation-actions">
-							<button className="button secondary" type="button" onClick={() => setChoosingScoringMode(false)}>
-								{t("取消")}
-							</button>
-						</div>
-					</div>
+			<Dialog
+				open={choosingScoringMode}
+				onClose={() => setChoosingScoringMode(false)}
+				labelledBy="scoring-mode-title"
+			>
+				<div className="confirmation-heading">
+					<span>{t("新建题目")}</span>
+					<h2 id="scoring-mode-title">{t("选择赛制")}</h2>
 				</div>
-			)}
+				<p>{t("选择适合这道题的计分方式。创建后赛制固定。")}</p>
+				<div className="scoring-options">
+					<button type="button" onClick={() => void newProject("acm")}>
+						<span className="scoring-symbol">ACM</span>
+						<span className="scoring-copy">
+							<strong>{t("全部通过")}</strong>
+							<small className="scoring-description">
+								{t("所有测试点通过即得分。支持 Hydro 与 DOMjudge。")}
+							</small>
+						</span>
+						<Icon name="arrow" />
+					</button>
+					<button type="button" onClick={() => void newProject("oi")}>
+						<span className="scoring-symbol">OI</span>
+						<span className="scoring-copy">
+							<strong>{t("子任务计分")}</strong>
+							<small className="scoring-description">{t("按子任务分配分值。支持 Hydro。")}</small>
+						</span>
+						<Icon name="arrow" />
+					</button>
+				</div>
+				<div className="confirmation-actions">
+					<button className="button secondary" type="button" onClick={() => setChoosingScoringMode(false)}>
+						{t("取消")}
+					</button>
+				</div>
+			</Dialog>
 			{conflictSnapshot && (
 				<div className="confirmation-backdrop" role="presentation">
 					<div
@@ -739,8 +717,7 @@ export function App() {
 			)}
 			<footer className="site-footer">
 				<span className="footer-name">Hydro Problem Make</span>
-				<span className="footer-tagline">{t("专注出题，自在创作。")}</span>
-				<span className="footer-detail">LOCAL WORKSPACE</span>
+				<span className="footer-detail">{t("本地工作区")}</span>
 			</footer>
 		</>
 	);

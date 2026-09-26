@@ -576,9 +576,9 @@ export function AiChatPage(props: Props) {
 							))
 						) : !busy ? (
 							<div className="manual-chat-empty">
-								<Icon name="spark" />
-								<h2>{t("一起，把想法想清楚。")}</h2>
-								<p>{t("可以直接提问，也可以勾选当前题目快照，让模型看到题面与标程。")}</p>
+								<Icon name="chat" />
+								<h2>{t("新建对话")}</h2>
+								<p>{t("输入问题，或附带当前题面与标程。")}</p>
 							</div>
 						) : null}
 						{(busy || streaming) && (
