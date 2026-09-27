@@ -44,6 +44,7 @@ export function App() {
 	const [release, setRelease] = useState<ManualRelease>();
 	const [report, setReport] = useState<ManualReport>();
 	const [busy, setBusy] = useState<"upload" | "generate" | "finalize">();
+	const [deletingProjectId, setDeletingProjectId] = useState<string>();
 	const [activeTask, setActiveTask] = useState<BackgroundTask>();
 	const [recordsLoading, setRecordsLoading] = useState(false);
 	const [recordsMessage, setRecordsMessage] = useState<UiMessage>("");
@@ -215,7 +216,9 @@ export function App() {
 	}
 
 	async function deleteProject(id: string): Promise<void> {
+		setDeletingProjectId(id);
 		try {
+			if (projectRef.current?.id === id) await saveNow();
 			const response = await fetch(apiUrl(apiOrigin, `/projects/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			if (projectRef.current?.id === id) {
@@ -224,12 +227,18 @@ export function App() {
 				setRelease(undefined);
 				localStorage.removeItem(currentProjectKey);
 			}
+			setProjects((current) => current.filter((item) => item.id !== id));
+			setReleases((current) => current.filter((item) => item.projectId !== id));
 			await refreshRecords();
 			setRecordsMessage("项目及其发布包已删除。");
 			setRecordsTone("passed");
 		} catch (error) {
-			setRecordsMessage(error instanceof Error ? error.message : "删除失败。");
+			const message = error instanceof Error ? error.message : "删除失败。";
+			setRecordsMessage(message);
 			setRecordsTone("failed");
+			showNotice(message, "failed");
+		} finally {
+			setDeletingProjectId(undefined);
 		}
 	}
 
@@ -569,7 +578,7 @@ export function App() {
 				projects={project ? [project, ...projects.filter((item) => item.id !== project.id)] : projects}
 				currentProjectId={project?.id}
 				sandbox={sandbox}
-				busy={!!busy}
+				busy={!!busy || !!deletingProjectId}
 				taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)}
 				onNew={() => setChoosingScoringMode(true)}
 				onOpen={openProject}
@@ -585,6 +594,7 @@ export function App() {
 								report={report}
 								sandbox={sandbox}
 								busy={busy}
+								deleting={deletingProjectId === project.id}
 								saveStatus={saveStatus}
 								notice={notice}
 								noticeTone={noticeTone}
@@ -598,13 +608,14 @@ export function App() {
 								onDeleteFile={deleteFile}
 								onGenerate={generate}
 								onFinalize={finalize}
-								onNew={async () => setChoosingScoringMode(true)}
+								onDelete={deleteProject}
 							/>
 						) : (
 							<WorkspaceHome
 								projects={projects}
 								sandbox={sandbox}
-								message={recordsTone === "failed" ? recordsMessage : undefined}
+								message={recordsMessage || undefined}
+								messageTone={recordsTone}
 								onNew={() => setChoosingScoringMode(true)}
 								onOpen={openProject}
 							/>

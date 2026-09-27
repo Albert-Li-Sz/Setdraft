@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
+import { Dialog } from "./Dialog.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import { ProblemPreview } from "./ProblemPreview.tsx";
 import {
@@ -31,6 +32,7 @@ interface Props {
 	report?: ManualReport;
 	sandbox?: SandboxStatus;
 	busy: Busy;
+	deleting: boolean;
 	saveStatus: string;
 	notice: UiMessage;
 	noticeTone: "pending" | "passed" | "failed";
@@ -44,7 +46,7 @@ interface Props {
 	onDeleteFile(name: string): Promise<void>;
 	onGenerate(): Promise<void>;
 	onFinalize(): Promise<void>;
-	onNew(): Promise<void>;
+	onDelete(id: string): Promise<void>;
 }
 
 function CodeEditor(props: {
@@ -180,6 +182,7 @@ export function ManualWorkspace(props: Props) {
 	const { project } = props;
 	const [tab, setTab] = useState<Tab>("statement");
 	const [programSection, setProgramSection] = useState<ProgramSection>("reference");
+	const [pendingDelete, setPendingDelete] = useState(false);
 	const [pendingCheckerPreset, setPendingCheckerPreset] = useState<
 		{ projectId: string; preset: CheckerPreset } | undefined
 	>();
@@ -305,12 +308,12 @@ export function ManualWorkspace(props: Props) {
 				</div>
 				<div className="heading-actions">
 					<button
-						className="button secondary"
+						className="button secondary danger-button"
 						type="button"
-						onClick={() => void props.onNew()}
-						disabled={!!props.busy}
+						onClick={() => setPendingDelete(true)}
+						disabled={!!props.busy || props.deleting}
 					>
-						{t("新建题目")}
+						{props.deleting ? t("删除中…") : t("删除题目")}
 					</button>
 					<button
 						className="button primary"
@@ -319,7 +322,7 @@ export function ManualWorkspace(props: Props) {
 							setTab("validation");
 							void props.onFinalize();
 						}}
-						disabled={!!props.busy || !project.reference.code.trim()}
+						disabled={!!props.busy || props.deleting || !project.reference.code.trim()}
 					>
 						{props.busy === "finalize" ? t("验证中…") : t("验证并打包")}
 					</button>
@@ -1361,6 +1364,29 @@ export function ManualWorkspace(props: Props) {
 					</section>
 				</aside>
 			</div>
+			<Dialog open={pendingDelete} onClose={() => setPendingDelete(false)} labelledBy="delete-current-project-title">
+				<div className="confirmation-heading">
+					<span>{t("删除确认")}</span>
+					<h2 id="delete-current-project-title">{t("删除“{0}”？", project.title || t("未命名题目"))}</h2>
+				</div>
+				<p>{t("这会删除草稿、测试数据与该项目的所有发布包，无法撤销；被竞赛草稿引用时须先移出。")}</p>
+				<code>{project.id}</code>
+				<div className="confirmation-actions">
+					<button className="button secondary" type="button" onClick={() => setPendingDelete(false)}>
+						{t("取消")}
+					</button>
+					<button
+						className="button primary"
+						type="button"
+						onClick={() => {
+							setPendingDelete(false);
+							void props.onDelete(project.id);
+						}}
+					>
+						{t("确认删除")}
+					</button>
+				</div>
+			</Dialog>
 		</main>
 	);
 }

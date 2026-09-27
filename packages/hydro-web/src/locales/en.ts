@@ -18,6 +18,8 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"项目读取失败。": "Could not load the project.",
 	"项目及其发布包已删除。": "Project and its releases deleted.",
 	"删除失败。": "Could not delete this item.",
+	删除题目: "Delete problem",
+	"删除中…": "Deleting…",
 	"发布包已删除；草稿仍保留。": "Release deleted. The draft is still available.",
 	"删除发布包失败。": "Could not delete the release.",
 	"测试文件上传失败。": "Could not upload test files.",

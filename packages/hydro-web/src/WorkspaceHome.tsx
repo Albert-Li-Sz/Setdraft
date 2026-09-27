@@ -7,12 +7,14 @@ export function WorkspaceHome({
 	projects,
 	sandbox,
 	message,
+	messageTone,
 	onNew,
 	onOpen,
 }: {
 	projects: ProjectSnapshot[];
 	sandbox?: SandboxStatus;
 	message?: UiMessage;
+	messageTone: "passed" | "failed";
 	onNew(): void;
 	onOpen(id: string): Promise<void>;
 }) {
@@ -78,7 +80,7 @@ export function WorkspaceHome({
 					</label>
 				</div>
 				{message && (
-					<output className="notice failed" role="alert">
+					<output className={`notice ${messageTone}`} role={messageTone === "failed" ? "alert" : undefined}>
 						{t(message)}
 					</output>
 				)}
