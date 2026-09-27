@@ -381,7 +381,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 				</div>
 				<p className="settings-help">
 					{t(
-						"每套配置可使用不同协议、API、模型和长度限制。对话页可切换配置，历史消息继续作为上下文；超过当前模型窗口时仅裁剪模型请求中的较早消息。Base URL 留空使用协议默认地址。API Key 保存在本机，编辑现有配置时留空可沿用该配置的 Key。",
+						"每套配置可使用不同协议、API、模型和长度限制。对话页可切换配置，历史消息继续作为上下文；超过当前模型窗口时仅裁剪模型请求中的较早消息。Base URL 留空使用协议默认地址。API Key 保存在服务器，编辑现有配置时留空可沿用该配置的 Key。",
 					)}
 				</p>
 				<div className="settings-actions">

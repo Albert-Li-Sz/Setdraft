@@ -1,9 +1,13 @@
+import type { AuthUser } from "@hydro-problem-make/contracts";
 import { useState } from "react";
+import { AdminUsers } from "./AdminUsers.tsx";
 import { AiApiSettings } from "./AiApiSettings.tsx";
+import { authFetch } from "./auth-client.ts";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type SandboxStatus, waitForTask } from "./platform.ts";
 
 interface SettingsPageProps {
+	user: AuthUser;
 	apiOrigin: string;
 	sandbox?: SandboxStatus;
 	onAiConfigurationChanged(): void;
@@ -18,7 +22,7 @@ export function SettingsPage(props: SettingsPageProps) {
 		setBuilding(true);
 		setMessage("正在构建沙盒镜像…");
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, "/sandbox/build"), { method: "POST" });
+			const response = await authFetch(apiUrl(props.apiOrigin, "/sandbox/build"), { method: "POST" });
 			const body = (await response.json()) as { task?: BackgroundTask; message?: string };
 			if (!response.ok || !body.task) throw new Error(body.message ?? "无法创建构建任务。");
 			await waitForTask(props.apiOrigin, body.task.id);
@@ -35,11 +39,18 @@ export function SettingsPage(props: SettingsPageProps) {
 			<section className="page-heading settings-heading">
 				<div>
 					<h1>{t("设置")}</h1>
-					<p>{t("配置 AI 对话与本地沙箱；手工制题不需要 AI API。")}</p>
+					<p>{t(props.user.role === "admin" ? "管理团队 AI 配置、沙箱与账号。" : "AI 模型由管理员统一配置。")}</p>
 				</div>
 			</section>
 			<div className="settings-grid">
-				<AiApiSettings apiOrigin={props.apiOrigin} onConfigurationChanged={props.onAiConfigurationChanged} />
+				{props.user.role === "admin" ? (
+					<AiApiSettings apiOrigin={props.apiOrigin} onConfigurationChanged={props.onAiConfigurationChanged} />
+				) : (
+					<section className="card settings-card">
+						<h2>{t("团队 AI")}</h2>
+						<p className="settings-help">{t("在 AI 对话中选择团队模型。需要调整配置时，请联系管理员。")}</p>
+					</section>
+				)}
 				<aside className="settings-side">
 					<section className="card settings-card">
 						<h2>{t("Linux 沙箱")}</h2>
@@ -60,14 +71,16 @@ export function SettingsPage(props: SettingsPageProps) {
 							<button className="button secondary" type="button" onClick={props.onRefreshSandbox}>
 								{t("重新检测")}
 							</button>
-							<button
-								className="button primary"
-								type="button"
-								disabled={building || props.sandbox?.state === "daemon-unavailable"}
-								onClick={() => void build()}
-							>
-								{building ? t("构建中…") : t("构建镜像")}
-							</button>
+							{props.user.role === "admin" && (
+								<button
+									className="button primary"
+									type="button"
+									disabled={building || props.sandbox?.state === "daemon-unavailable"}
+									onClick={() => void build()}
+								>
+									{building ? t("构建中…") : t("构建镜像")}
+								</button>
+							)}
 						</div>
 						{message && (
 							<output className="notice pending" aria-live="polite">
@@ -77,6 +90,7 @@ export function SettingsPage(props: SettingsPageProps) {
 					</section>
 				</aside>
 			</div>
+			{props.user.role === "admin" && <AdminUsers />}
 		</main>
 	);
 }

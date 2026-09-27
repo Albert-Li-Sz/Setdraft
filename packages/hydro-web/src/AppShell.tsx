@@ -1,8 +1,10 @@
+import type { AuthUser } from "@hydro-problem-make/contracts";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AccountControls } from "./AccountControls.tsx";
 import { Icon } from "./Icon.tsx";
 import { LocaleSwitcher, useLocale } from "./i18n.tsx";
 import { Navigation, pageLabels } from "./Navigation.tsx";
-import type { PageRoute, ProjectSnapshot, SandboxStatus } from "./platform.ts";
+import type { PageRoute, ProjectSnapshot } from "./platform.ts";
 
 const SidebarContext = createContext<{ target: HTMLDivElement | null; close(): void }>({ target: null, close() {} });
 export const useAppSidebar = () => useContext(SidebarContext);
@@ -16,21 +18,23 @@ function readCollapsed(): boolean {
 }
 
 export function AppShell({
+	user,
+	onLogout,
 	children,
 	page,
 	projects,
 	currentProjectId,
-	sandbox,
 	busy,
 	taskRunning,
 	onNew,
 	onOpen,
 }: {
+	user: AuthUser;
+	onLogout(): Promise<void>;
 	children: ReactNode;
 	page: PageRoute;
 	projects: ProjectSnapshot[];
 	currentProjectId?: string;
-	sandbox?: SandboxStatus;
 	busy: boolean;
 	taskRunning: boolean;
 	onNew(): void;
@@ -133,14 +137,7 @@ export function AppShell({
 					<Icon name="settings" />
 					{t("设置")}
 				</a>
-				<div className="sidebar-workspace">
-					<span className="workspace-avatar">S</span>
-					<div>
-						<strong>{t("本地工作区")}</strong>
-						<small>{sandbox?.available ? t("沙箱已就绪") : sandbox ? t("沙箱未就绪") : t("检测中")}</small>
-					</div>
-					<span className={`workspace-status ${sandbox?.available ? "ready" : ""}`} />
-				</div>
+				<AccountControls user={user} onLogout={onLogout} />
 			</div>
 		</>
 	);

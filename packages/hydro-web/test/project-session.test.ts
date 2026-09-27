@@ -114,4 +114,26 @@ describe("project editing session", () => {
 		expect(session.getSnapshot()).toMatchObject({ status: "error", project: { title: "local", revision: 1 } });
 		session.dispose();
 	});
+	it("pauses autosave without discarding edits and resumes the same draft after authentication", async () => {
+		vi.useFakeTimers();
+		const save = vi.fn(async (project: ProjectSnapshot) => ({ ...project, revision: project.revision + 1 }));
+		const session = new ProjectSession(save);
+		session.open(projectFixture());
+		session.edit((project) => ({ ...project, title: "private unsaved draft" }));
+		const signal = session.signal;
+		session.pause();
+		expect(signal.aborted).toBe(true);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(save).not.toHaveBeenCalled();
+		await expect(session.flush()).rejects.toMatchObject({ name: "AbortError" });
+		expect(session.getSnapshot().project?.title).toBe("private unsaved draft");
+		session.resume();
+		await session.flush();
+		expect(save).toHaveBeenCalledTimes(1);
+		expect(session.getSnapshot()).toMatchObject({
+			status: "saved",
+			project: { title: "private unsaved draft", revision: 2 },
+		});
+		session.dispose();
+	});
 });

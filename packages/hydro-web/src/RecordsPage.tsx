@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { authFetch } from "./auth-client.ts";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import { apiUrl, isContestReadyRelease, type ManualRelease, type ProjectSnapshot } from "./platform.ts";
 
@@ -24,7 +25,7 @@ export function RecordsPage(props: Props) {
 	async function exportOne(release: ManualRelease, format: "domjudge" | "fps" | "qduoj"): Promise<void> {
 		setExporting(`${release.id}:${format}`);
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, `/releases/${release.id}/exports/${format}`), {
+			const response = await authFetch(apiUrl(props.apiOrigin, `/releases/${release.id}/exports/${format}`), {
 				method: "POST",
 			});
 			const result = (await response.json()) as { message?: string; download?: string };

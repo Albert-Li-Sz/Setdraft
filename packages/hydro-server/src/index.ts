@@ -1,5 +1,6 @@
 export type { ChatConversation, ChatMessage, ChatModelClient } from "./chat.ts";
 export { ChatError, ChatService } from "./chat.ts";
+export { AuthError, IdentityStore } from "./identity.ts";
 export type {
 	HistoricHydroVerification,
 	ManualProject,

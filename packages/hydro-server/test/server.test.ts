@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatService } from "../src/chat.ts";
+import { IdentityStore } from "../src/identity.ts";
 import { ManualProjectStore, type ManualRelease, parseGeneratorScript } from "../src/manual-projects.ts";
 import { cppLanguages, runManualSandbox } from "../src/manual-sandbox.ts";
 import { createHydroServer } from "../src/server.ts";
@@ -16,6 +17,16 @@ let store: ManualProjectStore;
 let chat: ChatService;
 let server: ReturnType<typeof createHydroServer>;
 let origin: string;
+let identity: IdentityStore;
+let cookie: string;
+let csrf: string;
+const authenticatedFetch = (url: string, init: RequestInit = {}) => {
+	const headers = new Headers(init.headers);
+	headers.set("origin", origin);
+	headers.set("cookie", cookie);
+	headers.set("x-csrf-token", csrf);
+	return fetch(url, { ...init, headers });
+};
 
 const dockerAvailable = (() => {
 	try {
@@ -27,13 +38,13 @@ const dockerAvailable = (() => {
 })();
 
 async function json<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T }> {
-	const response = await fetch(`${origin}/api${path}`, init);
+	const response = await authenticatedFetch(`${origin}/api${path}`, init);
 	const body = (await response.json()) as T;
 	if (response.status !== 202 || !/\/(generate|finalize|export)$/u.test(path))
 		return { status: response.status, body };
 	const taskId = (body as { task: { id: string } }).task.id;
 	for (let attempt = 0; attempt < 1200; attempt++) {
-		const task = (await fetch(`${origin}/api/tasks/${taskId}`).then((result) => result.json())) as {
+		const task = (await authenticatedFetch(`${origin}/api/tasks/${taskId}`).then((result) => result.json())) as {
 			state: string;
 			result?: T;
 			error?: string;
@@ -57,10 +68,10 @@ async function sendChatMessage(
 	form.set("message", message);
 	if (profileId) form.set("profileId", profileId);
 	if (image) form.append("images", new File([Buffer.from(image.data, "base64")], image.name, { type: "image/png" }));
-	const response = await fetch(`${origin}/api/chats/${chatId}/messages`, { method: "POST", body: form });
+	const response = await authenticatedFetch(`${origin}/api/chats/${chatId}/messages`, { method: "POST", body: form });
 	expect(response.status).toBe(202);
 	const request = (await response.json()) as { id: string };
-	const events = await fetch(`${origin}/api/chats/${chatId}/requests/${request.id}/events`);
+	const events = await authenticatedFetch(`${origin}/api/chats/${chatId}/requests/${request.id}/events`);
 	expect(events.status).toBe(200);
 	return events.text();
 }
@@ -125,13 +136,23 @@ beforeEach(async () => {
 			return "测试回复";
 		},
 	});
-	server = createHydroServer({ projects: store, chat });
+	identity = new IdentityStore(root);
+	const user = await identity.setup(
+		{ setupToken: identity.rotateSetupToken(), username: "test-admin", password: "a long test password" },
+		"test",
+	);
+	const session = identity.createSession(user.id);
+	cookie = `setdraft-session=${session.token}`;
+	csrf = session.access.csrfToken;
+	server = createHydroServer({ projects: store, chat, identity });
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
 afterEach(async () => {
 	await new Promise<void>((resolve) => server.close(() => resolve()));
+	await server.closeWorkspaces();
+	identity.close();
 	await rm(root, { recursive: true, force: true });
 });
 
@@ -146,7 +167,7 @@ describe("manual project API", () => {
 		});
 		await mkdir(join(root, "releases", randomUUID()), { recursive: true });
 		expect((await json<{ releases: ManualRelease[] }>("/releases")).body.releases).toEqual([]);
-		expect((await fetch(`${origin}/api/releases/${release.id}/hydro`)).status).toBe(404);
+		expect((await authenticatedFetch(`${origin}/api/releases/${release.id}/hydro`)).status).toBe(404);
 	});
 
 	it("rolls back release deletion and file references when the draft update fails", async () => {
@@ -188,7 +209,7 @@ describe("manual project API", () => {
 		});
 		expect(changed.status).toBe(422);
 		expect((await json<{ scoringMode: string }>(`/projects/${project.id}`)).body.scoringMode).toBe("oi");
-		const pdf = await fetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
+		const pdf = await authenticatedFetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
 			method: "PUT",
 			headers: { "content-type": "application/pdf" },
 			body: "%PDF-1.4\n",
@@ -222,7 +243,7 @@ describe("manual project API", () => {
 			expect((await update({ [release.id]: "#12AB34" }, colorNames)).status).toBe(422);
 		}
 		expect((await update({ [release.id]: "#12345Z" }, { [release.id]: "Green" })).status).toBe(422);
-		expect((await fetch(`${origin}/api/projects/${project.id}`, { method: "DELETE" })).status).toBe(409);
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}`, { method: "DELETE" })).status).toBe(409);
 		expect((await json<{ releaseIds: string[] }>(path)).body.releaseIds).toEqual([release.id]);
 		const removed = await json<{ colorNames: Record<string, string> }>(path, {
 			method: "PUT",
@@ -231,14 +252,14 @@ describe("manual project API", () => {
 		});
 		expect(removed.status).toBe(200);
 		expect(removed.body.colorNames).toEqual({});
-		expect((await fetch(`${origin}/api/projects/${project.id}`, { method: "DELETE" })).status).toBe(204);
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}`, { method: "DELETE" })).status).toBe(204);
 		expect((await json(path)).status).toBe(200);
 	});
 
 	it("keeps an old Hydro package downloadable but excludes it from new contests", async () => {
 		const project = await createProject();
 		const release = await seedRelease(project.id, { scoringMode: undefined, checkerMode: undefined });
-		const historical = await fetch(`${origin}/api/releases/${release.id}/hydro`);
+		const historical = await authenticatedFetch(`${origin}/api/releases/${release.id}/hydro`);
 		expect(historical.status).toBe(200);
 		expect(await historical.text()).toBe("historical Hydro package");
 		const contest = await json<{ id: string }>("/contests", {
@@ -371,7 +392,7 @@ describe("manual project API", () => {
 			["1.ans", "3\n"],
 			["2.in", "4 5\n"],
 		]) {
-			const response = await fetch(`${origin}/api/projects/${project.id}/files/${name}`, {
+			const response = await authenticatedFetch(`${origin}/api/projects/${project.id}/files/${name}`, {
 				method: "PUT",
 				headers: { "content-type": "application/octet-stream" },
 				body: content,
@@ -385,7 +406,7 @@ describe("manual project API", () => {
 		).body;
 		expect(snapshot.cases).toMatchObject([{ inputFile: "1.in", outputFile: "1.ans" }, { inputFile: "2.in" }]);
 		expect(snapshot.orphanOutputs).toEqual([]);
-		const file = await fetch(`${origin}/api/projects/${project.id}/files/1.in`);
+		const file = await authenticatedFetch(`${origin}/api/projects/${project.id}/files/1.in`);
 		expect(await file.text()).toBe("1 2\n");
 	});
 
@@ -404,7 +425,7 @@ describe("manual project API", () => {
 		for (const name of ["1.in", "2.in"]) {
 			expect(
 				(
-					await fetch(`${origin}/api/projects/${project.id}/files/${name}`, {
+					await authenticatedFetch(`${origin}/api/projects/${project.id}/files/${name}`, {
 						method: "PUT",
 						headers: { "content-type": "application/octet-stream" },
 						body: "old\n",
@@ -427,18 +448,24 @@ describe("manual project API", () => {
 		expect(custom.status).toBe(201);
 		expect(custom.body).toMatchObject({ inputFile: "3.in", outputFile: "3.out" });
 		expect(custom.body.project.cases.find((item) => item.inputFile === "3.in")?.subtaskId).toBe(2);
-		expect(await (await fetch(`${origin}/api/projects/${project.id}/files/3.in`)).text()).toBe("7 8\n");
-		expect(await (await fetch(`${origin}/api/projects/${project.id}/files/3.out`)).text()).toBe("15\n");
+		expect(await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/3.in`)).text()).toBe("7 8\n");
+		expect(await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/3.out`)).text()).toBe("15\n");
 		const empty = await add({ input: "" });
 		expect(empty.body).toMatchObject({ inputFile: "4.in" });
 		expect(empty.body.outputFile).toBeUndefined();
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/4.in`)).headers.get("content-length")).toBe("0");
+		expect(
+			(await authenticatedFetch(`${origin}/api/projects/${project.id}/files/4.in`)).headers.get("content-length"),
+		).toBe("0");
 		const whitespace = await add({ name: "spaces.in", input: " \n\t", output: "" });
 		expect(whitespace.body).toMatchObject({ inputFile: "spaces.in", outputFile: "spaces.out" });
-		expect(await (await fetch(`${origin}/api/projects/${project.id}/files/spaces.in`)).text()).toBe(" \n\t");
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/spaces.out`)).headers.get("content-length")).toBe(
-			"0",
+		expect(await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/spaces.in`)).text()).toBe(
+			" \n\t",
 		);
+		expect(
+			(await authenticatedFetch(`${origin}/api/projects/${project.id}/files/spaces.out`)).headers.get(
+				"content-length",
+			),
+		).toBe("0");
 		const generatedOutput = await add({ input: "9 10\n" });
 		expect(generatedOutput.body.inputFile).toBe("5.in");
 		expect(generatedOutput.body.outputFile).toBeUndefined();
@@ -453,9 +480,9 @@ describe("manual project API", () => {
 		const tooLarge = await add({ name: "large.in", input: "界".repeat(400_000) });
 		expect(tooLarge.status).toBe(413);
 		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(before);
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/broken.in`)).status).toBe(404);
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/large.in`)).status).toBe(404);
-		expect(await (await fetch(`${origin}/api/projects/${project.id}/files/3.in`)).text()).toBe("7 8\n");
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/broken.in`)).status).toBe(404);
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/large.in`)).status).toBe(404);
+		expect(await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/3.in`)).text()).toBe("7 8\n");
 	});
 
 	it("rolls back both text files when saving the case fails", async () => {
@@ -470,8 +497,8 @@ describe("manual project API", () => {
 		} finally {
 			store.database.db.exec("DROP TRIGGER fail_project_write");
 		}
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/retry.in`)).status).toBe(404);
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/retry.out`)).status).toBe(404);
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/retry.in`)).status).toBe(404);
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/retry.out`)).status).toBe(404);
 		expect((await json<{ revision: number; cases: unknown[] }>(`/projects/${project.id}`)).body).toMatchObject({
 			revision: 0,
 			cases: [],
@@ -492,7 +519,7 @@ describe("manual project API", () => {
 		const project = await createProject();
 		const pdfPath = `/projects/${project.id}/domjudge-pdf`;
 		const original = "%PDF-1.4\noriginal\n";
-		const uploaded = await fetch(`${origin}/api${pdfPath}`, {
+		const uploaded = await authenticatedFetch(`${origin}/api${pdfPath}`, {
 			method: "PUT",
 			headers: { "content-type": "application/pdf" },
 			body: original,
@@ -503,7 +530,7 @@ describe("manual project API", () => {
 			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
 		);
 		try {
-			const failed = await fetch(`${origin}/api${pdfPath}`, {
+			const failed = await authenticatedFetch(`${origin}/api${pdfPath}`, {
 				method: "PUT",
 				headers: { "content-type": "application/pdf" },
 				body: "%PDF-1.7\nreplacement\n",
@@ -513,14 +540,14 @@ describe("manual project API", () => {
 			store.database.db.exec("DROP TRIGGER fail_project_write");
 		}
 		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
-		expect(await (await fetch(`${origin}/api${pdfPath}`)).text()).toBe(original);
+		expect(await (await authenticatedFetch(`${origin}/api${pdfPath}`)).text()).toBe(original);
 	});
 
 	it("restores the previous uploaded case when replacement cannot be saved", async () => {
 		const project = await createProject();
 		const path = `/projects/${project.id}/files/1.in`;
 		const original = "old input\n";
-		const uploaded = await fetch(`${origin}/api${path}`, {
+		const uploaded = await authenticatedFetch(`${origin}/api${path}`, {
 			method: "PUT",
 			headers: { "content-type": "application/octet-stream" },
 			body: original,
@@ -531,7 +558,7 @@ describe("manual project API", () => {
 			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
 		);
 		try {
-			const failed = await fetch(`${origin}/api${path}`, {
+			const failed = await authenticatedFetch(`${origin}/api${path}`, {
 				method: "PUT",
 				headers: { "content-type": "application/octet-stream" },
 				body: "replacement\n",
@@ -541,13 +568,13 @@ describe("manual project API", () => {
 			store.database.db.exec("DROP TRIGGER fail_project_write");
 		}
 		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
-		expect(await (await fetch(`${origin}/api${path}`)).text()).toBe(original);
+		expect(await (await authenticatedFetch(`${origin}/api${path}`)).text()).toBe(original);
 	});
 
 	it("restores files, indexes, and metadata when renumbering cannot be saved", async () => {
 		const project = await createProject();
 		const path = `/projects/${project.id}/files/2.in`;
-		const uploaded = await fetch(`${origin}/api${path}`, {
+		const uploaded = await authenticatedFetch(`${origin}/api${path}`, {
 			method: "PUT",
 			headers: { "content-type": "application/octet-stream" },
 			body: "two\n",
@@ -566,14 +593,14 @@ describe("manual project API", () => {
 		const after = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
 		expect(after.body.revision).toBe(before.body.revision);
 		expect(after.body.cases.map((item) => item.inputFile)).toEqual(["2.in"]);
-		expect(await (await fetch(`${origin}/api/projects/${project.id}/files/2.in`)).text()).toBe("two\n");
-		expect((await fetch(`${origin}/api/projects/${project.id}/files/1.in`)).status).toBe(404);
+		expect(await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/2.in`)).text()).toBe("two\n");
+		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/1.in`)).status).toBe(404);
 	});
 
 	it("restores deleted cases when the batch metadata commit fails", async () => {
 		const project = await createProject();
 		const path = `/projects/${project.id}/files/1.in`;
-		const uploaded = await fetch(`${origin}/api${path}`, {
+		const uploaded = await authenticatedFetch(`${origin}/api${path}`, {
 			method: "PUT",
 			headers: { "content-type": "application/octet-stream" },
 			body: "one\n",
@@ -591,7 +618,7 @@ describe("manual project API", () => {
 		const after = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
 		expect(after.body.revision).toBe(before.body.revision);
 		expect(after.body.cases.map((item) => item.inputFile)).toEqual(["1.in"]);
-		expect(await (await fetch(`${origin}/api${path}`)).text()).toBe("one\n");
+		expect(await (await authenticatedFetch(`${origin}/api${path}`)).text()).toBe("one\n");
 	});
 
 	it("streams faux-provider AI replies and persists the conversation", async () => {
@@ -647,11 +674,11 @@ describe("manual project API", () => {
 		const imageId = conversation.messages[0].images?.[0].id;
 		expect(imageId).toBeTruthy();
 		expect(JSON.stringify(conversation)).not.toContain(png);
-		const image = await fetch(`${origin}/api/chats/${created.body.id}/images/${imageId}`);
+		const image = await authenticatedFetch(`${origin}/api/chats/${created.body.id}/images/${imageId}`);
 		expect(image.status).toBe(200);
 		expect(image.headers.get("content-type")).toBe("image/png");
 		expect(Buffer.from(await image.arrayBuffer())).toEqual(Buffer.from(png, "base64"));
-		expect((await fetch(`${origin}/api/chats/${created.body.id}/images/unknown`)).status).toBe(404);
+		expect((await authenticatedFetch(`${origin}/api/chats/${created.body.id}/images/unknown`)).status).toBe(404);
 	});
 
 	it("manages multiple AI profiles and switches a continuing chat through the API", async () => {
@@ -814,10 +841,10 @@ describe("manual project API", () => {
 			expect(finished.body.report.success, JSON.stringify(finished.body.report)).toBe(true);
 			const releaseId = finished.body.release?.id;
 			expect(releaseId).toBeTruthy();
-			const hydro = await fetch(`${origin}/api/releases/${releaseId}/hydro`);
+			const hydro = await authenticatedFetch(`${origin}/api/releases/${releaseId}/hydro`);
 			expect(hydro.status).toBe(200);
 			expect(Buffer.from(await hydro.arrayBuffer()).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-			const source = await fetch(`${origin}/api/releases/${releaseId}/source`);
+			const source = await authenticatedFetch(`${origin}/api/releases/${releaseId}/source`);
 			expect(source.status).toBe(200);
 			const hydroPath = (await store.releases.releaseFile(releaseId!, "hydro")).path;
 			const sourcePath = (await store.releases.releaseFile(releaseId!, "source")).path;
@@ -851,7 +878,7 @@ describe("manual project API", () => {
 					reference: { language: "cpp17", code: "int main(){return 1;}" },
 				}),
 			});
-			expect((await fetch(`${origin}/api/releases/${releaseId}/hydro`)).status).toBe(200);
+			expect((await authenticatedFetch(`${origin}/api/releases/${releaseId}/hydro`)).status).toBe(200);
 			expect(await store.releases.releaseReference(releaseId!)).toEqual({ language: "cpp23", code: referenceCode });
 		},
 		120_000,
@@ -914,7 +941,7 @@ describe("manual project API", () => {
 				}),
 			});
 			for (const name of ["1.in", "2.in"]) {
-				const response = await fetch(`${origin}/api/projects/${project.id}/files/${name}`, {
+				const response = await authenticatedFetch(`${origin}/api/projects/${project.id}/files/${name}`, {
 					method: "PUT",
 					headers: { "content-type": "application/octet-stream" },
 					body: "1 2\n",
@@ -947,19 +974,19 @@ describe("manual project API", () => {
 			}>(`/projects/${project.id}/generate`, { method: "POST" });
 			expect(regenerated.body.report.success).toBe(true);
 			expect(regenerated.body.project.cases.map((item) => item.inputFile)).toEqual(["1.in", "2.in", "3.in"]);
-			expect((await fetch(`${origin}/api/projects/${project.id}/files/4.in`)).status).toBe(404);
-			const colliding = await fetch(`${origin}/api/projects/${project.id}/files/3.in`, {
+			expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/4.in`)).status).toBe(404);
+			const colliding = await authenticatedFetch(`${origin}/api/projects/${project.id}/files/3.in`, {
 				method: "PUT",
 				headers: { "content-type": "application/octet-stream" },
 				body: "1 1\n",
 			});
 			expect(colliding.status).toBe(200);
-			expect(await (await fetch(`${origin}/api/projects/${project.id}/files/3.in?origin=manual`)).text()).toBe(
-				"1 1\n",
-			);
-			expect(await (await fetch(`${origin}/api/projects/${project.id}/files/3.in?origin=generated`)).text()).toBe(
-				"9 10\n",
-			);
+			expect(
+				await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/3.in?origin=manual`)).text(),
+			).toBe("1 1\n");
+			expect(
+				await (await authenticatedFetch(`${origin}/api/projects/${project.id}/files/3.in?origin=generated`)).text(),
+			).toBe("9 10\n");
 			const conflicted = await json<{ message: string }>(`/projects/${project.id}/finalize`, { method: "POST" });
 			expect(conflicted.status).toBe(422);
 			expect(conflicted.body.message).toContain("重新生成");
@@ -1025,7 +1052,7 @@ describe("manual project API", () => {
 			]) {
 				expect(
 					(
-						await fetch(`${origin}/api/projects/${project.id}/files/${name}`, {
+						await authenticatedFetch(`${origin}/api/projects/${project.id}/files/${name}`, {
 							method: "PUT",
 							headers: { "content-type": "application/octet-stream" },
 							body,
@@ -1061,7 +1088,7 @@ describe("manual project API", () => {
 						'#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);ans.readInt();ouf.readInt();quitf(_ok,"always okay");}',
 				}),
 			});
-			await fetch(`${origin}/api/projects/${project.id}/files/1.out`, { method: "DELETE" });
+			await authenticatedFetch(`${origin}/api/projects/${project.id}/files/1.out`, { method: "DELETE" });
 			const rejected = await json<{
 				release?: { id: string };
 				report: { success: boolean; checks: Array<{ stage: string; passed: boolean }> };
@@ -1196,7 +1223,7 @@ describe("manual project API", () => {
 			expect(await readFile((await store.releases.releaseFile(releaseId, "fps")).path, "utf8")).toContain(
 				'<spj language="C++">',
 			);
-			const pdfUpload = await fetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
+			const pdfUpload = await authenticatedFetch(`${origin}/api/projects/${project.id}/domjudge-pdf`, {
 				method: "PUT",
 				headers: { "content-type": "application/pdf" },
 				body: "%PDF-1.4\nexample\n",
@@ -1358,7 +1385,7 @@ describe("manual project API", () => {
 				body: JSON.stringify({ format: "hydro" }),
 			});
 			expect(bundle.status).toBe(201);
-			const download = await fetch(`${origin}/api/contest-releases/${bundle.body.id}/download`);
+			const download = await authenticatedFetch(`${origin}/api/contest-releases/${bundle.body.id}/download`);
 			expect(download.status).toBe(200);
 			expect(Buffer.from(await download.arrayBuffer()).subarray(0, 4)).toEqual(
 				Buffer.from([0x50, 0x4b, 0x03, 0x04]),

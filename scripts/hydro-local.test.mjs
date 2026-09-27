@@ -134,3 +134,47 @@ test("backup validates blobs and restore rejects a damaged copy without replacin
 		rmSync(fixture, { recursive: true, force: true });
 	}
 });
+
+test("multi-user backups include identity and personal blobs, revoke restored sessions, and require offline data", () => {
+ const fixture = mkdtempSync(join(tmpdir(), "setdraft-team-backup-"));
+ try {
+  mkdirSync(join(fixture, "scripts"));
+  copyFileSync(join(root, "scripts/hydro-local.mjs"), join(fixture, "scripts/hydro-local.mjs"));
+  const data = join(fixture, ".hydro-problem-make");
+  const id = "10000000-0000-4000-8000-000000000000";
+  const personal = join(data, "users", id);
+  mkdirSync(personal, { recursive: true });
+  const hash = createHash("sha256").update("private blob").digest("hex");
+  for (const workspace of [data, personal]) {
+   const db = new DatabaseSync(join(workspace, "workspace.sqlite"));
+   db.exec("CREATE TABLE files (hash TEXT NOT NULL)");
+   db.prepare("INSERT INTO files VALUES (?)").run(hash); db.close();
+   mkdirSync(join(workspace, "blobs", hash.slice(0, 2)), { recursive: true });
+   writeFileSync(join(workspace, "blobs", hash.slice(0, 2), hash), "private blob");
+  }
+  const identity = new DatabaseSync(join(data, "identity.sqlite"));
+  identity.exec("CREATE TABLE metadata(key TEXT,value TEXT); CREATE TABLE users(id TEXT); CREATE TABLE sessions(token_hash TEXT); CREATE TABLE settings(key TEXT,value TEXT)");
+  identity.prepare("INSERT INTO users VALUES (?)").run(id);
+  identity.exec("INSERT INTO sessions VALUES ('old-session'); INSERT INTO settings VALUES ('ai-config','team config'); INSERT INTO metadata VALUES ('setup','old-install-code')");
+  identity.close();
+  const script = join(fixture, "scripts/hydro-local.mjs");
+  const saved = join(fixture, "backup");
+  writeFileSync(join(data, "server.pid"), String(process.pid));
+  const rejected = command(process.execPath, [script, "backup", saved]);
+  assert.equal(rejected.status, 1); assert.match(rejected.stderr, /仍有直接启动/);
+  rmSync(join(data, "server.pid"));
+  const backup = command(process.execPath, [script, "backup", saved]);
+  assert.equal(backup.status, 0, backup.stderr);
+  assert.equal(existsSync(join(saved, "users", id, "blobs", hash.slice(0, 2), hash)), true);
+  const restored = command(process.execPath, [script, "restore", saved]);
+  assert.equal(restored.status, 0, restored.stderr);
+  const checked = new DatabaseSync(join(data, "identity.sqlite"));
+  assert.equal(checked.prepare("SELECT count(*) AS count FROM sessions").get().count, 0);
+  assert.equal(checked.prepare("SELECT value FROM settings WHERE key='ai-config'").get().value, "team config");
+  assert.equal(checked.prepare("SELECT value FROM metadata WHERE key='setup'").get(), undefined);
+  checked.close();
+  writeFileSync(join(saved, "users", id, "blobs", hash.slice(0, 2), hash), "damaged");
+  const damaged = command(process.execPath, [script, "restore", saved]);
+  assert.equal(damaged.status, 1); assert.match(damaged.stderr, /哈希不匹配/);
+ } finally { rmSync(fixture, { recursive: true, force: true }); }
+});

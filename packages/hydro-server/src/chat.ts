@@ -3,43 +3,21 @@ import { readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Api, Context, ImageContent, Message, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import type {
-	ChatConversation,
-	ChatImage,
-	ChatImageUpload,
-	ChatMessage,
-	ChatProtocol,
-} from "@hydro-problem-make/contracts";
+import type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@hydro-problem-make/contracts";
+import {
+	AiConfigurationStore,
+	type ChatConfigurationSnapshot,
+	protocols,
+	type StoredConfiguration,
+} from "./ai-configuration.ts";
+import { ChatError } from "./chat-error.ts";
+
+export type { ChatConfigurationSnapshot, ChatProfileSnapshot } from "./ai-configuration.ts";
+export { ChatError } from "./chat-error.ts";
+
 import { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@hydro-problem-make/contracts";
-
-interface StoredConfiguration {
-	id: string;
-	name: string;
-	provider: ChatProtocol;
-	modelId: string;
-	apiKey: string;
-	baseUrl?: string;
-	contextWindow: number;
-	maxTokens: number;
-}
-
-interface StoredCatalog {
-	version: 2;
-	defaultProfileId?: string;
-	profiles: StoredConfiguration[];
-}
-
-export type ChatProfileSnapshot = Omit<StoredConfiguration, "apiKey"> & { apiKeyConfigured: boolean };
-
-export interface ChatConfigurationSnapshot {
-	configured: boolean;
-	defaultProfileId?: string;
-	profiles: ChatProfileSnapshot[];
-	providers: Array<{ id: string; name: string; models: never[] }>;
-	error?: string;
-}
 
 export interface ChatModelRequest {
 	configuration: StoredConfiguration;
@@ -54,12 +32,6 @@ export interface ChatSendEvents {
 }
 
 export type ChatModelClient = (request: ChatModelRequest) => Promise<string | { text: string; usage?: Usage }>;
-
-const protocols = [
-	{ id: "openai-completions", name: "OpenAI Chat Completions", baseUrl: "https://api.openai.com/v1" },
-	{ id: "openai-responses", name: "OpenAI Responses", baseUrl: "https://api.openai.com/v1" },
-	{ id: "anthropic-messages", name: "Anthropic Messages", baseUrl: "https://api.anthropic.com" },
-] as const;
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -103,15 +75,6 @@ function decodeImages(images: ChatImageUpload[]): Array<{ image: ChatImage; byte
 			bytes,
 		};
 	});
-}
-
-export class ChatError extends Error {
-	readonly statusCode: number;
-	constructor(message: string, statusCode = 400) {
-		super(message);
-		this.name = "ChatError";
-		this.statusCode = statusCode;
-	}
 }
 
 async function defaultClient(request: ChatModelRequest): Promise<{ text: string; usage?: Usage }> {
@@ -167,134 +130,63 @@ async function defaultClient(request: ChatModelRequest): Promise<{ text: string;
 	return { text: output, usage: final.usage };
 }
 
-function readConfiguration(value: unknown, id: string, previous?: StoredConfiguration): StoredConfiguration {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ChatError("AI 配置无效。");
-	const record = value as Record<string, unknown>;
-	if (!protocols.some((item) => item.id === record.provider)) throw new ChatError("请选择支持的 AI 协议。");
-	if (typeof record.modelId !== "string" || !record.modelId.trim()) throw new ChatError("请填写模型名称。");
-	const name = record.name ?? previous?.name ?? `${record.provider}/${record.modelId}`;
-	if (typeof name !== "string" || !name.trim() || name.length > 80) {
-		throw new ChatError("配置名称须为 1–80 个字符。");
-	}
-	const apiKey = typeof record.apiKey === "string" && record.apiKey.trim() ? record.apiKey.trim() : previous?.apiKey;
-	if (!apiKey) throw new ChatError("请填写 API Key。");
-	let baseUrl: string | undefined;
-	if (record.baseUrl !== undefined && record.baseUrl !== "") {
-		if (typeof record.baseUrl !== "string") throw new ChatError("Base URL 必须是文本。");
-		let url: URL;
-		try {
-			url = new URL(record.baseUrl);
-		} catch {
-			throw new ChatError("Base URL 必须是完整地址。");
-		}
-		if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
-			throw new ChatError("Base URL 只支持不含凭据、查询和锚点的 http(s) 地址。");
-		}
-		baseUrl = url.toString().replace(/\/$/u, "");
-	}
-	const contextWindow = record.contextWindow ?? 128_000;
-	const maxTokens = record.maxTokens ?? 16_384;
-	if (!Number.isSafeInteger(contextWindow) || Number(contextWindow) < 1024 || Number(contextWindow) > 4_000_000) {
-		throw new ChatError("上下文长度须为 1024–4000000。", 422);
-	}
-	if (
-		!Number.isSafeInteger(maxTokens) ||
-		Number(maxTokens) < 1 ||
-		Number(maxTokens) > 1_000_000 ||
-		Number(maxTokens) > Number(contextWindow)
-	) {
-		throw new ChatError("最大输出长度须为 1–1000000，且不能超过上下文长度。", 422);
-	}
-	return {
-		id,
-		name: name.trim(),
-		provider: record.provider as ChatProtocol,
-		modelId: record.modelId.trim(),
-		apiKey,
-		baseUrl,
-		contextWindow: Number(contextWindow),
-		maxTokens: Number(maxTokens),
-	};
-}
-
-function readStoredCatalog(value: unknown): StoredCatalog {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ChatError("AI 配置文件无效。");
-	const record = value as Record<string, unknown>;
-	if (record.version !== 2) {
-		return {
-			version: 2,
-			defaultProfileId: "legacy",
-			profiles: [readConfiguration({ ...record, name: "现有配置" }, "legacy")],
-		};
-	}
-	if (!Array.isArray(record.profiles) || record.profiles.length > 30) throw new ChatError("AI 配置列表无效。");
-	const profiles = record.profiles.map((value) => {
-		if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ChatError("AI 配置项无效。");
-		const item = value as Record<string, unknown>;
-		if (typeof item.id !== "string" || !/^(?:[a-f0-9-]{36}|legacy)$/u.test(item.id)) {
-			throw new ChatError("AI 配置 ID 无效。");
-		}
-		return readConfiguration(item, item.id);
-	});
-	if (new Set(profiles.map((item) => item.id)).size !== profiles.length) throw new ChatError("AI 配置 ID 重复。");
-	const defaultProfileId = record.defaultProfileId ?? profiles[0]?.id;
-	if (defaultProfileId !== undefined && !profiles.some((item) => item.id === defaultProfileId)) {
-		throw new ChatError("默认 AI 配置不存在。");
-	}
-	return { version: 2, defaultProfileId: defaultProfileId as string | undefined, profiles };
-}
-
 export class ChatService {
 	private readonly root: string;
 	private readonly database: WorkspaceDatabase;
-	private readonly configPath: string;
+	readonly configuration: AiConfigurationStore;
 	private readonly client: ChatModelClient;
-	private catalog: StoredCatalog = { version: 2, profiles: [] };
-	private configurationError?: string;
+	private get catalog() {
+		return this.configuration.catalog;
+	}
 	private readonly busy = new Set<string>();
 	private readonly documentVersions = new WeakMap<ChatConversation, number>();
 
-	constructor(options: { root: string; configPath: string; client?: ChatModelClient; database?: WorkspaceDatabase }) {
+	constructor(options: {
+		root: string;
+		configPath: string;
+		client?: ChatModelClient;
+		database?: WorkspaceDatabase;
+		configuration?: AiConfigurationStore;
+	}) {
 		this.root = resolve(options.root);
 		this.database = options.database ?? new WorkspaceDatabase(this.root);
 		if (this.database.root !== this.root) throw new Error("Workspace database root must match the chat root.");
-		this.configPath = resolve(options.configPath);
+		this.configuration =
+			options.configuration ??
+			new AiConfigurationStore(
+				{
+					read: () => this.database.get("ai-config", "default"),
+					write: (value) => this.database.put("ai-config", "default", value),
+				},
+				resolve(options.configPath),
+			);
 		this.client = options.client ?? defaultClient;
 	}
 
 	async loadConfiguration(): Promise<void> {
-		try {
-			this.catalog = readStoredCatalog(
-				this.database.get<StoredCatalog>("ai-config", "default") ??
-					(JSON.parse(await readFile(this.configPath, "utf8")) as unknown),
-			);
-			if (!this.database.migrationError) this.database.put("ai-config", "default", this.catalog);
-			this.configurationError = this.database.migrationError;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			this.catalog = { version: 2, profiles: [] };
-			this.configurationError = error instanceof Error ? error.message : "AI 配置读取失败。";
-		}
+		await this.configuration.load();
 	}
-
 	getConfiguration(): ChatConfigurationSnapshot {
-		return {
-			configured: this.catalog.profiles.length > 0,
-			defaultProfileId: this.catalog.defaultProfileId,
-			profiles: this.catalog.profiles.map(({ apiKey, ...profile }) => ({
-				...profile,
-				apiKeyConfigured: Boolean(apiKey),
-			})),
-			providers: protocols.map((item) => ({ id: item.id, name: item.name, models: [] })),
-			error: this.configurationError,
-		};
+		return this.configuration.getConfiguration();
 	}
-
-	async testProfile(id: string): Promise<{ connected: boolean; modelId: string; usage?: Usage; reply: string }> {
+	forWorkspace(root: string, database: WorkspaceDatabase, configuration: AiConfigurationStore): ChatService {
+		return new ChatService({
+			root,
+			database,
+			configPath: join(root, "ai-config.json"),
+			client: this.client,
+			configuration,
+		});
+	}
+	async testProfile(
+		id: string,
+		cancellation?: AbortSignal,
+	): Promise<{ connected: boolean; modelId: string; usage?: Usage; reply: string }> {
 		const configuration = this.catalog.profiles.find((item) => item.id === id);
 		if (!configuration) throw new ChatError("AI 配置不存在。", 404);
-		const signal = AbortSignal.timeout(15_000);
-		const response = await this.client({
+		const timeout = AbortSignal.timeout(15_000);
+		const signal = cancellation ? AbortSignal.any([cancellation, timeout]) : timeout;
+		const response = await this.invoke({
 			configuration,
 			context: {
 				systemPrompt: "Reply with OK.",
@@ -311,69 +203,28 @@ export class ChatService {
 		};
 	}
 
-	private async saveCatalog(catalog: StoredCatalog): Promise<void> {
-		this.assertWritable();
-		this.database.put("ai-config", "default", catalog);
-		this.catalog = catalog;
-		this.configurationError = undefined;
-	}
-
 	private assertWritable(): void {
 		if (this.database.migrationError) throw new ChatError("旧数据迁移失败，当前只读。", 503);
 	}
-
 	async configure(value: unknown): Promise<ChatConfigurationSnapshot> {
-		if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ChatError("AI 配置无效。");
-		const candidate = value as Record<string, unknown>;
-		if (candidate.id !== undefined && typeof candidate.id !== "string") throw new ChatError("AI 配置 ID 无效。");
-		const previous = this.catalog.profiles.find((item) => item.id === candidate.id);
-		if (candidate.id && !previous) throw new ChatError("AI 配置不存在。", 404);
-		if (!previous && this.catalog.profiles.length >= 30) throw new ChatError("AI 配置最多保存 30 套。", 422);
-		const configuration = readConfiguration(candidate, previous?.id ?? randomUUID(), previous);
-		if (
-			this.catalog.profiles.some(
-				(item) => item.id !== configuration.id && item.name.toLowerCase() === configuration.name.toLowerCase(),
-			)
-		) {
-			throw new ChatError("已有同名 AI 配置，请使用不同名称。", 409);
-		}
-		const profiles = previous
-			? this.catalog.profiles.map((item) => (item.id === previous.id ? configuration : item))
-			: [...this.catalog.profiles, configuration];
-		await this.saveCatalog({
-			version: 2,
-			profiles,
-			defaultProfileId: this.catalog.defaultProfileId ?? configuration.id,
-		});
-		return this.getConfiguration();
+		return this.configuration.configure(value);
 	}
-
 	async setDefaultProfile(id: string): Promise<ChatConfigurationSnapshot> {
-		if (!this.catalog.profiles.some((item) => item.id === id)) throw new ChatError("AI 配置不存在。", 404);
-		await this.saveCatalog({ ...this.catalog, defaultProfileId: id });
-		return this.getConfiguration();
+		return this.configuration.setDefaultProfile(id);
 	}
-
 	async removeProfile(id: string): Promise<ChatConfigurationSnapshot> {
-		if (!this.catalog.profiles.some((item) => item.id === id)) throw new ChatError("AI 配置不存在。", 404);
-		const profiles = this.catalog.profiles.filter((item) => item.id !== id);
-		if (profiles.length === 0) return this.clearConfiguration();
-		await this.saveCatalog({
-			version: 2,
-			profiles,
-			defaultProfileId: this.catalog.defaultProfileId === id ? profiles[0].id : this.catalog.defaultProfileId,
-		});
-		return this.getConfiguration();
+		return this.configuration.removeProfile(id);
 	}
-
 	async clearConfiguration(): Promise<ChatConfigurationSnapshot> {
-		this.assertWritable();
-		this.catalog = { version: 2, profiles: [] };
-		this.database.put("ai-config", "default", this.catalog);
-		this.configurationError = undefined;
-		return this.getConfiguration();
+		return this.configuration.clearConfiguration();
 	}
-
+	private async invoke(request: ChatModelRequest): Promise<string | { text: string; usage?: Usage }> {
+		try {
+			return await this.client(request);
+		} catch {
+			throw new ChatError(request.signal?.aborted ? "对话已取消。" : "AI 请求失败，请联系管理员检查模型配置。", 502);
+		}
+	}
 	private chatPath(id: string): string {
 		if (!/^[a-f0-9-]{36}$/u.test(id)) throw new ChatError("对话不存在。", 404);
 		return join(this.root, "chats", `${id}.json`);
@@ -580,7 +431,7 @@ export class ChatService {
 				systemPrompt: "你是 Hydro 制题助手。回答用户问题；你没有工具权限，不能修改题目草稿、运行代码或声称已验证。",
 				messages,
 			};
-			const reply = await this.client({ configuration, context, signal, onDelta: events.onDelta });
+			const reply = await this.invoke({ configuration, context, signal, onDelta: events.onDelta });
 			const answer = typeof reply === "string" ? reply : reply.text;
 			if (signal?.aborted) throw new ChatError("对话已取消。", 499);
 			chat.messages.push({

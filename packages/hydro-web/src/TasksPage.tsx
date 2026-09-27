@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
+import { authClient } from "./auth-client.ts";
 import { useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type TaskEvent } from "./platform.ts";
 
@@ -28,7 +29,7 @@ const stateNames: Record<BackgroundTask["state"], string> = {
 	interrupted: "服务中断",
 };
 
-export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
+export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: boolean }) {
 	const { t, locale } = useLocale();
 	const [tasks, setTasks] = useState<BackgroundTask[]>([]);
 	const [selected, setSelected] = useState<string>();
@@ -37,6 +38,7 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 	const [busy, setBusy] = useState(false);
 
 	useEffect(() => {
+		if (paused) return;
 		let active = true;
 		const controller = new AbortController();
 		const refresh = async () => {
@@ -59,12 +61,15 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 			controller.abort();
 			clearInterval(timer);
 		};
-	}, [apiOrigin]);
+	}, [apiOrigin, paused]);
 
 	useEffect(() => {
-		if (!selected) return;
+		if (!selected || paused) return;
 		setEvents([]);
 		const source = new EventSource(apiUrl(apiOrigin, `/tasks/${selected}/events`));
+		source.onerror = () => {
+			void authClient.refresh();
+		};
 		const receive = (event: MessageEvent<string>) => {
 			const item = JSON.parse(event.data) as TaskEvent;
 			setEvents((current) =>
@@ -87,7 +92,7 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 		])
 			source.addEventListener(type, receive as EventListener);
 		return () => source.close();
-	}, [apiOrigin, selected]);
+	}, [apiOrigin, selected, paused]);
 
 	async function action(kind: "cancel" | "retry"): Promise<void> {
 		if (!selected) return;

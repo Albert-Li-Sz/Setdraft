@@ -39,7 +39,7 @@ export function WorkspaceHome({
 		<main className="page workspace-home">
 			<div className="home-heading">
 				<h1>{t("工作台")}</h1>
-				<span>{t("本地工作区")}</span>
+				<span>{t("个人工作区")}</span>
 			</div>
 			<button className="home-create" type="button" onClick={onNew}>
 				<Icon name="compose" />
@@ -134,7 +134,7 @@ export function WorkspaceHome({
 					{sandbox?.available ? t("本地沙箱就绪") : sandbox ? t("沙箱尚未就绪") : t("正在连接工作区")}
 				</a>
 				<span>·</span>
-				<span>{t("数据保存在本机")}</span>
+				<span>{t("数据按账号独立保存")}</span>
 			</div>
 		</main>
 	);

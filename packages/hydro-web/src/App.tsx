@@ -1,6 +1,8 @@
+import type { AuthUser } from "@hydro-problem-make/contracts";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "./AppShell.tsx";
 import { RevisionConflict, requestJson } from "./api-client.ts";
+import { authClient, authFetch } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
@@ -29,9 +31,8 @@ const RecordsPage = lazy(() => import("./RecordsPage.tsx").then((module) => ({ d
 const SettingsPage = lazy(() => import("./SettingsPage.tsx").then((module) => ({ default: module.SettingsPage })));
 const TasksPage = lazy(() => import("./TasksPage.tsx").then((module) => ({ default: module.TasksPage })));
 
-const currentProjectKey = "hydro-problem-make.project-id";
-
-export function App() {
+export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
+	const currentProjectKey = `setdraft.project-id.${user.id}`;
 	const { t } = useLocale();
 	const [page, setPage] = useState<PageRoute>(() => pageFromHash(window.location.hash));
 	const apiOrigin = "";
@@ -74,6 +75,17 @@ export function App() {
 		},
 	};
 	const saveNow = () => session.flush();
+	useEffect(() => {
+		if (paused) {
+			session.pause();
+			selection.current?.abort();
+			setBusy(undefined);
+		} else session.resume();
+	}, [paused, session]);
+	const logout = async () => {
+		await saveNow();
+		await authClient.logout();
+	};
 	const setConflictSnapshot = (snapshot?: ProjectSnapshot) =>
 		snapshot ? session.conflict(snapshot) : session.dismissConflict();
 	const setCurrentProject = (snapshot: ProjectSnapshot) => session.accept(snapshot);
@@ -97,7 +109,7 @@ export function App() {
 			const health = await requestJson<{
 				sandbox: SandboxStatus;
 				capabilities: { aiChat: boolean };
-			}>(apiUrl(apiOrigin, "/health"), { signal });
+			}>(apiUrl(apiOrigin, "/system/status"), { signal });
 			if (signal?.aborted) return;
 			setSandbox(health.sandbox);
 			setAiConfigured(health.capabilities.aiChat);
@@ -137,6 +149,7 @@ export function App() {
 	}, []);
 
 	useEffect(() => {
+		if (paused) return;
 		const controller = new AbortController();
 		void checkApiConnection(controller.signal);
 		void (async () => {
@@ -152,11 +165,11 @@ export function App() {
 			}
 		})();
 		return () => controller.abort();
-	}, [checkApiConnection, showNotice]);
+	}, [checkApiConnection, showNotice, paused]);
 
 	useEffect(() => {
-		if (page === "records") void refreshRecords();
-	}, [page, refreshRecords]);
+		if (!paused && page === "records") void refreshRecords();
+	}, [page, refreshRecords, paused]);
 	function editProject(change: (current: ProjectSnapshot) => ProjectSnapshot): void {
 		session.edit(change);
 		setReport(undefined);
@@ -219,7 +232,7 @@ export function App() {
 		setDeletingProjectId(id);
 		try {
 			if (projectRef.current?.id === id) await saveNow();
-			const response = await fetch(apiUrl(apiOrigin, `/projects/${id}`), { method: "DELETE" });
+			const response = await authFetch(apiUrl(apiOrigin, `/projects/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			if (projectRef.current?.id === id) {
 				session.open();
@@ -244,7 +257,7 @@ export function App() {
 
 	async function deleteRelease(id: string): Promise<void> {
 		try {
-			const response = await fetch(apiUrl(apiOrigin, `/releases/${id}`), { method: "DELETE" });
+			const response = await authFetch(apiUrl(apiOrigin, `/releases/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			if (release?.id === id) setRelease(undefined);
 			await refreshRecords();
@@ -574,10 +587,11 @@ export function App() {
 	return (
 		<>
 			<AppShell
+				user={user}
+				onLogout={logout}
 				page={page}
 				projects={project ? [project, ...projects.filter((item) => item.id !== project.id)] : projects}
 				currentProjectId={project?.id}
-				sandbox={sandbox}
 				busy={!!busy || !!deletingProjectId}
 				taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)}
 				onNew={() => setChoosingScoringMode(true)}
@@ -622,6 +636,7 @@ export function App() {
 						))}
 					{page === "chat" && (
 						<AiChatPage
+							paused={paused}
 							apiOrigin={apiOrigin}
 							configured={aiConfigured}
 							projectSnapshot={project ? projectContextSnapshot(project) : undefined}
@@ -642,9 +657,10 @@ export function App() {
 						/>
 					)}
 					{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
-					{page === "tasks" && <TasksPage apiOrigin={apiOrigin} />}
+					{page === "tasks" && <TasksPage apiOrigin={apiOrigin} paused={paused} />}
 					{page === "settings" && (
 						<SettingsPage
+							user={user}
 							apiOrigin={apiOrigin}
 							sandbox={sandbox}
 							onRefreshSandbox={() => void checkApiConnection()}

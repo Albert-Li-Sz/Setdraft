@@ -433,3 +433,19 @@ export function readProjectSnapshot(value: unknown): ProjectSnapshot {
 	if (!isProjectSnapshot(value)) throw new Error("服务端返回的草稿格式无效。");
 	return value;
 }
+
+export type UserRole = "admin" | "user";
+export interface AuthUser {
+	id: string;
+	username: string;
+	role: UserRole;
+	enabled: boolean;
+	mustChangePassword: boolean;
+	createdAt: string;
+}
+export interface AuthSession {
+	user: AuthUser | null;
+	setupRequired: boolean;
+	csrfToken?: string;
+	expiresAt?: string;
+}

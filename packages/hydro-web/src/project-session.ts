@@ -19,6 +19,7 @@ export class ProjectSession {
 	private version = 0;
 	private savedVersion = 0;
 	private blocked = false;
+	private paused = false;
 	private remote?: ProjectSnapshot;
 	private controller = new AbortController();
 	private timer?: ReturnType<typeof setTimeout>;
@@ -97,11 +98,27 @@ export class ProjectSession {
 		this.version++;
 		this.publish({ ...this.state, project: change(this.state.project), status: this.blocked ? "conflict" : "dirty" });
 		this.clearTimer();
-		if (!this.blocked) this.timer = setTimeout(() => void this.flush().catch(this.onError), 650);
+		if (!this.blocked && !this.paused) this.timer = setTimeout(() => void this.flush().catch(this.onError), 650);
+	}
+
+	pause(): void {
+		this.paused = true;
+		this.clearTimer();
+		this.controller.abort();
+		this.controller = new AbortController();
+		this.generation++;
+		this.flight = undefined;
+		if (this.version > this.savedVersion && !this.blocked) this.publish({ ...this.state, status: "dirty" });
+	}
+	resume(): void {
+		const wasPaused = this.paused;
+		this.paused = false;
+		if (wasPaused && this.version > this.savedVersion && !this.blocked) void this.flush().catch(this.onError);
 	}
 
 	flush(): Promise<void> {
 		this.clearTimer();
+		if (this.paused) return Promise.reject(new DOMException("Authentication required", "AbortError"));
 		if (this.blocked) {
 			this.publish({ ...this.state, conflict: this.remote });
 			return Promise.reject(new Error(this.state.error));

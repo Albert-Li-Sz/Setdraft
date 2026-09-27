@@ -1,5 +1,6 @@
 import type { BackgroundTask, ProjectSnapshot } from "@hydro-problem-make/contracts";
 import { isProjectSnapshot } from "@hydro-problem-make/contracts";
+import { authFetch } from "./auth-client.ts";
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -31,7 +32,7 @@ export function apiUrl(apiOrigin: string, route: string): string {
 }
 
 export async function requestJson<T>(url: string, init?: RequestInit, decode?: (body: unknown) => T): Promise<T> {
-	const response = await fetch(url, init);
+	const response = await authFetch(url, init);
 	const body: unknown = response.status === 204 ? undefined : await response.json();
 	if (!response.ok) {
 		if (

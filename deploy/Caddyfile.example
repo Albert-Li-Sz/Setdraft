@@ -1,0 +1,10 @@
+# Replace this domain and set HYDRO_PUBLIC_ORIGIN=https://setdraft.example.com
+# Run Caddy on the same host; Setdraft remains bound to 127.0.0.1:4321.
+setdraft.example.com {
+    reverse_proxy 127.0.0.1:4321 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        flush_interval -1
+    }
+}
+# Caddy reference: https://caddyserver.com/docs/caddyfile/directives/reverse_proxy

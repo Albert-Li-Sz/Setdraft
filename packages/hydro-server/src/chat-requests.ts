@@ -3,6 +3,7 @@ import type { ChatRequest, ChatRequestEvent } from "@hydro-problem-make/contract
 
 import type { ChatImageUpload, ChatService } from "./chat.ts";
 import { ChatError } from "./chat.ts";
+import type { ExecutionScheduler } from "./execution-scheduler.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { ChatRequest, ChatRequestEvent } from "@hydro-problem-make/contracts";
@@ -26,15 +27,31 @@ export class ChatRequestQueue {
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly running = new Set<Promise<void>>();
 	private closed = false;
+	private readonly scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): boolean };
 
 	private schedule(chatId: string, id: string): void {
-		const work = Promise.resolve().then(() => (this.closed ? undefined : this.run(chatId, id)));
+		if (this.closed || (this.scheduling && !this.scheduling.enabled())) return;
+		const controller = new AbortController();
+		this.controllers.set(id, controller);
+		const work = Promise.resolve().then(async () => {
+			let release: (() => void) | undefined;
+			try {
+				release = await this.scheduling?.scheduler.acquire(this.scheduling.userId, id, controller.signal);
+				if (!this.closed && !controller.signal.aborted && (!this.scheduling || this.scheduling.enabled()))
+					await this.run(chatId, id, controller);
+			} catch (error) {
+				if (!controller.signal.aborted) throw error;
+			} finally {
+				release?.();
+				this.controllers.delete(id);
+			}
+		});
 		this.running.add(work);
 		void work.then(
 			() => this.running.delete(work),
 			(error: unknown) => {
 				this.running.delete(work);
-				console.error("Chat request persistence failed:", error);
+				console.error("Chat request persistence failed:", error instanceof Error ? error.name : "unknown");
 			},
 		);
 	}
@@ -50,7 +67,12 @@ export class ChatRequestQueue {
 		await this.idle();
 	}
 
-	constructor(database: WorkspaceDatabase, chat: ChatService) {
+	constructor(
+		database: WorkspaceDatabase,
+		chat: ChatService,
+		scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): boolean },
+	) {
+		this.scheduling = scheduling;
 		this.database = database;
 		this.chat = chat;
 
@@ -87,7 +109,15 @@ export class ChatRequestQueue {
 		}
 	}
 
-	private assertWritable(): void {
+	async cancelAll(): Promise<void> {
+		const rows = this.database.db
+			.prepare("SELECT id,chat_id FROM chat_requests WHERE state IN ('queued','running')")
+			.all() as Array<{ id: string; chat_id: string }>;
+		for (const row of rows) await this.cancel(row.chat_id, row.id).catch(() => undefined);
+	}
+
+	private assertWritable(cancelling = false): void {
+		if (!cancelling && this.scheduling && !this.scheduling.enabled()) throw new ChatError("对话服务不可用。", 403);
 		if (this.closed) throw new ChatError("对话服务正在关闭。", 503);
 		if (this.database.migrationError) throw new ChatError("旧数据迁移失败，当前只读。", 503);
 	}
@@ -180,6 +210,7 @@ export class ChatRequestQueue {
 					source: { bytes: Buffer.from(image.data, "base64") },
 				})),
 				() => {
+					this.assertWritable();
 					if (!this.database.get("chat", chatId)) throw new ChatError("对话不存在。", 404);
 					this.database.db
 						.prepare(
@@ -228,7 +259,7 @@ export class ChatRequestQueue {
 	}
 
 	async cancel(chatId: string, id: string): Promise<ChatRequest> {
-		this.assertWritable();
+		this.assertWritable(true);
 		const request = this.get(id, chatId);
 		if (request.state === "queued") {
 			const cancelled = this.database.transaction(() => {
@@ -243,7 +274,10 @@ export class ChatRequestQueue {
 				}
 				return false;
 			});
-			if (cancelled) return this.get(id, chatId);
+			if (cancelled) {
+				this.controllers.get(id)?.abort();
+				return this.get(id, chatId);
+			}
 		}
 		const current = this.get(id, chatId);
 		if (current.state === "running") {
@@ -257,7 +291,7 @@ export class ChatRequestQueue {
 		throw new ChatError("请求已经结束。", 409);
 	}
 
-	private async run(chatId: string, id: string): Promise<void> {
+	private async run(chatId: string, id: string, controller: AbortController): Promise<void> {
 		const row = this.database.db.prepare("SELECT payload,state FROM chat_requests WHERE id=?").get(id) as
 			| { payload: string; state: string }
 			| undefined;
@@ -268,8 +302,6 @@ export class ChatRequestQueue {
 			)
 			.run(process.pid, new Date().toISOString(), id);
 		if (!started.changes) return;
-		const controller = new AbortController();
-		this.controllers.set(id, controller);
 		let timeout: NodeJS.Timeout | undefined;
 		let timedOut = false;
 		const arm = () => {

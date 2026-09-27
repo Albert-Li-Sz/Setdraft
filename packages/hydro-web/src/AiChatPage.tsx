@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppSidebar } from "./AppShell.tsx";
 import { requestJson as jsonRequest } from "./api-client.ts";
+import { authFetch } from "./auth-client.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
@@ -24,6 +25,7 @@ interface ChatSummary {
 }
 
 interface Props {
+	paused: boolean;
 	apiOrigin: string;
 	configured: boolean;
 	projectSnapshot?: string;
@@ -93,6 +95,8 @@ export function AiChatPage(props: Props) {
 	const composingRef = useRef(false);
 	const sendingRef = useRef(false);
 	const readingImagesRef = useRef(false);
+	const currentChatRef = useRef(chat);
+	currentChatRef.current = chat;
 
 	const showMessage = useCallback((value: UiMessage, tone: "pending" | "passed" | "failed" = "pending"): void => {
 		setMessage(value);
@@ -115,7 +119,7 @@ export function AiChatPage(props: Props) {
 	}, []);
 
 	useEffect(() => {
-		if (!chat?.id || busy) return;
+		if (!chat?.id || busy || props.paused) return;
 		const chatId = chat.id;
 		const controller = new AbortController();
 		void jsonRequest<{ requests: Array<{ id: string; state: string }> }>(
@@ -135,9 +139,10 @@ export function AiChatPage(props: Props) {
 			})
 			.catch(() => {});
 		return () => controller.abort();
-	}, [chat, busy, props.apiOrigin]);
+	}, [chat, busy, props.apiOrigin, props.paused]);
 
 	useEffect(() => {
+		if (props.paused) return;
 		const controller = new AbortController();
 		setLoading(true);
 		void (async () => {
@@ -154,12 +159,12 @@ export function AiChatPage(props: Props) {
 				setConfiguration(config);
 				const orderedChats = newestChats(list.chats);
 				setChats(orderedChats);
-				if (orderedChats[0]) {
+				const preferred = orderedChats.find((item) => item.id === currentChatRef.current?.id) ?? orderedChats[0];
+				if (preferred) {
 					followOutputRef.current = true;
-					const selected = await jsonRequest<ChatConversation>(
-						apiUrl(props.apiOrigin, `/chats/${orderedChats[0].id}`),
-						{ signal: controller.signal },
-					);
+					const selected = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${preferred.id}`), {
+						signal: controller.signal,
+					});
 					if (!controller.signal.aborted) {
 						setChat(selected);
 						setSelectedProfileId(profileForChat(config, selected));
@@ -177,7 +182,7 @@ export function AiChatPage(props: Props) {
 			controller.abort();
 			controllerRef.current?.abort();
 		};
-	}, [props.apiOrigin, showMessage]);
+	}, [props.apiOrigin, showMessage, props.paused]);
 
 	async function refreshList(): Promise<void> {
 		const list = await jsonRequest<{ chats: ChatSummary[] }>(apiUrl(props.apiOrigin, "/chats"));
@@ -213,7 +218,7 @@ export function AiChatPage(props: Props) {
 	async function remove(id: string): Promise<void> {
 		if (!window.confirm(t("删除这条 AI 对话及其全部消息？此操作无法撤销。"))) return;
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, `/chats/${id}`), { method: "DELETE" });
+			const response = await authFetch(apiUrl(props.apiOrigin, `/chats/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			const remaining = chats.filter((item) => item.id !== id);
 			setChats(remaining);
@@ -296,7 +301,7 @@ export function AiChatPage(props: Props) {
 				const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
 				form.append("images", new File([bytes], image.name, { type: image.mimeType }));
 			}
-			const response = await fetch(apiUrl(props.apiOrigin, `/chats/${current.id}/messages`), {
+			const response = await authFetch(apiUrl(props.apiOrigin, `/chats/${current.id}/messages`), {
 				method: "POST",
 				signal: controller.signal,
 				body: form,
@@ -334,7 +339,7 @@ export function AiChatPage(props: Props) {
 			};
 			while (!completed && !controller.signal.aborted) {
 				try {
-					const stream = await fetch(
+					const stream = await authFetch(
 						apiUrl(props.apiOrigin, `/chats/${current.id}/requests/${requestId}/events?after=${after}`),
 						{ signal: controller.signal },
 					);
@@ -399,7 +404,7 @@ export function AiChatPage(props: Props) {
 			let retries = 0;
 			while (!completed && !controller.signal.aborted) {
 				try {
-					const response = await fetch(apiUrl(props.apiOrigin, `${base}/events?after=${after}`), {
+					const response = await authFetch(apiUrl(props.apiOrigin, `${base}/events?after=${after}`), {
 						signal: controller.signal,
 					});
 					if (!response.ok || !response.body) throw new Error("无法接收模型回复。");
@@ -443,11 +448,11 @@ export function AiChatPage(props: Props) {
 		controllerRef.current?.abort();
 		if (!active) return;
 		try {
-			await fetch(apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}/cancel`), {
+			await authFetch(apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}/cancel`), {
 				method: "POST",
 			});
 			for (let attempt = 0; attempt < 20; attempt++) {
-				const response = await fetch(
+				const response = await authFetch(
 					apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}`),
 				);
 				if (response.ok) {

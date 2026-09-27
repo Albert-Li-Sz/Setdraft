@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { authFetch } from "./auth-client.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
@@ -206,7 +207,7 @@ export function ManualWorkspace(props: Props) {
 	const isAcm = project.scoringMode === "acm";
 	async function previewCase(origin: "manual" | "generated", stem: string): Promise<void> {
 		try {
-			const response = await fetch(
+			const response = await authFetch(
 				apiUrl(props.apiOrigin, `/projects/${project.id}/cases/${origin}/${encodeURIComponent(stem)}/preview`),
 			);
 			const value = (await response.json()) as {
@@ -226,7 +227,7 @@ export function ManualWorkspace(props: Props) {
 
 	async function renumber(): Promise<void> {
 		try {
-			const response = await fetch(apiUrl(props.apiOrigin, `/projects/${project.id}/cases/renumber`));
+			const response = await authFetch(apiUrl(props.apiOrigin, `/projects/${project.id}/cases/renumber`));
 			const value = (await response.json()) as { changes?: Array<{ from: string; to: string }>; message?: string };
 			if (!response.ok) throw new Error(value.message ?? "编号预览失败。");
 			const changes = value.changes?.filter((item) => item.from !== item.to) ?? [];

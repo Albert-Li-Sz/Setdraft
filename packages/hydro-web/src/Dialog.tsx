@@ -1,7 +1,9 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useContext, useEffect, useRef } from "react";
+
+import { WorkspacePausedContext } from "./workspace-paused.ts";
 
 export function Dialog({
-	open,
+	open: requestedOpen,
 	onClose,
 	labelledBy,
 	children,
@@ -11,10 +13,16 @@ export function Dialog({
 	labelledBy: string;
 	children: ReactNode;
 }) {
+	const paused = useContext(WorkspacePausedContext);
+	const open = requestedOpen && !paused;
 	const ref = useRef<HTMLDialogElement>(null);
 	useEffect(() => {
 		const dialog = ref.current;
 		if (!dialog) return;
+		if (paused) {
+			dialog.close();
+			return;
+		}
 		if (open && !dialog.open) dialog.showModal();
 		if (!dialog.open) return;
 		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -41,7 +49,7 @@ export function Dialog({
 				/* A rapid reopen cancels the previous transition. */
 			});
 		return () => animation.cancel();
-	}, [open]);
+	}, [open, paused]);
 	return (
 		<dialog
 			ref={ref}

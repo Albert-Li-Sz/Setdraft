@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@hydro-problem-make/contracts";
 import type { ContestStore } from "./contests.ts";
 import type { ExecutionContext } from "./execution-context.ts";
+import type { ExecutionScheduler } from "./execution-scheduler.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
@@ -20,8 +21,17 @@ export class TaskQueue {
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly timer: NodeJS.Timeout;
 	private closed = false;
+	private readonly scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): boolean };
+	private readonly waiting = new Map<string, AbortController>();
+	private readonly slots = new Map<string, () => void>();
+	private readonly running = new Set<Promise<void>>();
 
-	constructor(projects: ManualProjectStore, contests: ContestStore) {
+	constructor(
+		projects: ManualProjectStore,
+		contests: ContestStore,
+		scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): boolean },
+	) {
+		this.scheduling = scheduling;
 		this.projects = projects;
 		this.contests = contests;
 		this.database = projects.database;
@@ -50,6 +60,24 @@ export class TaskQueue {
 	close(): void {
 		this.closed = true;
 		clearInterval(this.timer);
+		for (const controller of this.waiting.values()) controller.abort();
+		for (const controller of this.controllers.values()) controller.abort();
+		for (const release of this.slots.values()) release();
+		this.slots.clear();
+	}
+
+	async idle(): Promise<void> {
+		while (this.running.size) await Promise.all([...this.running]);
+	}
+	async cancelAll(): Promise<void> {
+		const rows = this.database.db.prepare("SELECT id FROM tasks WHERE state IN ('queued','running')").all() as Array<{
+			id: string;
+		}>;
+		for (const row of rows) await this.cancel(row.id).catch(() => undefined);
+	}
+	private releaseSlot(id: string): void {
+		this.slots.get(id)?.();
+		this.slots.delete(id);
 	}
 
 	private fingerprint(kind: TaskKind, resource: string): string {
@@ -62,6 +90,8 @@ export class TaskQueue {
 	}
 
 	private assertWritable(): void {
+		if (this.scheduling && (this.closed || !this.scheduling.enabled()))
+			throw new ManualProjectError("任务服务不可用。", 403);
 		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 	}
 
@@ -83,6 +113,7 @@ export class TaskQueue {
 		};
 		try {
 			this.database.transaction(() => {
+				this.assertWritable();
 				this.database.db
 					.prepare(
 						"INSERT INTO tasks (id,kind,resource,format,state,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -181,7 +212,7 @@ export class TaskQueue {
 	}
 
 	async cancel(id: string): Promise<TaskRecord> {
-		this.assertWritable();
+		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		const state = this.database.transaction(() => {
 			const task = this.get(id);
 			if (task.state === "queued") this.finish(id, "cancelled", undefined, "任务已取消。");
@@ -191,8 +222,11 @@ export class TaskQueue {
 			} else throw new ManualProjectError("任务已经结束。", 409);
 			return task.state;
 		});
-		if (state === "queued") this.pump();
-		else {
+		if (state === "queued") {
+			this.waiting.get(id)?.abort();
+			this.releaseSlot(id);
+			this.pump();
+		} else {
 			this.controllers.get(id)?.abort();
 			const cleaner = spawn("docker", ["rm", "-f", `hydro-task-${id}`], { stdio: "ignore" });
 			cleaner.on("error", () => {});
@@ -215,7 +249,7 @@ export class TaskQueue {
 	}
 
 	private pump(): void {
-		if (this.closed) return;
+		if (this.closed || (this.scheduling && !this.scheduling.enabled())) return;
 		const cancelling = this.database.db
 			.prepare("SELECT id FROM tasks WHERE state='running' AND cancel_requested=1 AND owner_pid=?")
 			.all(process.pid) as Array<{ id: string }>;
@@ -228,6 +262,32 @@ export class TaskQueue {
 			.prepare("SELECT id FROM tasks WHERE state='queued' ORDER BY created_at LIMIT 1")
 			.get() as { id: string } | undefined;
 		if (!queued) return;
+		if (this.scheduling && !this.slots.has(queued.id)) {
+			if (!this.waiting.has(queued.id)) {
+				const controller = new AbortController();
+				this.waiting.set(queued.id, controller);
+				void this.scheduling.scheduler
+					.acquire(
+						this.scheduling.userId,
+						queued.id,
+						controller.signal,
+						this.get(queued.id).kind === "image-build",
+					)
+					.then((release) => {
+						this.waiting.delete(queued.id);
+						if (this.closed || controller.signal.aborted || !this.scheduling?.enabled()) {
+							release();
+							return;
+						}
+						this.slots.set(queued.id, release);
+						this.pump();
+					})
+					.catch(() => {
+						this.waiting.delete(queued.id);
+					});
+			}
+			return;
+		}
 		const task = this.get(queued.id);
 		const resourceId = task.resource.split(":").at(-1) ?? "";
 		const started = this.database.transaction(() => {
@@ -242,9 +302,13 @@ export class TaskQueue {
 			this.emit(task.id, "running", "任务开始执行。 ");
 			return true;
 		});
-		if (!started) return;
+		if (!started) {
+			this.releaseSlot(task.id);
+			return;
+		}
 		if (task.fingerprint !== this.fingerprint(task.kind, resourceId)) {
 			this.finish(task.id, "stale", undefined, "排队期间草稿发生变化，请重试。 ");
+			this.releaseSlot(task.id);
 			queueMicrotask(() => this.pump());
 			return;
 		}
@@ -253,6 +317,7 @@ export class TaskQueue {
 		if (this.cancellationRequested(task.id, controller.signal)) {
 			this.finish(task.id, "cancelled", undefined, "任务已取消。 ");
 			this.controllers.delete(task.id);
+			this.releaseSlot(task.id);
 			this.pump();
 			return;
 		}
@@ -261,7 +326,7 @@ export class TaskQueue {
 			signal: controller.signal,
 			emit: (type, message, data) => this.emit(task.id, type, message, data),
 		};
-		void (async () => {
+		const work = (async () => {
 			try {
 				let result: unknown;
 				if (task.kind === "generate") result = await this.projects.pipeline.generate(resourceId, context);
@@ -284,9 +349,15 @@ export class TaskQueue {
 				);
 			} finally {
 				this.controllers.delete(task.id);
+				this.releaseSlot(task.id);
 				this.pump();
 			}
 		})();
+		this.running.add(work);
+		void work.then(
+			() => this.running.delete(work),
+			() => this.running.delete(work),
+		);
 		if (running.count + 1 < 2) queueMicrotask(() => this.pump());
 	}
 

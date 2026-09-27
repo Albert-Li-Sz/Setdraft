@@ -1,6 +1,6 @@
 # Setdraft server
 
-The local API stores drafts, tasks, chats, contests and releases in `workspace.sqlite`. Large files live in SHA-256 blobs under the workspace root. Existing file-based records are migrated on first startup; their original directories remain available as rollback copies and for historical downloads. The server can start without Docker. `GET /api/health` reports whether the daemon is unavailable, the image is missing, or the sandbox is ready.
+The local API stores drafts, tasks, chats, contests and releases in `workspace.sqlite`. Large files live in SHA-256 blobs under the workspace root. Existing file-based records are migrated on first startup; their original directories remain available as rollback copies and for historical downloads. The server can start without Docker. `GET /api/health` is an anonymous liveness probe returning only `{ "status": "ok" }`. Authenticated `GET /api/system/status` includes sandbox readiness.
 
 The default launcher builds the frontend and serves it from `127.0.0.1:4321`; `--mode dev` runs Vite on port 5173. See the repository README for install, upgrade, doctor, backup, restore and cleanup commands.
 
@@ -17,13 +17,38 @@ The default launcher builds the frontend and serves it from `127.0.0.1:4321`; `-
 | `execution-context.ts`, `event-stream.ts` | Explicit execution context and paginated SSE replay |
 | `hydro-contracts` | Shared wire types and snapshot validation, without server dependencies |
 
-The CLI injects one `WorkspaceDatabase` into the project and chat services. Blob writes prepare complete files in `.blob-staging` before taking a short SQLite write lock. `commitFiles` publishes immutable blobs, file references and document changes together; a failed commit leaves at most unreferenced blobs. Garbage collection rechecks references under that same lock. Transaction callbacks are synchronous: never perform asynchronous work inside them.
+`identity.ts` owns the independent identity database; `auth-http.ts` validates origins, cookies, CSRF and account roles. `workspace-registry.ts` selects services using the verified session user. Client-supplied user IDs never select a workspace. The first administrator is permanently bound to the legacy root; other users have `users/<id>/workspace.sqlite` and files. `ai-configuration.ts` is shared through identity storage, while chat content remains private. The CLI's process lock enforces one server per data directory.
+
+`execution-scheduler.ts` admits at most two sandbox tasks and four AI calls globally, one of each per user. Connectivity probes share the AI scheduler; image builds run exclusively against sandbox work. Logout leaves durable work running, while disabling an account cancels its unfinished work. Restart recovers queued work across all users and marks interrupted executions for explicit retry.
+
+Each workspace injects one `WorkspaceDatabase` into its project and chat services. Blob writes prepare complete files in `.blob-staging` before taking a short SQLite write lock. `commitFiles` publishes immutable blobs, file references and document changes together; a failed commit leaves at most unreferenced blobs. Garbage collection rechecks references under that same lock. Transaction callbacks are synchronous: never perform asynchronous work inside them.
 
 New draft files are read from the blob index. Legacy directories are migration input, not a second live database; release listings do not rediscover deleted records from remaining directories. Release source trees remain immutable inputs for format exporters and must still be included in workspace backups. A process crash can leave temporary staging directories; current blob garbage collection does not remove those directories automatically.
 
 Task transitions and their persisted events commit together. SSE drains all pages after the supplied cursor before closing a completed stream, and respects socket backpressure. Sandbox code receives an `ExecutionContext` explicitly and has no dependency on the task queue.
 
 On the web side, `api-client.ts` owns HTTP errors, revision conflicts and abortable task polling. `project-session.ts` owns pending edits, serialized autosave, conflict blocking and cancellation when another draft is opened; React subscribes through `use-project-session.ts`. `npm run check` enforces the shared-contract boundary and rejects runtime import cycles in the Setdraft code.
+
+## Authentication API
+
+All business endpoints, direct file URLs and event streams require the same session boundary. Another user's resource returns 404 even for administrators. Authenticated writes also require `x-csrf-token`. Login/setup require an exact allowed `Origin`; the authenticated session snapshot supplies the CSRF token. The only public API routes are auth entry points and minimal health. SSE and downloads close when their session is revoked or expires.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/auth/session` | User, setup requirement, CSRF token and session expiry |
+| `POST /api/auth/setup` | One-time setup token, username and password |
+| `POST /api/auth/login` | Username and password |
+| `POST /api/auth/logout` | Revoke the current session |
+| `PUT /api/auth/password` | Current password and new password; revoke all sessions and issue a fresh one |
+| `GET/POST /api/admin/users` | List accounts / create account with one-time temporary password |
+| `PATCH /api/admin/users/:id` | Change role (`admin`/`user`) or enabled state |
+| `POST /api/admin/users/:id/reset-password` | Temporary password and session revocation |
+
+Passwords use asynchronous Node scrypt (`N=2^17, r=8, p=1`, random salt), at most two hashes concurrently. Session tokens are random and only SHA-256 digests are stored; cookies are HttpOnly, SameSite=Lax, and Secure with the `__Host-` prefix under HTTPS. Sessions last at most seven days, expiring after 24 hours without requests. Login limits are persisted per account and source IP; error messages do not distinguish invalid, missing or disabled accounts. Setup is transactionally single-use with a 24-hour token. Identity auditing records account operations without passwords, cookies or model keys.
+
+Set `HYDRO_PUBLIC_ORIGIN=https://your-domain` behind a same-host Caddy proxy; HTTP origins are only accepted for loopback development. Keep the backend bound to loopback. See the root README for setup-token rotation, password recovery, full backup/restore and proxy configuration.
+
+Security references: [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html), [session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html), [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 
 ## Authoring API
 
@@ -47,8 +72,8 @@ On the web side, `api-client.ts` owns HTTP errors, revision conflicts and aborta
 
 The three long-running POST routes return `202` with `{ task }`. `GET /api/tasks` and `GET /api/tasks/:id` show state; `GET /api/tasks/:id/events` is an SSE stream with event IDs and `Last-Event-ID` replay. `POST /api/tasks/:id/cancel` stops the matching Docker container, and `/retry` creates another task. A draft revision can be sent as `expectedRevision` on JSON edits and case operations or `x-expected-revision` on file operations; conflicts return `409` with the current snapshot.
 
-`POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `HYDRO_CASE_MAX_BYTES`, `HYDRO_PROJECT_MAX_BYTES`, `HYDRO_TESTCASES_MAX` and `HYDRO_TOTAL_TIME_LIMIT_MS`.
+Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `HYDRO_CASE_MAX_BYTES`, `HYDRO_PROJECT_MAX_BYTES`, `HYDRO_TESTCASES_MAX` and `HYDRO_TOTAL_TIME_LIMIT_MS`.
 
 ## AI API
 
-`GET/PUT/DELETE /api/ai/config` manages named profiles for OpenAI Completions, OpenAI Responses and Anthropic Messages. `POST /api/ai/config/:id/test` makes an explicit short connectivity test; it never runs automatically. `POST /api/chats/:id/messages` accepts multipart fields `requestId`, `message`, `profileId`, optional `contextSnapshot` and up to four `images` files. It returns `202` with a durable request record. `GET /api/chats/:id/requests/:requestId/events` streams `start`, `delta`, `done` and `error` events. Reconnect using `Last-Event-ID` or `?after=`; replay does not invoke the model again. Failed requests can be retried through `POST /retry` with the same request ID. Model inactivity is aborted after 45 seconds. Assistant messages include token usage when the provider reports it.
+Administrators use `PUT/DELETE /api/ai/config` to manage named profiles for OpenAI Completions, OpenAI Responses and Anthropic Messages. `GET /api/ai/config` supplies model choices to members, omitting credentials and private upstream addresses. Administrator-only `POST /api/ai/config/:id/test` makes an explicit short connectivity test; it never runs automatically. `POST /api/chats/:id/messages` accepts multipart fields `requestId`, `message`, `profileId`, optional `contextSnapshot` and up to four `images` files. It returns `202` with a durable request record. `GET /api/chats/:id/requests/:requestId/events` streams `start`, `delta`, `done` and `error` events. Reconnect using `Last-Event-ID` or `?after=`; replay does not invoke the model again. Failed requests can be retried through `POST /retry` with the same request ID. Model inactivity is aborted after 45 seconds. Assistant messages include token usage when the provider reports it.

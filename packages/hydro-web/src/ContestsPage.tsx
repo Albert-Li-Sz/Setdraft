@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
+import { authFetch } from "./auth-client.ts";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	apiUrl,
@@ -195,7 +196,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 		if (!draft) return;
 		setBusy(true);
 		try {
-			const response = await fetch(apiUrl(apiOrigin, `/contests/${draft.id}`), { method: "DELETE" });
+			const response = await authFetch(apiUrl(apiOrigin, `/contests/${draft.id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			const remaining = contests.filter((item) => item.id !== draft.id);
 			setContests(remaining);
