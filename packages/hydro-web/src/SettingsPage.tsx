@@ -32,10 +32,8 @@ export function SettingsPage(props: SettingsPageProps) {
 	}
 	return (
 		<main className="page settings-page" id="settings">
-			<div className="breadcrumb">{t("系统 / 设置")}</div>
 			<section className="page-heading settings-heading">
 				<div>
-					<div className="eyebrow">{t("AI 与运行环境")}</div>
 					<h1>{t("设置")}</h1>
 					<p>{t("配置 AI 对话与本地沙箱；手工制题不需要 AI API。")}</p>
 				</div>

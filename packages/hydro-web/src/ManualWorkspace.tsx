@@ -298,16 +298,8 @@ export function ManualWorkspace(props: Props) {
 
 	return (
 		<main className="page" id="workspace">
-			<div className="breadcrumb">
-				{t("题库 / 制题工作台 / ")}
-				{project.title || t("未命名题目")}
-			</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">
-						{t("手工制题 · ")}
-						{isAcm ? "ACM" : "OI"} · Docker
-					</div>
 					<h1>{project.title || t("新建题目")}</h1>
 					<p>{t("上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。")}</p>
 				</div>

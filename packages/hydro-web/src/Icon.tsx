@@ -12,6 +12,14 @@ const paths = {
 	terminal: "M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4 3 3-3 3m6 1h4",
 	activity: "M3 12h4l3-7 4 14 3-7h4",
 	loader: "M12 3a9 9 0 1 1-9 9",
+	panel: "M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm4 0v16",
+	compose: "M13 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-8M17 3l4 4-9 9-5 1 1-5 9-9Z",
+	settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z",
+	close: "m6 6 12 12M6 18 18 6",
+	send: "M12 20V4m-6 6 6-6 6 6",
+	stop: "M6 6h12v12H6V6Z",
+	search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm5 12 5 5",
+	attachment: "m9 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9",
 };
 
 export function Icon({ name, className }: { name: keyof typeof paths; className?: string }) {

@@ -221,10 +221,8 @@ export function ContestsPage({ apiOrigin }: Props) {
 
 	return (
 		<main className="page" id="contests">
-			<div className="breadcrumb">{t("题库 / 竞赛")}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">{t("已验证题目 · 题序 · 气球颜色")}</div>
 					<h1>{t("竞赛打包")}</h1>
 					<p>{t("Hydro 包可包含 ACM 和 OI 题；DOMjudge 包仅接受 ACM 题。竞赛赛程在目标平台设置。")}</p>
 				</div>

@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import { App } from "./App.tsx";
 import { LocaleProvider } from "./i18n.tsx";
 import "./styles.css";
+import "./shell.css";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("Missing #root element.");

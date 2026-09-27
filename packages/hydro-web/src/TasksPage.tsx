@@ -108,10 +108,8 @@ export function TasksPage({ apiOrigin }: { apiOrigin: string }) {
 	const task = tasks.find((item) => item.id === selected);
 	return (
 		<main className="page tasks-page" id="tasks">
-			<div className="breadcrumb">{t("工作区 / 任务")}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">{t("后台流水线")}</div>
 					<h1>{t("任务状态")}</h1>
 					<p>{t("离开制题页面后，生成、验证和导出仍会继续。")}</p>
 				</div>

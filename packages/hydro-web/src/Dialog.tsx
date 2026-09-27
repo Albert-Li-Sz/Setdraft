@@ -24,14 +24,14 @@ export function Dialog({
 		const animation = dialog.animate(
 			open
 				? [
-						{ opacity: 0, transform: "translateY(18px) scale(0.96)" },
+						{ opacity: 0, transform: "translateY(4px) scale(0.99)" },
 						{ opacity: 1, transform: "translateY(0) scale(1)" },
 					]
 				: [
 						{ opacity: 1, transform: "translateY(0) scale(1)" },
-						{ opacity: 0, transform: "translateY(8px) scale(0.98)" },
+						{ opacity: 0, transform: "translateY(3px) scale(0.99)" },
 					],
-			{ duration: open ? 420 : 180, easing: open ? "cubic-bezier(0.16, 1, 0.3, 1)" : "ease-in", fill: "forwards" },
+			{ duration: open ? 200 : 120, easing: open ? "cubic-bezier(0.16, 1, 0.3, 1)" : "ease-in", fill: "forwards" },
 		);
 		void animation.finished
 			.then(() => {

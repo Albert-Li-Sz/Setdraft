@@ -46,10 +46,8 @@ export function RecordsPage(props: Props) {
 	}
 	return (
 		<main className="page" id="records">
-			<div className="breadcrumb">{t("题库 / 制题记录")}</div>
 			<section className="page-heading">
 				<div>
-					<div className="eyebrow">{t("本地记录")}</div>
 					<h1>{t("制题记录")}</h1>
 					<p>{t("草稿可重新打开；已通过验证的历史包保持可下载。")}</p>
 				</div>

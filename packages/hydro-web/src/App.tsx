@@ -1,9 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { AppShell } from "./AppShell.tsx";
 import { RevisionConflict, requestJson } from "./api-client.ts";
 import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
-import { LocaleSwitcher, type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
-import { Navigation } from "./Navigation.tsx";
+import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	apiUrl,
 	type BackgroundTask,
@@ -77,6 +77,12 @@ export function App() {
 		snapshot ? session.conflict(snapshot) : session.dismissConflict();
 	const setCurrentProject = (snapshot: ProjectSnapshot) => session.accept(snapshot);
 	const openSession = (snapshot: ProjectSnapshot) => {
+		const previous = projectRef.current;
+		setProjects((current) => [
+			snapshot,
+			...(previous && previous.id !== snapshot.id ? [previous] : []),
+			...current.filter((item) => item.id !== snapshot.id && item.id !== previous?.id),
+		]);
 		session.open(snapshot);
 		setBusy(undefined);
 		setReport(snapshot.lastReport);
@@ -558,84 +564,84 @@ export function App() {
 
 	return (
 		<>
-			<header className="site-header">
-				<div className="header-inner">
-					<a className="brand" href="#workspace" aria-label={t("Setdraft 首页")}>
-						<span className="brand-wordmark">Setdraft</span>
-					</a>
-					<Navigation page={page} taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)} />
-					<div className="header-tools">
-						<LocaleSwitcher />
-					</div>
-				</div>
-			</header>
-			<Suspense fallback={<main className="page page-loading">{t("正在打开页面…")}</main>}>
-				{page === "workspace" &&
-					(project ? (
-						<ManualWorkspace
-							key={project.id}
+			<AppShell
+				page={page}
+				projects={project ? [project, ...projects.filter((item) => item.id !== project.id)] : projects}
+				currentProjectId={project?.id}
+				sandbox={sandbox}
+				busy={!!busy}
+				taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)}
+				onNew={() => setChoosingScoringMode(true)}
+				onOpen={openProject}
+			>
+				<Suspense fallback={<main className="page page-loading">{t("正在打开页面…")}</main>}>
+					{page === "workspace" &&
+						(project ? (
+							<ManualWorkspace
+								key={project.id}
+								apiOrigin={apiOrigin}
+								project={project}
+								release={release}
+								report={report}
+								sandbox={sandbox}
+								busy={busy}
+								saveStatus={saveStatus}
+								notice={notice}
+								noticeTone={noticeTone}
+								onEdit={editProject}
+								onUpload={uploadFiles}
+								onAddCase={addTextCase}
+								onManageCases={manageCases}
+								onUploadAttachments={uploadAttachments}
+								onUploadDomjudgePdf={uploadDomjudgePdf}
+								onDeleteDomjudgePdf={deleteDomjudgePdf}
+								onDeleteFile={deleteFile}
+								onGenerate={generate}
+								onFinalize={finalize}
+								onNew={async () => setChoosingScoringMode(true)}
+							/>
+						) : (
+							<WorkspaceHome
+								projects={projects}
+								sandbox={sandbox}
+								message={recordsTone === "failed" ? recordsMessage : undefined}
+								onNew={() => setChoosingScoringMode(true)}
+								onOpen={openProject}
+							/>
+						))}
+					{page === "chat" && (
+						<AiChatPage
 							apiOrigin={apiOrigin}
-							project={project}
-							release={release}
-							report={report}
-							sandbox={sandbox}
-							busy={busy}
-							saveStatus={saveStatus}
-							notice={notice}
-							noticeTone={noticeTone}
-							onEdit={editProject}
-							onUpload={uploadFiles}
-							onAddCase={addTextCase}
-							onManageCases={manageCases}
-							onUploadAttachments={uploadAttachments}
-							onUploadDomjudgePdf={uploadDomjudgePdf}
-							onDeleteDomjudgePdf={deleteDomjudgePdf}
-							onDeleteFile={deleteFile}
-							onGenerate={generate}
-							onFinalize={finalize}
-							onNew={async () => setChoosingScoringMode(true)}
+							configured={aiConfigured}
+							projectSnapshot={project ? projectContextSnapshot(project) : undefined}
 						/>
-					) : (
-						<WorkspaceHome
+					)}
+					{page === "records" && (
+						<RecordsPage
+							apiOrigin={apiOrigin}
 							projects={projects}
-							sandbox={sandbox}
-							message={recordsTone === "failed" ? recordsMessage : undefined}
-							onNew={() => setChoosingScoringMode(true)}
+							releases={releases}
+							loading={recordsLoading}
+							message={recordsMessage}
+							tone={recordsTone}
+							onRefresh={refreshRecords}
 							onOpen={openProject}
+							onDelete={deleteProject}
+							onDeleteRelease={deleteRelease}
 						/>
-					))}
-				{page === "chat" && (
-					<AiChatPage
-						apiOrigin={apiOrigin}
-						configured={aiConfigured}
-						projectSnapshot={project ? projectContextSnapshot(project) : undefined}
-					/>
-				)}
-				{page === "records" && (
-					<RecordsPage
-						apiOrigin={apiOrigin}
-						projects={projects}
-						releases={releases}
-						loading={recordsLoading}
-						message={recordsMessage}
-						tone={recordsTone}
-						onRefresh={refreshRecords}
-						onOpen={openProject}
-						onDelete={deleteProject}
-						onDeleteRelease={deleteRelease}
-					/>
-				)}
-				{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
-				{page === "tasks" && <TasksPage apiOrigin={apiOrigin} />}
-				{page === "settings" && (
-					<SettingsPage
-						apiOrigin={apiOrigin}
-						sandbox={sandbox}
-						onRefreshSandbox={() => void checkApiConnection()}
-						onAiConfigurationChanged={() => void checkApiConnection()}
-					/>
-				)}
-			</Suspense>
+					)}
+					{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
+					{page === "tasks" && <TasksPage apiOrigin={apiOrigin} />}
+					{page === "settings" && (
+						<SettingsPage
+							apiOrigin={apiOrigin}
+							sandbox={sandbox}
+							onRefreshSandbox={() => void checkApiConnection()}
+							onAiConfigurationChanged={() => void checkApiConnection()}
+						/>
+					)}
+				</Suspense>
+			</AppShell>
 			<Dialog
 				open={choosingScoringMode}
 				onClose={() => setChoosingScoringMode(false)}
@@ -708,10 +714,6 @@ export function App() {
 					</div>
 				</div>
 			)}
-			<footer className="site-footer">
-				<span className="footer-name">{t("Setdraft · 题序")}</span>
-				<span className="footer-detail">{t("本地工作区")}</span>
-			</footer>
 		</>
 	);
 }

@@ -1,5 +1,7 @@
 import type { ChatRequest } from "@hydro-problem-make/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useAppSidebar } from "./AppShell.tsx";
 import { requestJson as jsonRequest } from "./api-client.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
@@ -66,6 +68,7 @@ function newestChats(chats: ChatSummary[]): ChatSummary[] {
 
 export function AiChatPage(props: Props) {
 	const { t } = useLocale();
+	const sidebar = useAppSidebar();
 	const [chats, setChats] = useState<ChatSummary[]>([]);
 	const [chat, setChat] = useState<ChatConversation>();
 	const [configuration, setConfiguration] = useState<AiConfiguration>();
@@ -80,7 +83,6 @@ export function AiChatPage(props: Props) {
 	const [failedRequest, setFailedRequest] = useState<{ chatId: string; requestId: string }>();
 	const [busy, setBusy] = useState(false);
 	const [loading, setLoading] = useState(true);
-	const [historyCollapsed, setHistoryCollapsed] = useState(false);
 	const [message, setMessage] = useState<UiMessage>("正在读取本地对话…");
 	const [messageTone, setMessageTone] = useState<"pending" | "passed" | "failed">("pending");
 	const controllerRef = useRef<AbortController | undefined>(undefined);
@@ -465,69 +467,77 @@ export function AiChatPage(props: Props) {
 
 	return (
 		<main className="page manual-chat-page" id="chat">
-			<div className="breadcrumb">{t("工作区 / AI 对话")}</div>
-			<section className="page-heading">
-				<div>
-					<div className="eyebrow">{t("独立助手")}</div>
-					<h1>{t("AI 对话")}</h1>
-				</div>
+			<h1 className="visually-hidden">{t("AI 对话")}</h1>
+			{sidebar.target &&
+				createPortal(
+					<section className="manual-chat-list" aria-label={t("对话记录")}>
+						<div className="manual-chat-list-heading">
+							<h2>{t("对话记录")}</h2>
+						</div>
+						<div className="manual-chat-list-items">
+							{chats.length === 0 && (
+								<p className="manual-chat-list-empty">
+									{loading ? t("正在读取对话…") : t("暂无对话。点击“新建对话”开始。")}
+								</p>
+							)}
+							{chats.map((item) => (
+								<div className={`manual-chat-list-item ${chat?.id === item.id ? "active" : ""}`} key={item.id}>
+									<button
+										type="button"
+										onClick={() => {
+											sidebar.close();
+											void open(item.id);
+										}}
+									>
+										{item.title}
+									</button>
+									<button
+										className="text-button danger"
+										type="button"
+										aria-label={t("删除 {0}", item.title)}
+										onClick={() => void remove(item.id)}
+									>
+										<Icon name="close" />
+									</button>
+								</div>
+							))}
+						</div>
+					</section>,
+					sidebar.target,
+				)}
+			<div className="chat-toolbar">
+				<label className="manual-chat-profile">
+					<select
+						aria-label={t("当前对话模型")}
+						value={selectedProfileId}
+						disabled={busy || !configuration?.profiles.length}
+						onChange={(event) => setSelectedProfileId(event.target.value)}
+					>
+						{!configuration?.profiles.length && <option value="">{t("选择模型")}</option>}
+						{configuration?.profiles.map((profile) => (
+							<option value={profile.id} key={profile.id}>
+								{profile.name} · {profile.modelId}
+							</option>
+						))}
+					</select>
+				</label>
 				<button
-					className="button secondary"
+					className="icon-button"
 					type="button"
+					title={t("新建对话")}
+					aria-label={t("新建对话")}
+					disabled={busy}
 					onClick={() =>
 						void create().catch((error: unknown) =>
 							showMessage(error instanceof Error ? error.message : "新建对话失败。", "failed"),
 						)
 					}
-					disabled={busy}
 				>
-					{t("新建对话")}
+					<Icon name="compose" />
 				</button>
-			</section>
-			<output className={`notice ${props.configured ? messageTone : "failed"}`} aria-live="polite">
-				<span className="notice-dot" />
-				{props.configured ? t(message) : t("请先在设置中配置 AI API。")}
-			</output>
-			<div className={`manual-chat-layout${historyCollapsed ? " history-collapsed" : ""}`}>
-				<aside className="card manual-chat-list" aria-label={t("对话记录")}>
-					<div className="manual-chat-list-heading">
-						{!historyCollapsed && <span>{t("对话记录")}</span>}
-						<button
-							type="button"
-							className="manual-chat-list-toggle"
-							aria-label={historyCollapsed ? t("展开对话记录") : t("折叠对话记录")}
-							aria-controls="manual-chat-history"
-							aria-expanded={!historyCollapsed}
-							title={historyCollapsed ? t("展开对话记录") : t("折叠对话记录")}
-							onClick={() => setHistoryCollapsed((current) => !current)}
-						>
-							{historyCollapsed ? "›" : "‹"}
-						</button>
-					</div>
-					<div className="manual-chat-list-items" id="manual-chat-history" hidden={historyCollapsed}>
-						{chats.length === 0 && (
-							<p className="manual-chat-list-empty">
-								{loading ? t("正在读取对话…") : t("暂无对话。点击“新建对话”开始。")}
-							</p>
-						)}
-						{chats.map((item) => (
-							<div className={`manual-chat-list-item ${chat?.id === item.id ? "active" : ""}`} key={item.id}>
-								<button type="button" onClick={() => void open(item.id)}>
-									{item.title}
-								</button>
-								<button
-									className="text-button danger"
-									type="button"
-									aria-label={t("删除 {0}", item.title)}
-									onClick={() => void remove(item.id)}
-								>
-									{t("删除")}
-								</button>
-							</div>
-						))}
-					</div>
-				</aside>
-				<section className="card manual-chat-main">
+			</div>
+			<div className="manual-chat-layout">
+				<section className={`manual-chat-main${!chat?.messages.length && !busy && !streaming ? " is-empty" : ""}`}>
 					<div
 						className="manual-chat-messages"
 						ref={messagesRef}
@@ -576,8 +586,7 @@ export function AiChatPage(props: Props) {
 							))
 						) : !busy ? (
 							<div className="manual-chat-empty">
-								<Icon name="chat" />
-								<h2>{t("新建对话")}</h2>
+								<h2>{t("AI 对话")}</h2>
 								<p>{t("输入问题，或附带当前题面与标程。")}</p>
 							</div>
 						) : null}
@@ -610,136 +619,142 @@ export function AiChatPage(props: Props) {
 						)}
 					</div>
 					<div className="manual-chat-composer">
-						<textarea
-							value={input}
-							disabled={busy}
-							onChange={(event) => setInput(event.target.value)}
-							placeholder={t("输入问题，或粘贴图片…")}
-							onPaste={(event) => {
-								const files = Array.from(event.clipboardData.items)
-									.filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-									.map((item) => item.getAsFile())
-									.filter((file): file is File => file !== null);
-								if (files.length) {
-									event.preventDefault();
-									void addImages(files);
-								}
-							}}
-							onCompositionStart={() => {
-								composingRef.current = true;
-							}}
-							onCompositionEnd={() => {
-								composingRef.current = false;
-							}}
-							onKeyDown={(event) => {
-								if (
-									shouldSendChatMessage({
-										key: event.key,
-										shiftKey: event.shiftKey,
-										isComposing: composingRef.current || event.nativeEvent.isComposing,
-										repeat: event.repeat,
-										keyCode: event.nativeEvent.keyCode,
-									})
-								) {
-									event.preventDefault();
-									void send();
-								}
-							}}
-						/>
-						{images.length > 0 && (
-							<div className="manual-chat-pending-images">
-								{images.map((image) => (
-									<div className="manual-chat-pending-image" key={image.localId}>
-										<img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name} />
-										<span title={image.name}>{image.name}</span>
-										<button
-											type="button"
-											aria-label={t("移除 {0}", image.name)}
-											disabled={busy}
-											onClick={() =>
-												setImages((current) => current.filter((item) => item.localId !== image.localId))
-											}
-										>
-											×
-										</button>
-									</div>
-								))}
-							</div>
-						)}
-						<div className="manual-chat-actions">
-							<label className="manual-context-toggle">
-								<input
-									type="checkbox"
-									checked={attachProject}
-									disabled={!props.projectSnapshot}
-									onChange={(event) => setAttachProject(event.target.checked)}
-								/>
-								{t("附带当前题面与标程")}
-							</label>
-							<label className="manual-chat-profile">
-								<span>{t("模型")}</span>
-								<select
-									aria-label={t("当前对话模型")}
-									value={selectedProfileId}
-									disabled={busy || !configuration?.profiles.length}
-									onChange={(event) => setSelectedProfileId(event.target.value)}
-								>
-									{configuration?.profiles.map((profile) => (
-										<option value={profile.id} key={profile.id}>
-											{profile.name} · {profile.modelId}
-										</option>
-									))}
-								</select>
-							</label>
-							<button
-								className="button secondary manual-chat-upload"
-								type="button"
-								disabled={busy || readingImages}
-								onClick={() => imageInputRef.current?.click()}
-							>
-								{t("上传图片")}
-							</button>
-							<input
-								ref={imageInputRef}
-								className="manual-chat-upload-input"
-								type="file"
-								accept="image/png,image/jpeg,image/webp,image/gif"
-								multiple
-								disabled={busy || readingImages}
-								onChange={(event) => {
-									const files = Array.from(event.target.files ?? []);
-									event.target.value = "";
-									void addImages(files);
+						<div className="composer-surface">
+							<textarea
+								value={input}
+								disabled={busy}
+								onChange={(event) => setInput(event.target.value)}
+								placeholder={t("输入问题，或粘贴图片…")}
+								aria-label={t("消息内容")}
+								onPaste={(event) => {
+									const files = Array.from(event.clipboardData.items)
+										.filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+										.map((item) => item.getAsFile())
+										.filter((file): file is File => file !== null);
+									if (files.length) {
+										event.preventDefault();
+										void addImages(files);
+									}
+								}}
+								onCompositionStart={() => {
+									composingRef.current = true;
+								}}
+								onCompositionEnd={() => {
+									composingRef.current = false;
+								}}
+								onKeyDown={(event) => {
+									if (
+										shouldSendChatMessage({
+											key: event.key,
+											shiftKey: event.shiftKey,
+											isComposing: composingRef.current || event.nativeEvent.isComposing,
+											repeat: event.repeat,
+											keyCode: event.nativeEvent.keyCode,
+										})
+									) {
+										event.preventDefault();
+										void send();
+									}
 								}}
 							/>
-							{busy && (
-								<button className="button secondary" type="button" onClick={() => void stopGeneration()}>
-									{t("停止生成")}
-								</button>
+							{images.length > 0 && (
+								<div className="manual-chat-pending-images">
+									{images.map((image) => (
+										<div className="manual-chat-pending-image" key={image.localId}>
+											<img src={`data:${image.mimeType};base64,${image.data}`} alt={image.name} />
+											<span title={image.name}>{image.name}</span>
+											<button
+												type="button"
+												aria-label={t("移除 {0}", image.name)}
+												disabled={busy}
+												onClick={() =>
+													setImages((current) => current.filter((item) => item.localId !== image.localId))
+												}
+											>
+												×
+											</button>
+										</div>
+									))}
+								</div>
 							)}
-							{!busy && failedRequest && (
-								<button className="button secondary" type="button" onClick={() => void resumeFailed()}>
-									{streamFailed ? t("重试并续接") : t("续接回复")}
+							<div className="manual-chat-actions">
+								<label className="manual-context-toggle">
+									<input
+										type="checkbox"
+										checked={attachProject}
+										disabled={!props.projectSnapshot}
+										onChange={(event) => setAttachProject(event.target.checked)}
+									/>
+									{t("附带当前题面与标程")}
+								</label>
+
+								<button
+									className="icon-button manual-chat-upload"
+									aria-label={t("上传图片")}
+									title={t("上传图片")}
+									type="button"
+									disabled={busy || readingImages}
+									onClick={() => imageInputRef.current?.click()}
+								>
+									<Icon name="attachment" />
 								</button>
-							)}
-							<button
-								className="button primary"
-								type="button"
-								disabled={
-									busy ||
-									readingImages ||
-									!props.configured ||
-									!selectedProfileId ||
-									(!input.trim() && images.length === 0)
-								}
-								onClick={() => void send()}
-							>
-								{busy ? t("回复中…") : t("发送")}
-							</button>
+								<input
+									ref={imageInputRef}
+									className="manual-chat-upload-input"
+									type="file"
+									accept="image/png,image/jpeg,image/webp,image/gif"
+									multiple
+									disabled={busy || readingImages}
+									onChange={(event) => {
+										const files = Array.from(event.target.files ?? []);
+										event.target.value = "";
+										void addImages(files);
+									}}
+								/>
+								{busy && (
+									<button
+										className="icon-button chat-send"
+										type="button"
+										aria-label={t("停止生成")}
+										title={t("停止生成")}
+										onClick={() => void stopGeneration()}
+									>
+										<Icon name="stop" />
+									</button>
+								)}
+								{!busy && failedRequest && (
+									<button className="button secondary" type="button" onClick={() => void resumeFailed()}>
+										{streamFailed ? t("重试并续接") : t("续接回复")}
+									</button>
+								)}
+								<button
+									className="icon-button chat-send"
+									hidden={busy}
+									aria-label={t("发送")}
+									title={t("发送")}
+									type="button"
+									disabled={
+										busy ||
+										readingImages ||
+										!props.configured ||
+										!selectedProfileId ||
+										(!input.trim() && images.length === 0)
+									}
+									onClick={() => void send()}
+								>
+									<Icon name="send" />
+								</button>
+							</div>
 						</div>
-						<p className="manual-chat-context-note">
-							{t("同一对话自动保留上下文 · Enter 发送 · Shift+Enter 换行 · 可粘贴图片")}
-						</p>
+						{(!props.configured || messageTone === "failed") && (
+							<output className="chat-status" aria-live="polite">
+								{props.configured ? t(message) : <a href="#settings">{t("请先在设置中配置 AI API。")}</a>}
+							</output>
+						)}
+						<output className="visually-hidden" aria-live="polite">
+							{t(message)}
+						</output>
+						<p className="manual-chat-context-note">{t("Enter 发送 · Shift+Enter 换行")}</p>
 					</div>
 				</section>
 			</div>
