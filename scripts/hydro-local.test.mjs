@@ -1,21 +1,20 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { createServer } from "node:net";
-import { caddyfile, deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment } from "./deployment-config.mjs";
-import { caddyAsset, validateTlsCertificate, verifyArchive } from "./managed-caddy.mjs";
+import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment } from "./deployment-config.mjs";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function copyInstaller(fixture) {
-	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/managed-caddy.mjs", "scripts/caddy-release.json", "packages/hydro-server/sandbox/build-args.mjs"]) {
+	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "packages/hydro-server/sandbox/build-args.mjs"]) {
 		mkdirSync(dirname(join(fixture, file)), { recursive: true });
 		copyFileSync(join(root, file), join(fixture, file));
 	}
@@ -24,6 +23,29 @@ function copyInstaller(fixture) {
 function command(executable, args) {
 	return spawnSync(executable, args, { cwd: root, encoding: "utf8" });
 }
+
+function assertDependencyBuildOrder(commands) {
+	const order = [...commands.matchAll(/\brun (?:build|build:offline) --workspace=([^\s&]+)/gu)].map((match) => match[1]);
+	assert.ok(order.length > 0, "No workspace builds were executed");
+	const packages = readdirSync(join(root, "packages"), { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && existsSync(join(root, "packages", entry.name, "package.json")))
+		.map((entry) => JSON.parse(readFileSync(join(root, "packages", entry.name, "package.json"), "utf8")));
+	for (const name of order) {
+		const manifest = packages.find((item) => item.name === name);
+		assert.ok(manifest, `Unknown workspace ${name}`);
+		for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+			const target = packages.find((item) => item.name === dependency);
+			if (!target?.scripts?.build) continue;
+			assert.ok(order.includes(dependency) && order.indexOf(dependency) < order.indexOf(name),
+				`${name} must build after its dependency ${dependency} on a fresh installation`);
+		}
+	}
+}
+
+test("the standard build produces workspace dependencies before their consumers", () => {
+	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+	assertDependencyBuildOrder(manifest.scripts["build:hydro"]);
+});
 
 test("quick install and upgrade dry runs list the exact preparation steps", () => {
 	const install = command("sh", [join(root, "install.sh"), "--dry-run"]);
@@ -205,7 +227,7 @@ test("deployment precedence, persistence, profile switching and scoped proxies",
 	try {
 		writeFileSync(join(fixture, ".env"), '# Keep this comment\nUNRELATED="keep"\nNODE_OPTIONS="--bad-option"\nHYDRO_NETWORK="global"\nHYDRO_NPM_REGISTRY=""\nHYDRO_WORKSPACE_ROOT="data with spaces"\n');
 		const config = await loadDeployment(fixture, { HYDRO_NETWORK: "cn" }, {
-			domain: "Setdraft.Example.Com",
+			HYDRO_PUBLIC_ORIGIN: "http://setdraft.example.com", HYDRO_HOST: "127.0.0.1",
 			HYDRO_DOWNLOAD_PROXY: "http://user:secret@127.0.0.1:8080",
 		});
 		assert.equal(config.values.HYDRO_PUBLIC_ORIGIN, "http://setdraft.example.com");
@@ -225,7 +247,8 @@ test("deployment precedence, persistence, profile switching and scoped proxies",
 		const global = await loadDeployment(fixture, {}, { HYDRO_NETWORK: "global" });
 		assert.equal(global.registry, "https://registry.npmjs.org");
 		assert.equal(global.debianMirror, "https://deb.debian.org");
-		assert.equal(global.domain, "setdraft.example.com");
+		assert.equal(global.values.HYDRO_PUBLIC_ORIGIN, "http://setdraft.example.com");
+		assert.equal(global.values.HYDRO_HOST, "127.0.0.1");
 		assert.equal(redact("https://user:secret@example.com/a"), "https://***@example.com/a");
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
 });
@@ -234,141 +257,63 @@ test("deployment rejects invalid origins, injection, invalid limits and destruct
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-invalid-"));
 	try {
 		for (const overrides of [
-			{ domain: "https://example.com/path" }, { domain: "example.com\nadmin off" }, { domain: "999.0.0.1" },
-			{ domain: "0.0.0.0" }, { domain: "255.255.255.255" }, { domain: "::" }, { domain: "0:0:0:0:0:0:0:0" },
-			{ domain: "fe80::1%en0" }, { domain: "[192.168.1.20]" }, { domain: "[::1]:80" },
-			{ domain: "example.com:443" }, { HYDRO_PUBLIC_ORIGIN: "http://example.com", HYDRO_PROXY_MODE: "off" },
+			{ HYDRO_PUBLIC_ORIGIN: "https://example.com/path" }, { HYDRO_PUBLIC_ORIGIN: "http://example.com\nadmin off" },
 			{ HYDRO_PUBLIC_ORIGIN: "https://example.com/" }, { HYDRO_PUBLIC_ORIGIN: "https://u:p@example.com" },
-			{ HYDRO_PUBLIC_ORIGIN: "ftp://example.com" }, { domain: "192.168.1.20", https: true },
-			{ domain: "2001:db8::20", https: true }, { domain: "example.com", https: true },
-			{ domain: "example.com", https: true, HYDRO_SSL_CERT: "cert.pem" },
-			{ HYDRO_PROXY_MODE: "external" }, { HYDRO_PROXY_MODE: "caddy" },
+			{ HYDRO_PUBLIC_ORIGIN: "ftp://example.com" }, { HYDRO_HOST: "not-a-host" },
 			{ HYDRO_NPM_REGISTRY: "http://mirror.example.com" }, { HYDRO_NETWORK: "oops" },
 			{ HYDRO_DOCKER_REGISTRY: "https://mirror.example.com" }, { HYDRO_TESTCASES_MAX: "0" },
 			{ HYDRO_WORKSPACE_ROOT: fixture }, { HYDRO_WORKSPACE_ROOT: dirname(fixture) },
-			{ HYDRO_SSL_KEY: "evil\nadmin off" }, { HYDRO_CADDY_DOWNLOAD_BASE: "https://user:pass@example.com" },
+			{ HYDRO_DOWNLOAD_PROXY: "http://proxy.example.com/path" },
 		]) await assert.rejects(loadDeployment(fixture, {}, overrides));
 		await assert.rejects(loadDeployment(fixture, { PORT: "9999" }), /PORT=4321/);
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
 });
 
-test("HTTP defaults and optional HTTPS dry runs are side-effect free and reject conflicting flags", () => {
+test("installation defaults to an all-interface web server without provisioning a proxy", () => {
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-dry-run-"));
 	try {
 		copyInstaller(fixture);
 		const script = join(fixture, "scripts/hydro-local.mjs");
-		const result = command(process.execPath, [script, "install", "--domain", "setdraft.example.com", "--download-proxy", "http://user:secret@127.0.0.1:8080", "--dry-run"]);
+		const result = command(process.execPath, [script, "install", "--download-proxy", "http://user:secret@127.0.0.1:8080", "--dry-run"]);
 		assert.equal(result.status, 0, result.stderr);
-		assert.match(result.stdout, /http:\/\/setdraft\.example\.com/);
-		assert.match(result.stdout, /托管 80 端口；无需 SSL/);
-		assert.match(result.stdout, /SHA-256|校验 Caddy/);
-		assert.doesNotMatch(result.stdout + result.stderr, /secret/);
-		assert.deepEqual(readdirSync(fixture).sort(), ["packages", "scripts"]);
-		const tls = command(process.execPath, [script, "install", "--domain", "setdraft.example.com", "--https", "--ssl-cert", "fullchain.pem", "--ssl-key", "privkey.pem", "--dry-run"]);
-		assert.equal(tls.status, 0, tls.stderr);
-		assert.match(tls.stdout, /https:\/\/setdraft\.example\.com/);
-		assert.match(tls.stdout, /托管 80\/443 端口；校验并保存上传的 SSL/);
+		assert.match(result.stdout, /生产监听 0\.0\.0\.0:4321/);
+		assert.match(result.stdout, /不安装或托管反向代理/);
+		assert.doesNotMatch(result.stdout + result.stderr, /secret|Caddy|SSL|80\/443/);
+		const proxy = command(process.execPath, [script, "install", "--host", "127.0.0.1", "--public-origin", "https://setdraft.example.com", "--dry-run"]);
+		assert.equal(proxy.status, 0, proxy.stderr);
+		assert.match(proxy.stdout, /生产监听 127\.0\.0\.1:4321/);
+		assert.match(proxy.stdout, /https:\/\/setdraft\.example\.com/);
 		for (const args of [
-			["--domain", "example.com", "--mode", "dev"], ["--network", "cn", "--network", "global"],
-			["--domain"], ["--domain", "example.com", "--proxy-mode", "off"],
-			["--domain", "example.com", "--https"], ["--domain", "192.168.1.20", "--https"],
-			["--http", "--https"], ["--http", "--http"], ["--https", "--https"],
+			["--network", "cn", "--network", "global"], ["--host"], ["--host", "bad"],
+			["--host", "0.0.0.0", "--host", "127.0.0.1"], ["--domain", "example.com"],
+			["--https"], ["--ssl-cert", "cert.pem"], ["--caddy-archive", "archive.tar.gz"],
+			["--public-origin", "https://example.com", "--mode", "dev"],
 		]) {
 			const invalid = command(process.execPath, [script, "install", ...args, "--dry-run"]);
 			assert.equal(invalid.status, 1, invalid.stdout);
 		}
-		assert.equal(existsSync(join(fixture, ".env")), false);
+		assert.deepEqual(readdirSync(fixture).sort(), ["packages", "scripts"]);
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
 });
 
-test("Caddy config isolates readiness and admin endpoints, preserves Host, overwrites forwarded IP and flushes SSE", async () => {
-	const config = await loadDeployment(root, {}, { domain: "setdraft.example.com" });
-	const file = caddyfile(config);
-	assert.match(file, /admin off/);
-	assert.match(file, /auto_https disable_certs/);
-	assert.match(file, /http:\/\/setdraft\.example\.com/);
-	assert.doesNotMatch(file, /\btls\b|acme|issuer/);
-	assert.match(file, /header_up Host \{hostport\}/);
-	assert.match(file, /header_up X-Forwarded-For \{remote_host\}/);
-	assert.match(file, /flush_interval -1/);
-	assert.match(file, /http:\/\/127\.0\.0\.1:4322 \{\n\tbind 127\.0\.0\.1/);
-	assert.match(file, /header_up Host \{upstream_hostport\}/);
-	assert.match(file, /respond 404/);
-});
-
-test("domain, IPv4 and IPv6 HTTP deployments survive .env round trips without certificates", async () => {
-	const fixture = mkdtempSync(join(tmpdir(), "setdraft-ip-config-"));
+test("direct IP access and custom proxy origins persist without certificate or proxy settings", async () => {
+	const fixture = mkdtempSync(join(tmpdir(), "setdraft-origin-config-"));
 	try {
-		for (const [input, host] of [
-			["Setdraft.Example.Com", "setdraft.example.com"], ["192.168.1.20", "192.168.1.20"],
-			["127.0.0.1", "127.0.0.1"], ["2001:0DB8:0:0::20", "[2001:db8::20]"], ["[::1]", "[::1]"],
-		]) {
-			const config = await loadDeployment(fixture, {}, { domain: input });
-			assert.equal(config.values.HYDRO_PUBLIC_ORIGIN, `http://${host}`);
-			assert.deepEqual(config.ports, [80]);
-			assert.equal(config.tls, undefined);
-			assert.equal(await validateTlsCertificate(config), undefined);
-			assert.ok(caddyfile(config).includes(`http://${host} {`));
+		writeFileSync(join(fixture, ".env"), 'HYDRO_PROXY_MODE="caddy"\nHYDRO_SSL_CERT="missing.pem"\nHYDRO_CADDY_BIN="missing-caddy"\nUNRELATED="keep"\n');
+		for (const origin of ["", "http://192.168.1.20:4321", "http://[2001:db8::20]:4321", "https://setdraft.example.com"]) {
+			const config = await loadDeployment(fixture, {}, { HYDRO_PUBLIC_ORIGIN: origin });
+			assert.equal(config.values.HYDRO_HOST, "0.0.0.0");
+			assert.equal(config.values.HYDRO_PUBLIC_ORIGIN, origin);
+			assert.equal(config.values.HYDRO_PROXY_MODE, undefined);
+			assert.equal(deploymentEnvironment(config, { HYDRO_CADDY_BIN: "old" }).HYDRO_CADDY_BIN, undefined);
 			await saveDeployment(config);
 			const restored = await loadDeployment(fixture, {});
-			assert.equal(restored.domain, host);
 			assert.deepEqual(restored.values, config.values);
 		}
-		const secure = await loadDeployment(fixture, {}, { domain: "example.com", https: true, HYDRO_SSL_CERT: "cert.pem", HYDRO_SSL_KEY: "key.pem" });
-		assert.equal(secure.values.HYDRO_PUBLIC_ORIGIN, "https://example.com");
-		assert.deepEqual(secure.ports, [80, 443]);
-		assert.ok(caddyfile(secure).includes(`tls ${JSON.stringify(secure.tls.certificate)} ${JSON.stringify(secure.tls.privateKey)}`));
-		await saveDeployment(secure);
-		assert.equal((await loadDeployment(fixture, {})).https, true);
-		assert.equal((await loadDeployment(fixture, {}, { https: false })).values.HYDRO_PUBLIC_ORIGIN, "http://example.com");
-		assert.equal((await loadDeployment(fixture, {}, { domain: "192.168.1.21" })).https, false);
-		const external = await loadDeployment(fixture, {}, { HYDRO_PROXY_MODE: "external", HYDRO_PUBLIC_ORIGIN: "http://192.168.1.20:8080" });
-		assert.equal(external.values.HYDRO_PUBLIC_ORIGIN, "http://192.168.1.20:8080");
-		assert.equal(external.tls, undefined);
-	} finally { rmSync(fixture, { recursive: true, force: true }); }
-});
-
-test("uploaded TLS certificates must match the domain, key and validity period", { skip: command("openssl", ["version"]).status !== 0 }, async (context) => {
-	const fixture = mkdtempSync(join(tmpdir(), "setdraft-certificate-"));
-	try {
-		const certificate = join(fixture, "fullchain.pem"), key = join(fixture, "privkey.pem");
-		const opensslConfig = join(fixture, "openssl.cnf");
-		writeFileSync(opensslConfig, "[req]\ndistinguished_name=dn\nx509_extensions=extensions\nprompt=no\n[dn]\nCN=setdraft.example.com\n[extensions]\nsubjectAltName=DNS:setdraft.example.com\n");
-		const generated = command("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2", "-config", opensslConfig, "-keyout", key, "-out", certificate]);
-		assert.equal(generated.status, 0, generated.stderr);
-		const config = await loadDeployment(fixture, {}, { domain: "setdraft.example.com", https: true, HYDRO_SSL_CERT: certificate, HYDRO_SSL_KEY: key });
-		const validated = await validateTlsCertificate(config);
-		assert.deepEqual(validated.certificate, readFileSync(certificate));
-		assert.deepEqual(validated.privateKey, readFileSync(key));
-		await assert.rejects(validateTlsCertificate({ ...config, domain: "other.example.com" }), /不适用于当前域名/);
-		const other = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-		writeFileSync(join(fixture, "other.pem"), other.privateKey.export({ type: "pkcs8", format: "pem" }));
-		await assert.rejects(validateTlsCertificate({ ...config, values: { ...config.values, HYDRO_SSL_KEY: "other.pem" } }), /不匹配/);
-		await assert.rejects(validateTlsCertificate({ ...config, values: { ...config.values, HYDRO_SSL_CERT: "missing.pem" } }), /无法读取/);
-		writeFileSync(join(fixture, "broken.pem"), "not a certificate");
-		await assert.rejects(validateTlsCertificate({ ...config, values: { ...config.values, HYDRO_SSL_CERT: "broken.pem" } }), /格式无效/);
-		for (const suffix of ["\n-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----\n", "\n-----BEGIN CERTIFICATE-----\ntruncated"]) {
-			writeFileSync(join(fixture, "broken.pem"), Buffer.concat([validated.certificate, Buffer.from(suffix)]));
-			await assert.rejects(validateTlsCertificate({ ...config, values: { ...config.values, HYDRO_SSL_CERT: "broken.pem" } }), /格式无效/);
-		}
-		const now = Date.now();
-		const clock = context.mock.method(Date, "now", () => now + 3 * 24 * 60 * 60 * 1000);
-		await assert.rejects(validateTlsCertificate(config), /过期/);
-		clock.mock.mockImplementation(() => now - 24 * 60 * 60 * 1000);
-		await assert.rejects(validateTlsCertificate(config), /尚未生效/);
-	} finally { rmSync(fixture, { recursive: true, force: true }); }
-});
-
-test("Caddy release artifacts are pinned across platforms and tampering fails before extraction", async () => {
-	const fixture = mkdtempSync(join(tmpdir(), "setdraft-archive-"));
-	try {
-		for (const platform of ["linux", "darwin", "win32"]) for (const arch of ["x64", "arm64"])
-			assert.match(caddyAsset(platform, arch).sha256, /^[a-f0-9]{64}$/);
-		assert.throws(() => caddyAsset("linux", "riscv64"), /自行安装/);
-		const archive = join(fixture, "caddy.tar.gz");
-		writeFileSync(archive, "tampered");
-		await assert.rejects(verifyArchive(archive, caddyAsset().sha256), /SHA-256 不匹配/);
-		await verifyArchive(archive, createHash("sha256").update("tampered").digest("hex"));
+		const saved = readFileSync(join(fixture, ".env"), "utf8");
+		assert.match(saved, /UNRELATED="keep"/);
+		assert.doesNotMatch(saved, /HYDRO_PROXY_MODE|HYDRO_SSL_CERT|HYDRO_CADDY_BIN/);
+		assert.equal(existsSync(join(fixture, ".hydro-problem-make", "deployment")), false);
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
 });
 
@@ -399,7 +344,7 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 	mkdirSync(join(fixture, "packages/hydro-web/dist"), { recursive: true });
 	mkdirSync(join(fixture, "packages/hydro-server/dist"), { recursive: true });
 	writeFileSync(join(fixture, "packages/hydro-web/dist/index.html"), "fixture");
-	writeFileSync(join(fixture, "packages/hydro-server/dist/cli.js"), `require('node:http').createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({setupRequired:false,origin:process.env.HYDRO_PUBLIC_ORIGIN,mirror:process.env.HYDRO_DEBIAN_MIRROR}));}).listen(${port},'127.0.0.1');`);
+	writeFileSync(join(fixture, "packages/hydro-server/dist/cli.js"), `require('node:http').createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({setupRequired:false,origin:process.env.HYDRO_PUBLIC_ORIGIN,mirror:process.env.HYDRO_DEBIAN_MIRROR,listenHost:process.env.HYDRO_HOST}));}).listen(${port},'127.0.0.1');`);
 	writeFileSync(join(fixture, "bin/npm"), '#!/bin/sh\necho "npm $*" >> commands.log\ncase "$*" in *ping*registry.npmmirror.com*) exit 1;; esac\nexit 0\n', { mode: 0o755 });
 	writeFileSync(join(fixture, "bin/docker"), '#!/bin/sh\necho "docker $*" >> commands.log\nexit 0\n', { mode: 0o755 });
 	writeFileSync(join(fixture, "bin/git"), '#!/bin/sh\necho "git $*" >> commands.log\ncase "$1" in branch) echo main;; remote) echo https://example.com/project.git;; esac\nexit 0\n', { mode: 0o755 });
@@ -411,6 +356,7 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 		assert.equal(installed.status, 0, installed.stderr);
 		assert.match(installed.stderr, /回退到 npm 官方源/);
 		const logged = readFileSync(join(fixture, "commands.log"), "utf8");
+		assertDependencyBuildOrder(logged);
 		assert.match(logged, /registry.npmjs.org.*ci --ignore-scripts/);
 		assert.match(logged, /DEBIAN_MIRROR=https:\/\/mirrors.tuna.tsinghua.edu.cn/);
 		assert.match(logged, /GCC_IMAGE=mirror.example.com/);
@@ -420,6 +366,7 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 		assert.equal(restarted.status, 0, restarted.stderr);
 		const response = await fetch(`http://127.0.0.1:${port}/api/health`).then((r) => r.json());
 		assert.equal(response.origin, `http://127.0.0.1:${port}`);
+		assert.equal(response.listenHost, "0.0.0.0");
 		const before = readFileSync(join(fixture, ".env"), "utf8");
 		const upgraded = invoke("upgrade");
 		assert.equal(upgraded.status, 0, upgraded.stderr);

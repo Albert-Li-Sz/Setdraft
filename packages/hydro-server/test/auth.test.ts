@@ -420,9 +420,16 @@ describe("authenticated personal workspaces", () => {
 		).toBe(404);
 	}, 15000);
 
-	it.each(["https://team.example", "http://team.example", "http://192.168.1.20", "http://[2001:db8::20]"])(
-		"authenticates through %s while enforcing Host, Origin and CSRF",
-		async (publicOrigin) => {
+	it.each([
+		["https://team.example", "team.example"],
+		["http://team.example", "team.example"],
+		["http://192.168.1.20", "192.168.1.20"],
+		["http://[2001:db8::20]", "[2001:db8::20]"],
+		[undefined, "192.168.1.20"],
+		[undefined, "[2001:db8::20]"],
+	] as const)(
+		"authenticates with configured origin %s and host %s while enforcing Host, Origin and CSRF",
+		async (publicOrigin, host) => {
 			server.closeAllConnections();
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 			await server.closeWorkspaces();
@@ -434,6 +441,7 @@ describe("authenticated personal workspaces", () => {
 			});
 			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 			origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+			const browserOrigin = publicOrigin ?? `http://${host}:${new URL(origin).port}`;
 			const request = (path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) =>
 				new Promise<{ status: number | undefined; cookie: string; text: string }>((resolve, reject) => {
 					const connection = httpRequest(
@@ -441,8 +449,8 @@ describe("authenticated personal workspaces", () => {
 						{
 							method,
 							headers: {
-								origin: publicOrigin,
-								host: new URL(publicOrigin).host,
+								origin: browserOrigin,
+								host: new URL(browserOrigin).host,
 								"content-type": "application/json",
 								...headers,
 							},
@@ -470,8 +478,8 @@ describe("authenticated personal workspaces", () => {
 			const credentials = { username: "administrator", password, setupToken: setupCode };
 			const response = await request("/auth/setup", "POST", credentials, { "x-forwarded-for": "192.0.2.20" });
 			expect(response.status).toBe(200);
-			expect(setup).toHaveBeenCalledWith(credentials, "192.0.2.20");
-			if (publicOrigin.startsWith("https:"))
+			expect(setup).toHaveBeenCalledWith(credentials, publicOrigin ? "192.0.2.20" : "127.0.0.1");
+			if (browserOrigin.startsWith("https:"))
 				expect(response.cookie).toMatch(/^__Host-setdraft-session=.*; Secure$/u);
 			else {
 				expect(response.cookie).toMatch(/^setdraft-session=.*; Path=\/; HttpOnly; SameSite=Lax;/u);
@@ -492,7 +500,18 @@ describe("authenticated personal workspaces", () => {
 				).status,
 			).toBe(201);
 			expect((await request("/auth/login", "POST", credentials, { origin })).status).toBe(403);
+			expect(
+				(await request("/auth/login", "POST", credentials, { origin: "http://untrusted.example" })).status,
+			).toBe(403);
 			expect((await request("/auth/session", "GET", undefined, { host: "untrusted.example" })).status).toBe(403);
+			if (!publicOrigin) {
+				const wrongPort = `http://${host}:${Number(new URL(origin).port) + 1}`;
+				expect((await request("/auth/login", "POST", credentials, { origin: wrongPort })).status).toBe(403);
+				expect(
+					(await request("/auth/session", "GET", undefined, { host: new URL(wrongPort).host, origin: wrongPort }))
+						.status,
+				).toBe(403);
+			}
 			expect(
 				(await request("/auth/logout", "POST", undefined, { cookie, "x-csrf-token": session.csrfToken ?? "" }))
 					.status,

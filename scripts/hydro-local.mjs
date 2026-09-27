@@ -10,7 +10,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
-import { caddyEnvironment, caddyPaths, prepareCaddy } from "./managed-caddy.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(scriptPath), "..");
@@ -26,7 +25,6 @@ let npmRegistry;
 const services = {
 	api: { script: "dev:hydro-api", port: 4321, url: "http://127.0.0.1:4321/api/health" },
 	web: { script: "dev:hydro-web", port: 5173, url: "http://127.0.0.1:5173/" },
-	caddy: { port: 4322, url: "http://127.0.0.1:4322/api/health" },
 };
 let currentMode = "production";
 
@@ -43,7 +41,7 @@ async function saveMode(mode) {
 }
 
 function activeServices() {
-	return currentMode === "dev" ? ["api", "web"] : deployment.domain ? ["api", "caddy"] : ["api"];
+	return currentMode === "dev" ? ["api", "web"] : ["api"];
 }
 
 function usage() {
@@ -58,23 +56,19 @@ function usage() {
   ./install.ps1 / ./upgrade.ps1 / ./uninstall.ps1
                                           Windows PowerShell 等价入口
   部署参数（install / upgrade / start）：
-    --domain <域名或IP>                    配置同机反向代理；默认 HTTP
-    --https --ssl-cert <证书> --ssl-key <私钥>
-                                          域名可选 HTTPS；先上传 PEM 证书链和私钥
-    --http                                切换回 HTTP
-    --proxy-mode off|external|caddy         本机 / 已有代理 / 托管 Caddy
+    --host 0.0.0.0|127.0.0.1              生产模式监听地址；默认 0.0.0.0
+    --public-origin <HTTP(S) URL>          自建反向代理后的浏览器访问来源
     --network cn|global                    国内或国际网络；默认 cn
     --registry <HTTPS npm 源>              自定义 npm 源
     --docker-registry <镜像仓库>            Docker Hub 镜像，不含协议
-    --download-proxy <HTTP(S) 代理>         npm、Git、Caddy 下载代理
-    --caddy-archive <官方安装包>            校验后离线安装 Caddy
+    --download-proxy <HTTP(S) 代理>         npm、Git 下载代理
   node scripts/hydro-local.mjs start [--mode production|dev]|stop|status|doctor
   node scripts/hydro-local.mjs backup <目录>|restore <目录>
   node scripts/hydro-local.mjs prune --older-than-days <天数> [--dry-run]
   node scripts/hydro-local.mjs account setup-code|reset-password <用户名>
 
 部署参数保存到仓库 .env；升级和启动自动加载，命令行 > 环境变量 > .env。
-卸载默认保留 .env、证书以及 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
+卸载默认保留 .env 以及 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
 --purge-data 会永久删除这些数据；--remove-deps 额外删除根目录 node_modules。`);
 }
 
@@ -254,7 +248,8 @@ function stopPid(pid, force) {
 }
 
 async function stopAll() {
-	for (const name of Object.keys(services).reverse()) await stopService(name);
+	// Stop a proxy managed by older installers; never touch a system proxy.
+	for (const name of ["caddy", ...Object.keys(services).reverse()]) await stopService(name);
 }
 
 async function checkPorts() {
@@ -263,10 +258,6 @@ async function checkPorts() {
 		if (!(await readManagedPid(name)) && (await portInUse(config.port))) {
 			throw new Error(`端口 ${config.port} 已被其他进程占用；请先停止该进程。`);
 		}
-	}
-	if (deployment.domain && !(await readManagedPid("caddy"))) {
-		for (const port of deployment.ports) if (await portInUse(port))
-			throw new Error(`端口 ${port} 已被占用。已有反向代理请使用 --proxy-mode external；脚本不会覆盖系统代理配置。`);
 	}
 }
 
@@ -282,7 +273,7 @@ async function startAll() {
 		throw error;
 	}
 	console.log(`打开 ${process.env.HYDRO_PUBLIC_ORIGIN ?? `http://127.0.0.1:${currentMode === "dev" ? "5173" : "4321"}`} 使用制题工作台。`);
-	if (deployment.domain) console.log(`Caddy 本机转发已就绪；请确认访问地址和 ${deployment.ports.join("/")} 入站端口${deployment.https ? "，HTTPS 使用已提供的 SSL 证书" : "，当前使用 HTTP"}。日志：${join(runtimeRoot, "caddy.log")}。`);
+	if (currentMode === "production") console.log(`Web/API 监听 ${deployment.values.HYDRO_HOST}:4321；${deployment.values.HYDRO_HOST === "0.0.0.0" ? "可通过 http://服务器IP:4321 访问" : "仅本机可直接访问"}。反向代理由使用者自行配置。`);
 	try {
 		const session = await fetch("http://127.0.0.1:4321/api/auth/session").then((response) => response.json());
 		if (session.setupRequired) await account(["setup-code"]);
@@ -296,9 +287,10 @@ function installDependencies() {
 		runNpm(["run", "hydrate-model-data", "--workspace=@earendil-works/pi-ai"]);
 	}
 	runNpm(["run", "check:model-data", "--workspace=@earendil-works/pi-ai"]);
+	// AI imports telemetry declarations from dist, which is absent on first installation.
+	runNpm(["run", "build", "--workspace=@earendil-works/pi-telemetry"]);
 	runNpm(["run", "build:offline", "--workspace=@earendil-works/pi-ai"]);
 	for (const workspace of [
-		"@earendil-works/pi-telemetry",
 		"@hydro-problem-make/authoring",
 		"@hydro-problem-make/server",
 		"@hydro-problem-make/web",
@@ -333,32 +325,30 @@ function checkUpgrade() {
 
 function printDryRun(command, options) {
 	if (["install", "upgrade", "start"].includes(command)) {
-		console.log(`将写入 ${deployment.path}（仅项目配置），网络 ${deployment.values.HYDRO_NETWORK}，代理模式 ${deployment.values.HYDRO_PROXY_MODE}。`);
+		console.log(`将写入 ${deployment.path}（仅项目配置），网络 ${deployment.values.HYDRO_NETWORK}，生产监听 ${deployment.values.HYDRO_HOST}:4321。`);
 		console.log(`Debian 软件源：${deployment.debianMirror}；Docker 镜像仓库：${deployment.values.HYDRO_DOCKER_REGISTRY || "Docker Hub（可自定义可信镜像）"}。`);
 		if (deployment.values.HYDRO_DOWNLOAD_PROXY) console.log("下载代理：已配置（地址不显示）。");
-		if (deployment.domain) console.log(`将安装并校验 Caddy、生成反向代理配置，使用 ${deployment.values.HYDRO_PUBLIC_ORIGIN}，托管 ${deployment.ports.join("/")} 端口${deployment.https ? "；校验并保存上传的 SSL 证书和私钥" : "；无需 SSL 证书"}。`);
-		if (deployment.values.HYDRO_PROXY_MODE === "external") console.log("沿用外部反向代理；不会启动或修改系统 Caddy。");
+		if (deployment.values.HYDRO_PUBLIC_ORIGIN) console.log(`浏览器访问来源：${deployment.values.HYDRO_PUBLIC_ORIGIN}。`);
+		console.log("不安装或托管反向代理；可自行将代理指向 Web/API 的 4321 端口。");
 	}
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
-		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再执行 pi-ai 离线构建、其余工作区构建、docker build -t ${image} packages/hydro-server/sandbox，然后以 ${currentMode} 模式启动。Docker 故障只告警。`);
+		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再依次构建 telemetry、pi-ai（离线）、其余工作区、docker build -t ${image} packages/hydro-server/sandbox，然后以 ${currentMode} 模式启动。Docker 故障只告警。`);
 	} else if (command === "uninstall") {
 		console.log(`将停止托管服务、删除 ${image} 镜像及 ${runtimeRoot}。`);
 		if (options.has("--purge-data")) console.log(`还将永久删除 ${dataRoot}。`);
 		if (options.has("--remove-deps")) console.log(`还将删除 ${join(root, "node_modules")}。`);
-	} else console.log(`将${command === "start" ? "启动" : "停止"} API、网页和已配置的托管反向代理。`);
+	} else console.log(`将${command === "start" ? "启动" : "停止"} API 和网页。`);
 }
 
 function runService(name, mode) {
 	const production = name === "api" && mode === "production";
-	const proxy = name === "caddy";
-	const paths = caddyPaths(deployment);
-	const executable = proxy ? paths.binary : production ? process.execPath : npm;
-	const args = proxy ? ["run", "--config", paths.file, "--adapter", "caddyfile"] : production ? [join(root, "packages", "hydro-server", "dist", "cli.js")] : [...npmPrefix, "run", services[name].script];
+	const executable = production ? process.execPath : npm;
+	const args = production ? [join(root, "packages", "hydro-server", "dist", "cli.js")] : [...npmPrefix, "run", services[name].script];
 	const child = spawn(executable, args, {
 		cwd: root,
 		stdio: "inherit",
-		env: proxy ? caddyEnvironment(deployment) : production ? { ...process.env, HYDRO_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : process.env,
+		env: production ? { ...process.env, HYDRO_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : { ...process.env, HYDRO_HOST: "127.0.0.1" },
 	});
 	const forward = () => child.kill("SIGTERM");
 	process.on("SIGTERM", forward);
@@ -408,7 +398,7 @@ async function main() {
 		if (!["dev", "production"].includes(requestedMode) || !["install", "upgrade", "start"].includes(command)) throw new Error("--mode 只能指定 dev 或 production。");
 	}
 	currentMode = requestedMode ?? (command === "install" ? "production" : await readMode());
-	if (["install", "upgrade", "start"].includes(command) && currentMode === "dev" && deployment.values.HYDRO_PROXY_MODE !== "off")
+	if (["install", "upgrade", "start"].includes(command) && currentMode === "dev" && deployment.values.HYDRO_PUBLIC_ORIGIN)
 		throw new Error("反向代理仅支持 production 模式；开发环境请使用独立检出并清空公开站点配置。");
 	const options = new Set(argumentsList);
 	const allowed =
@@ -447,7 +437,6 @@ async function main() {
 		checkDependencies();
 		if (currentMode === "production" && !(await stat(join(root, "packages", "hydro-web", "dist", "index.html")).catch(() => undefined))) throw new Error("生产网页尚未构建，请先运行 ./install.sh。");
 		await checkPorts();
-		await prepareCaddy(deployment);
 		await stopAll();
 		await saveDeployment(deployment);
 		await startAll();
@@ -474,7 +463,7 @@ async function main() {
 		console.log(
 			process.exitCode
 				? "本地服务已停止，但沙箱镜像未能删除；请检查 Docker 后手动删除。"
-				: "本地服务已卸载。仓库源码及 .env 保留；未指定 --purge-data 时制题数据、AI 配置和 Caddy 证书保留。",
+				: "本地服务已卸载。仓库源码及 .env 保留；未指定 --purge-data 时制题数据与 AI 配置保留。",
 		);
 		return;
 	}
@@ -488,12 +477,11 @@ async function main() {
 		await stopAll();
 		run("git", ["merge", "--ff-only", "FETCH_HEAD"]);
 		await saveDeployment(deployment);
-		// Use the upgraded installer/manifest, including any newer pinned Caddy release.
+		// Use the upgraded installer/manifest, including its updated build order.
 		run(process.execPath, [scriptPath, "install", "--mode", currentMode], { ...process.env, ...deployment.values });
 		return;
 	}
 	selectRegistry();
-	await prepareCaddy(deployment);
 	await stopAll();
 	await saveDeployment(deployment);
 	installDependencies();
@@ -511,11 +499,9 @@ async function account(args) {
 async function doctor() {
 	console.log(`Node.js ${process.version} · 模式 ${await readMode()}`);
 	console.log(`配置：${deployment.path} · 网络 ${deployment.values.HYDRO_NETWORK} · npm ${npmRegistry}`);
-	console.log(`站点来源：${deployment.values.HYDRO_PUBLIC_ORIGIN || "本机"} · 代理 ${deployment.values.HYDRO_PROXY_MODE}`);
-	if (deployment.domain) {
-		console.log(`Caddy 配置：${caddyPaths(deployment).file}；${deployment.https ? "SSL 证书位于 deployment/tls，" : ""}日志位于 runtime/caddy.log。`);
-		console.log(`站点 ${deployment.https ? "HTTPS" : "HTTP"}：${await ready(`${deployment.values.HYDRO_PUBLIC_ORIGIN}/api/health`) ? "可访问" : `未确认，请检查访问地址、${deployment.ports.join("/")} 端口和日志`}`);
-	}
+	console.log(`生产监听：${deployment.values.HYDRO_HOST}:4321 · 站点来源：${deployment.values.HYDRO_PUBLIC_ORIGIN || "通过服务器 IP 直接访问"}`);
+	if (deployment.values.HYDRO_PUBLIC_ORIGIN)
+		console.log(`外部站点：${await ready(`${deployment.values.HYDRO_PUBLIC_ORIGIN}/api/health`) ? "可访问" : "未确认，请检查自建反向代理配置"}`);
 	try { console.log(`npm ${output(npm, [...npmPrefix, "--version"])}`); } catch (error) { console.log(`npm 不可用：${error}`); }
 	try {
 		console.log(`Docker ${output("docker", ["info", "--format", "{{.ServerVersion}}"])}`);
@@ -556,7 +542,7 @@ async function backup(destination) {
 		await rm(destination, { recursive: true, force: true });
 		throw error;
 	}
-	console.log(`备份完成：${destination}，包含部署配置快照与托管 Caddy 证书。服务已停止，可运行 start 重启。`);
+	console.log(`备份完成：${destination}，包含全部工作区文件与部署配置快照。服务已停止，可运行 start 重启。`);
 }
 
 async function restore(source) {

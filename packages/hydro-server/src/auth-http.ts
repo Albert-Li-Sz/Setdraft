@@ -1,10 +1,31 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { AuthError, type IdentityStore, type SessionAccess } from "./identity.ts";
 import type { WorkspaceRegistry } from "./workspace-registry.ts";
 
 function json(response: ServerResponse, status: number, body: unknown): void {
 	response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
 	response.end(JSON.stringify(body));
+}
+
+function directIpOrigin(request: IncomingMessage): string | undefined {
+	const host = request.headers.host;
+	if (!host) return undefined;
+	try {
+		const url = new URL(`http://${host}`);
+		const ip = url.hostname.replace(/^\[|\]$/gu, "");
+		if (
+			url.host === host &&
+			!url.username &&
+			!url.password &&
+			isIP(ip) &&
+			Number(url.port || 80) === request.socket.localPort
+		)
+			return url.origin;
+	} catch {
+		/* An invalid Host is rejected by checkOrigin. */
+	}
+	return undefined;
 }
 async function body(request: IncomingMessage, maxBytes = 16_384): Promise<Record<string, unknown>> {
 	if (request.headers["content-type"]?.split(";", 1)[0] !== "application/json")
@@ -58,10 +79,16 @@ export class AuthHttp {
 	}
 	checkOrigin(request: IncomingMessage, response: ServerResponse): void {
 		const port = request.socket.localPort;
-		const local = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+		const local = [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`];
+		const development = [...local, "http://127.0.0.1:5173", "http://localhost:5173", "http://[::1]:5173"];
+		const direct = directIpOrigin(request);
 		const allowed = this.publicOrigin
 			? [this.publicOrigin]
-			: [...local, "http://127.0.0.1:5173", "http://localhost:5173"];
+			: development.some((value) => new URL(value).host === request.headers.host)
+				? development
+				: direct
+					? [direct]
+					: [];
 		if (![...allowed, ...local].some((value) => new URL(value).host === request.headers.host))
 			throw new AuthError("浏览器来源不受支持。", 403, "ORIGIN_NOT_ALLOWED");
 		const origin = request.headers.origin;
@@ -81,7 +108,7 @@ export class AuthHttp {
 	}
 	private ip(request: IncomingMessage): string {
 		const remote = request.socket.remoteAddress ?? "unknown";
-		// The deployment contract is a same-host reverse proxy. Never trust a remote peer's forwarding headers.
+		// Only a same-host proxy may supply forwarded IPs. Remote peers use their connection address.
 		if (this.publicOrigin && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remote)) {
 			const forwarded = request.headers["x-forwarded-for"];
 			if (typeof forwarded === "string") return forwarded.split(",").at(-1)?.trim().slice(0, 64) || remote;

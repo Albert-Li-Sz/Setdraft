@@ -2,7 +2,7 @@
 
 The local API stores problems, tasks, chats, contests and releases in `workspace.sqlite`. Large files live in SHA-256 blobs under the workspace root. Existing file-based records are migrated on first startup; their original directories remain available as rollback copies and for historical downloads. The server can start without Docker. `GET /api/health` is an anonymous liveness probe returning only `{ "status": "ok" }`. Authenticated `GET /api/system/status` includes sandbox readiness.
 
-The default launcher builds the frontend and serves it from `127.0.0.1:4321`; `--mode dev` runs Vite on port 5173. See the repository README for install, upgrade, doctor, backup, restore and cleanup commands.
+The default launcher builds the frontend and serves it on `0.0.0.0:4321` by default (`HYDRO_HOST=127.0.0.1` restricts it to loopback); `--mode dev` runs Vite on port 5173. See the repository README for install, upgrade, doctor, backup, restore and cleanup commands.
 
 ## Module boundaries
 
@@ -48,7 +48,7 @@ All business endpoints, direct file URLs and event streams require the same sess
 
 Passwords use asynchronous Node scrypt (`N=2^17, r=8, p=1`, random salt), at most two hashes concurrently. Session tokens are random and only SHA-256 digests are stored; cookies are HttpOnly, SameSite=Lax, and Secure with the `__Host-` prefix under HTTPS. Sessions last at most seven days, expiring after 24 hours without requests. Login limits are persisted per account and source IP; error messages do not distinguish invalid, missing or disabled accounts. Setup is transactionally single-use with a 24-hour token. Identity auditing records account operations without passwords, cookies or model keys.
 
-Set `HYDRO_PUBLIC_ORIGIN` to the exact browser origin behind a same-host proxy. IP and domain deployments default to HTTP; domains can opt into HTTPS with a supplied SSL certificate and private key. Host, Origin and CSRF checks remain active under both protocols. Forwarded IPs are trusted only from a loopback peer when a public origin is explicitly configured. Keep the backend bound to loopback. See the root README for setup-token rotation, password recovery, full backup/restore and proxy configuration.
+Without `HYDRO_PUBLIC_ORIGIN`, direct HTTP access through the server IP and its listening port is supported; request Host and Origin must match. Set `HYDRO_PUBLIC_ORIGIN` to the exact browser origin when using your own reverse proxy or a domain. The installer does not provision a proxy or certificates. Host, Origin and CSRF checks remain active under both protocols. Forwarded IPs are trusted only from a loopback peer when a public origin is explicitly configured; a remote proxy uses its connection IP for rate limiting. The Web/API listener defaults to `0.0.0.0`; set `HYDRO_HOST=127.0.0.1` for a same-host proxy-only deployment. See the root README for setup-token rotation, password recovery, backup/restore and proxy configuration.
 
 Security references: [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html), [session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html), [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 

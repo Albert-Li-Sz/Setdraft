@@ -8,7 +8,7 @@ Web 界面采用黑白配色、可收起侧栏与简洁工具栏，右上角支�
 
 ## 安装
 
-环境要求：Node.js 22.19+、npm、Git。托管反向代理还需要 `curl` 和 `tar`（Windows 10/11 自带）。
+环境要求：Node.js 22.19+、npm、Git。
 Docker 用于生成、验证和打包；Docker 未启动时仍可安装并编辑题目。脚本不会自动安装 Node.js / Docker 或改动系统软件源。
 
 ```bash
@@ -17,7 +17,8 @@ cd setdraft
 ./install.sh
 ```
 
-默认以生产模式安装：构建静态网页，由 API 在 `http://127.0.0.1:4321/` 同源托管。
+默认以生产模式安装：先构建 telemetry，再构建 AI 和应用；静态网页与 API 同源托管，监听 `0.0.0.0:4321`。
+安装后使用 `http://服务器IP:4321/` 访问，本机也可使用 `http://127.0.0.1:4321/`。安装脚本不安装反向代理。
 仓库内包含已校验的模型数据快照；数据缺失或损坏时，安装脚本会尝试重新生成。
 安装和升级默认采用国内网络配置：npm 使用 npmmirror，沙箱中的 Debian 软件源使用清华镜像。
 默认 npm 镜像探测失败时尝试官方源；自定义源不会被静默替换。下载设置包含超时和重试，并保留锁文件的完整性校验。
@@ -32,8 +33,8 @@ Docker 不可用时会告警；启动 Docker 后管理员可在管理员设置�
 ```bash
 ./upgrade.sh                 # 检查干净的 main 分支后快进更新并重启
 ./upgrade.sh --mode dev      # 可切换模式；不指定则沿用上次模式
-./uninstall.sh               # 停止 API、网页和托管 Caddy，删除沙箱镜像，保留数据与证书
-./uninstall.sh --purge-data  # 同时删除题目、发布包、聊天、AI 配置及托管 Caddy 证书
+./uninstall.sh               # 停止 API 和网页，删除沙箱镜像，保留数据
+./uninstall.sh --purge-data  # 同时删除全部工作区数据
 node scripts/hydro-local.mjs status
 node scripts/hydro-local.mjs doctor
 node scripts/hydro-local.mjs backup ./my-backup
@@ -42,7 +43,7 @@ node scripts/hydro-local.mjs prune --older-than-days 90 --dry-run
 ```
 
 Windows PowerShell 使用 `./install.ps1`、`./upgrade.ps1` 和 `./uninstall.ps1`；前两个支持 `-Mode dev`、
-`-Domain`、`-Https`、`-Http`、`-SslCert`、`-SslKey`、`-Network cn|global`、`-ProxyMode`、`-Registry`、`-DockerRegistry`、`-DownloadProxy` 和 `-CaddyArchive`。
+`-ListenAddress`、`-PublicOrigin`、`-Network cn|global`、`-Registry`、`-DockerRegistry` 和 `-DownloadProxy`。
 三个 Unix 脚本和三个 PowerShell 脚本都支持 dry-run。默认数据目录是 `.hydro-problem-make/`，也可用
 `HYDRO_WORKSPACE_ROOT` 指定其他目录。
 
@@ -70,67 +71,39 @@ node scripts/hydro-local.mjs account reset-password admin     # 为指定账号�
 
 首版不提供开放注册、邮件找回、第三方登录、协作或计费。终端恢复命令需要服务器文件访问权限。
 
-## 团队部署（默认 HTTP）
+## 直接访问与自建反向代理
 
-`--domain` 接受域名、IPv4 或 IPv6。**新部署默认 HTTP，IP 部署无需 SSL 证书。**
-填写服务器实际可访问的 IP；使用域名时先配置 DNS。HTTP 需要开放 TCP 80。
+默认监听 `0.0.0.0:4321`，通过 `http://服务器IP:4321` 访问；服务器防火墙需允许 TCP 4321。
+IP 直连无需配置域名、证书或 `HYDRO_PUBLIC_ORIGIN`。登录要求 Origin 与访问 IP、端口一致，写操作仍校验 CSRF Token。
 
-```bash
-./install.sh --domain 192.168.1.20 --network cn
-./install.sh --domain setdraft.example.com --network cn
-./install.sh --domain '2001:db8::20' --network cn   # IPv6 示例，请换成自己的地址
-# 预览操作，不写文件、不下载、不启动服务：
-./install.sh --domain 192.168.1.20 --dry-run
+反向代理及 SSL 证书由使用者自行安装、配置和维护。将代理的上游设置为 `http://127.0.0.1:4321`（同机），
+或 `http://Setdraft服务器IP:4321`（远端/容器代理），并在 Setdraft 的 `.env` 中设置浏览器实际访问的完整来源：
+
+```dotenv
+HYDRO_HOST="0.0.0.0"
+HYDRO_PUBLIC_ORIGIN="https://setdraft.example.com"
 ```
 
-脚本保存对应的 `http://域名或IP` 来源，下载并校验固定版本 Caddy，生成反向代理配置；
-API 保持监听 `127.0.0.1:4321`。IPv6 地址会自动规范为 `http://[IPv6]`。
-登录、Cookie、Origin 和 CSRF 校验同时支持 HTTP / HTTPS；只有 HTTPS 会设置 Secure Cookie。
-
-域名部署可显式选择 HTTPS。先通过 SCP / SFTP 等方式将 **PEM 格式的完整证书链和匹配的未加密私钥**
-上传到服务器，再传入文件路径（路径有空格时加引号）：
+来源也可为 HTTP、包含非默认端口；不要添加路径或末尾斜杠。填写 HTTPS 来源后启用 Secure Cookie。
+需要仅允许同机代理连接时，将 `HYDRO_HOST` 改为 `127.0.0.1`。修改 `.env` 后运行：
 
 ```bash
-./install.sh --domain setdraft.example.com --https \
-  --ssl-cert /opt/setdraft-certs/fullchain.pem \
-  --ssl-key /opt/setdraft-certs/privkey.pem --network cn
+node scripts/hydro-local.mjs start --mode production
+# 也可以通过参数设置并保存：
+node scripts/hydro-local.mjs start --public-origin https://setdraft.example.com
 ```
 
-HTTPS 模式会校验证书格式、有效期、适用域名和私钥匹配关系，缺少文件或校验失败会停止安装。
-校验通过后复制到工作区的 `deployment/tls/`，私钥文件权限为 `0600`，并将托管路径写入 `.env`；
-后续启动不再依赖最初上传的临时文件。Caddy 使用提供的证书，**不会自动申请或续签证书**。
-HTTPS 需要开放 TCP 80/443，HTTP 请求会跳转到 HTTPS；证书配置见 [Caddy TLS 文档](https://caddyserver.com/docs/caddyfile/directives/tls)。
+代理须保留浏览器原始 Host，并关闭响应缓冲以支持 SSE；不要把静态网页和 API 拆成不同浏览器来源。
+同机代理可参考 [`deploy/Caddyfile.example`](deploy/Caddyfile.example)。转发 IP 仅在设置公开来源且请求来自回环地址时受信任；
+远端代理默认按代理连接 IP 限流。安装脚本不占用 80/443，不修改系统代理配置，也不管理证书。
 
-升级自动沿用 `.env` 中的协议配置。证书到期前，上传新文件并运行：
+旧版安装器托管的 Caddy 会在安装/升级/重启时停止，原有 `deployment/` 文件仍保留；旧代理专用环境变量会从 `.env` 中移除。
+`HYDRO_PUBLIC_ORIGIN` 会继续保留，迁移到 IP 直连时请清空它；迁移到自建代理时请核对其值。
+`--domain`、`--https`、`--ssl-cert`、`--ssl-key`、`--proxy-mode`、`--caddy-archive` 等旧参数已移除。
 
-```bash
-node scripts/hydro-local.mjs start --https \
-  --ssl-cert /opt/setdraft-certs/new-fullchain.pem \
-  --ssl-key /opt/setdraft-certs/new-privkey.pem
-node scripts/hydro-local.mjs start --http       # 切换回 HTTP
-```
-
-已有旧版自动 HTTPS 配置的安装，升级前需在 `.env` 补充 `HYDRO_SSL_CERT` / `HYDRO_SSL_KEY`，
-再运行 `./upgrade.sh`。若要改用 HTTP，先停止服务、用 `git pull --ff-only` 更新脚本，
-再运行 `./install.sh --http`；旧版脚本尚不支持 `--http` 参数。
-
-Linux 普通用户可能需要授权 Caddy 绑定低端口：交互终端中脚本仅通过 `sudo setcap` 为 Caddy 可执行文件授权；
-非交互安装会给出准确的授权命令后退出。无需以 root 运行整个项目；缺少 `setcap` 时安装发行版的 libcap 工具包。
-Caddy 的二进制、配置和证书保存在工作区的 `deployment/`，日志在 `runtime/caddy.log`；
-本机健康检查使用 `127.0.0.1:4322`。普通卸载保留配置与证书，`--purge-data` 才删除全部数据。
-启动成功表示本机 API / 转发已就绪，外部可达性可通过 `doctor` 和浏览器检查。
-
-已有同机 Caddy / nginx 时，将 `.env` 设为 `HYDRO_PROXY_MODE="external"` 和准确的 `HYDRO_PUBLIC_ORIGIN`，
-使用 [`deploy/Caddyfile.example`](deploy/Caddyfile.example) 配置现有代理，再运行
-`node scripts/hydro-local.mjs start --mode production`。外部代理自行管理 SSL 证书。
-脚本不会覆盖 `/etc/caddy`、停止系统代理或抢占其端口。
-来源不含路径或末尾斜杠；代理保留原始 Host，覆盖转发 IP，并即时转发 SSE。
-
-修改 `.env` 后运行 `node scripts/hydro-local.mjs start` 会重启托管服务并应用新配置。
-回到仅本机访问时将 `HYDRO_PROXY_MODE="off"`、`HYDRO_PUBLIC_ORIGIN=""`，再启动。
 脚本托管的进程可在终端关闭后继续运行；目前不会注册开机自启，服务器重启后需执行 `start`。
-不要直接暴露 4321/4322、启用多个 API 进程或把工作区放到网络共享盘。
-匿名健康检查仅返回服务存活状态；沙箱状态需要登录。
+不要启用多个 API 进程或把工作区放到网络共享盘。匿名健康检查仅返回存活状态，沙箱状态需要登录。
+Vite 开发模式仅在本机开放，使用 `http://127.0.0.1:5173`，不用于团队部署。
 
 ## 国内网络与离线部署
 
@@ -143,15 +116,12 @@ Caddy 的二进制、配置和证书保存在工作区的 `deployment/`，日志
 | `--registry` / `HYDRO_NPM_REGISTRY` | 自定义 HTTPS npm 源 |
 | `HYDRO_DEBIAN_MIRROR` | 沙箱的 Debian 镜像站根地址，如 `https://mirrors.tuna.tsinghua.edu.cn` |
 | `--docker-registry` / `HYDRO_DOCKER_REGISTRY` | 可访问的可信 Docker Hub 镜像仓库；填主机名和可选命名空间，不含协议、凭据或 `/library` |
-| `--download-proxy` / `HYDRO_DOWNLOAD_PROXY` | npm、Git、Caddy 下载使用的 HTTP(S) 代理；回环地址绕过代理 |
-| `HYDRO_CADDY_DOWNLOAD_BASE` | 官方 Caddy 发布包的 HTTPS 镜像目录，脚本追加完整文件名 |
-| `--caddy-archive` / `HYDRO_CADDY_ARCHIVE` | 事先下载的官方 Caddy 压缩包路径 |
-| `HYDRO_CADDY_BIN` | 已自行安装的 Caddy 2 可执行文件路径，跳过下载 |
+| `--download-proxy` / `HYDRO_DOWNLOAD_PROXY` | npm、Git 下载使用的 HTTP(S) 代理；回环地址绕过代理 |
 
 示例（代理地址按自己的网络调整）：
 
 ```bash
-./install.sh --domain setdraft.example.com --network cn \
+./install.sh --network cn \
   --download-proxy http://127.0.0.1:7890
 ./upgrade.sh                          # 自动沿用 .env 中的配置
 ./upgrade.sh --network global         # 切换默认网络配置
@@ -160,18 +130,6 @@ Caddy 的二进制、配置和证书保存在工作区的 `deployment/`，日志
 GitHub 首次克隆发生在安装脚本运行之前；如需要代理，可使用
 `git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/Albert-Li-Sz/setdraft.git`。
 不要在命令行填带密码的代理地址；将这类地址写入 `.env`，避免 Shell 历史记录。Unix 上脚本保存的 `.env` 权限为 `0600`。
-
-Caddy 当前固定为 **2.11.4**，支持 Linux / macOS / Windows 的 x64、arm64。
-从 [官方发布页](https://github.com/caddyserver/caddy/releases/tag/v2.11.4) 下载对应归档后可离线提供：
-
-```bash
-./install.sh --domain setdraft.example.com \
-  --caddy-archive /opt/packages/caddy_2.11.4_linux_amd64.tar.gz
-```
-
-下载、镜像和离线归档均校验仓库内固定的 SHA-256，不从镜像站动态信任校验值。
-只有显式设置 `HYDRO_CADDY_BIN` 时由部署者负责现有二进制的可信性及更新。
-离线 Caddy 包不等于全栈离线安装：npm 依赖、Docker 基础镜像和 APT 软件包仍需可访问的源或预先准备的缓存。
 
 Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓库，脚本会同时处理 Python、GCC 基础镜像，
 保留 GCC 固定摘要；管理员页面重建沙箱使用同一配置。没有适合所有网络的公共 Docker 镜像，脚本不会预置未知第三方站点。
@@ -215,8 +173,8 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 调整管理员角色不会转移旧内容。旧 AI 配置只导入一次；迁移可重复执行，不删除原数据。
 测试文件、图片和 ZIP 按 SHA-256 存入 `blobs/`，原目录保留供回退与历史下载。
 首次启动会校验并迁移旧记录，原文件暂不删除。维护前可运行 `backup`；`restore` 会保留
-恢复前的数据副本，并撤销备份中的全部旧会话。备份覆盖身份库、所有用户工作区、历史文件、托管 Caddy 证书和 `.env` 快照（`deployment.env`）；
-恢复保留当前机器的 `.env`，迁移到新服务器时请从快照恢复并核对工作区路径、域名和代理。维护工具会先停止托管服务，
+恢复前的数据副本，并撤销备份中的全部旧会话。备份覆盖身份库、所有用户工作区、历史文件和 `.env` 快照（`deployment.env`）；
+恢复保留当前机器的 `.env`，迁移到新服务器时请从快照恢复并核对工作区路径、监听地址和公开来源。维护工具会先停止托管服务，
 若存在直接启动的服务则拒绝继续。完成后需运行 `node scripts/hydro-local.mjs start` 重启。
 不要只复制单个 SQLite 文件；备份也含团队 AI 密钥，需按敏感数据保管。应用内隔离不是磁盘加密，
 具有服务器文件权限的运维人员仍可访问数据。

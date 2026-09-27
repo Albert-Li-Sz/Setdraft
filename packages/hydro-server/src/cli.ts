@@ -10,6 +10,8 @@ import { WorkspaceDatabase } from "./workspace-db.ts";
 
 const portValue = Number.parseInt(process.env.PORT ?? "4321", 10);
 if (!Number.isSafeInteger(portValue) || portValue < 1 || portValue > 65535) throw new Error("PORT must be 1-65535.");
+const host = process.env.HYDRO_HOST || "0.0.0.0";
+if (!["0.0.0.0", "127.0.0.1"].includes(host)) throw new Error("HYDRO_HOST must be 0.0.0.0 or 127.0.0.1.");
 const judgeLimits: HydroJudgeLimits = {
 	maxTestCases: Number(process.env.HYDRO_TESTCASES_MAX ?? DEFAULT_HYDRO_JUDGE_LIMITS.maxTestCases),
 	totalTimeLimitMs: Number(process.env.HYDRO_TOTAL_TIME_LIMIT_MS ?? DEFAULT_HYDRO_JUDGE_LIMITS.totalTimeLimitMs),
@@ -50,8 +52,8 @@ const server = createHydroServer({
 	projects,
 	chat,
 });
-server.listen(portValue, "127.0.0.1", () => {
-	console.log(`Setdraft API listening on http://127.0.0.1:${portValue}`);
+server.listen(portValue, host, () => {
+	console.log(`Setdraft Web/API listening on http://${host}:${portValue}`);
 	console.log(`AI chat: ${chat.getConfiguration().configured ? "configured" : "not configured"}`);
 });
 
