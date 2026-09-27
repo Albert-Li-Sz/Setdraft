@@ -1,10 +1,11 @@
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "./AppShell.tsx";
 import { RevisionConflict, requestJson } from "./api-client.ts";
 import { authClient, authFetch } from "./auth-client.ts";
 import { CopyProblemDialog } from "./CopyProblemDialog.tsx";
 import { Dialog } from "./Dialog.tsx";
+import { readFileWithProgress, transferFiles, transfers } from "./file-transfer.ts";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
@@ -20,6 +21,7 @@ import {
 	waitForTask,
 } from "./platform.ts";
 import { projectContextSnapshot } from "./problem.ts";
+import { UploadProgressDialog } from "./UploadProgressDialog.tsx";
 import { useProjectSession } from "./use-project-session.ts";
 import { WorkspaceHome } from "./WorkspaceHome.tsx";
 
@@ -83,6 +85,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const saveNow = () => session.flush();
 	useEffect(() => {
 		if (paused) {
+			transfers.clear();
 			session.pause();
 			selection.current?.abort();
 			setBusy(undefined);
@@ -108,7 +111,13 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		setRelease(releases.find((item) => item.id === snapshot.latestReleaseId));
 		localStorage.setItem(currentProjectKey, snapshot.id);
 	};
-	useEffect(() => () => selection.current?.abort(), []);
+	useEffect(
+		() => () => {
+			selection.current?.abort();
+			transfers.clear();
+		},
+		[],
+	);
 
 	const checkApiConnection = useCallback(async (signal?: AbortSignal): Promise<void> => {
 		try {
@@ -346,29 +355,36 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		if (!current) return;
 		setBusy("upload");
 		try {
-			await saveNow();
-			signal.throwIfAborted();
-			let snapshot = projectRef.current ?? current;
-			for (const file of files) {
-				if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(in|out|ans)$/u.test(file.name))
-					throw new Error(`不支持的测试文件名：${file.name}`);
-				snapshot = await requestJson<ProjectSnapshot>(
-					apiUrl(apiOrigin, `/projects/${current.id}/files/${encodeURIComponent(file.name)}`),
-					{
-						method: "PUT",
-						signal,
-						headers: {
-							"content-type": "application/octet-stream",
-							"x-expected-revision": String(snapshot.revision),
-						},
-						body: file,
-					},
-				);
+			await transferFiles(files.map((file) => file.name).join(", "), async (progress) => {
+				await saveNow();
 				signal.throwIfAborted();
-				setCurrentProject(snapshot);
-			}
-			setReport(undefined);
-			showNotice(uiMessage("已上传 {0} 个测试文件。", files.length), "passed");
+				let snapshot = projectRef.current ?? current;
+				const total = files.reduce((sum, file) => sum + file.size, 0);
+				let uploaded = 0;
+				for (const file of files) {
+					if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(in|out|ans)$/u.test(file.name))
+						throw new Error(`不支持的测试文件名：${file.name}`);
+					snapshot = await requestJson<ProjectSnapshot>(
+						apiUrl(apiOrigin, `/projects/${current.id}/files/${encodeURIComponent(file.name)}`),
+						{
+							method: "PUT",
+							signal,
+							headers: {
+								"content-type": "application/octet-stream",
+								"x-expected-revision": String(snapshot.revision),
+							},
+							body: file,
+							onUploadProgress: (loaded) =>
+								progress({ phase: "uploading", file: file.name, loaded: uploaded + loaded, total }),
+						},
+					);
+					signal.throwIfAborted();
+					setCurrentProject(snapshot);
+					uploaded += file.size;
+				}
+				setReport(undefined);
+				showNotice(uiMessage("已上传 {0} 个测试文件。", files.length), "passed");
+			});
 		} catch (error) {
 			if (signal.aborted) return;
 			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
@@ -461,27 +477,45 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 
 	async function uploadAttachments(files: File[]): Promise<void> {
 		const signal = session.signal;
+		setBusy("upload");
 		try {
-			const additions: ProjectSnapshot["attachments"] = [];
-			for (const file of files) {
-				if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(file.name) || file.size > 1024 * 1024)
-					throw new Error(`附件 ${file.name} 文件名不合法或超过 1 MiB。`);
-				const bytes = new Uint8Array(await file.arrayBuffer());
-				let binary = "";
-				for (const byte of bytes) binary += String.fromCharCode(byte);
-				additions.push({ name: file.name, contentBase64: btoa(binary) });
-			}
-			signal.throwIfAborted();
-			editProject((current) => ({
-				...current,
-				attachments: [
-					...current.attachments.filter((item) => !additions.some((other) => other.name === item.name)),
-					...additions,
-				],
-			}));
+			await transferFiles(files.map((file) => file.name).join(", "), async (progress) => {
+				const additions: ProjectSnapshot["attachments"] = [];
+				const total = files.reduce((sum, file) => sum + file.size, 0);
+				let read = 0;
+				for (const file of files) {
+					if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(file.name) || file.size > 1024 * 1024)
+						throw new Error(`附件 ${file.name} 文件名不合法或超过 1 MiB。`);
+					const bytes = new Uint8Array(
+						await readFileWithProgress(
+							file,
+							(loaded) => progress({ phase: "reading", file: file.name, loaded: read + loaded, total }),
+							signal,
+						),
+					);
+					let binary = "";
+					for (const byte of bytes) binary += String.fromCharCode(byte);
+					additions.push({ name: file.name, contentBase64: btoa(binary) });
+					read += file.size;
+				}
+				signal.throwIfAborted();
+				editProject((current) => ({
+					...current,
+					attachments: [
+						...current.attachments.filter((item) => !additions.some((other) => other.name === item.name)),
+						...additions,
+					],
+				}));
+				progress({ phase: "saving" });
+				await saveNow();
+				signal.throwIfAborted();
+				showNotice("附件已上传，可一键复制引用。", "passed");
+			});
 		} catch (error) {
 			if (signal.aborted) return;
 			showNotice(error instanceof Error ? error.message : "附件读取失败。", "failed");
+		} finally {
+			if (!signal.aborted) setBusy(undefined);
 		}
 	}
 
@@ -491,22 +525,26 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		if (!current) return;
 		setBusy("upload");
 		try {
-			await saveNow();
-			signal.throwIfAborted();
-			const revision = projectRef.current?.revision ?? current.revision;
-			const snapshot = await requestJson<ProjectSnapshot>(
-				apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
-				{
-					method: "PUT",
-					signal,
-					headers: { "content-type": "application/pdf", "x-expected-revision": String(revision) },
-					body: file,
-				},
-			);
-			signal.throwIfAborted();
-			setCurrentProject(snapshot);
-			setReport(undefined);
-			showNotice("DOMjudge PDF 已上传；重新验证后会进入新发布包。", "passed");
+			await transferFiles(file.name, async (progress) => {
+				await saveNow();
+				signal.throwIfAborted();
+				const revision = projectRef.current?.revision ?? current.revision;
+				const snapshot = await requestJson<ProjectSnapshot>(
+					apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
+					{
+						method: "PUT",
+						signal,
+						headers: { "content-type": "application/pdf", "x-expected-revision": String(revision) },
+						body: file,
+						onUploadProgress: (loaded) =>
+							progress({ phase: "uploading", file: file.name, loaded, total: file.size }),
+					},
+				);
+				signal.throwIfAborted();
+				setCurrentProject(snapshot);
+				setReport(undefined);
+				showNotice("DOMjudge PDF 已上传；重新验证后会进入新发布包。", "passed");
+			});
 		} catch (error) {
 			if (signal.aborted) return;
 			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
@@ -754,6 +792,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 					)}
 				</Suspense>
 			</AppShell>
+			<UploadProgressDialog />
 			<Dialog
 				open={choosingScoringMode}
 				onClose={() => setChoosingScoringMode(false)}

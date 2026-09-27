@@ -1,6 +1,6 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { ManualProgram, ManualProject, ManualRelease } from "@hydro-problem-make/contracts";
+import type { ManualProgram, ManualProject, ManualRelease } from "@setdraft/contracts";
 import { writeDomjudgeProblemArchive } from "./domjudge-export.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { writeLegacyProblemExport } from "./legacy-exports.ts";

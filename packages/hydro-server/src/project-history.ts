@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isSafeFlatName } from "@hydro-problem-make/authoring";
-import { isProjectSnapshot, type ManualProjectSnapshot } from "@hydro-problem-make/contracts";
+import { isSafeFlatName } from "@setdraft/authoring";
+import { isProjectSnapshot, type ManualProjectSnapshot } from "@setdraft/contracts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { hashFile } from "./project-files.ts";

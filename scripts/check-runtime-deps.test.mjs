@@ -25,11 +25,11 @@ async function check(t, manifest, source, extraFiles = {}) {
 }
 
 test("rejects undeclared imports even when the workspace package exists", async (t) => {
-	const result = await check(t, {}, 'export { createModels } from "@hydro-problem-make/authoring";', {
-		"packages/authoring/package.json": JSON.stringify({ name: "@hydro-problem-make/authoring", version: "1.0.0" }),
+	const result = await check(t, {}, 'export { createModels } from "@setdraft/authoring";', {
+		"packages/authoring/package.json": JSON.stringify({ name: "@setdraft/authoring", version: "1.0.0" }),
 	});
 	assert.equal(result.status, 1);
-	assert.match(result.stderr, /src[\\/]index\.ts:1: @hydro-problem-make\/authoring is not declared/);
+	assert.match(result.stderr, /src[\\/]index\.ts:1: @setdraft\/authoring is not declared/);
 });
 
 test("accepts runtime declarations, builtins, self imports, relative imports, and erased types", async (t) => {

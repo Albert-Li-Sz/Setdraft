@@ -1,4 +1,4 @@
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { App } from "./App.tsx";
 import { type AuthState, authClient } from "./auth-client.ts";

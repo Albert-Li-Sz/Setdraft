@@ -1,4 +1,5 @@
-import type { AuthSession, AuthUser, UserPreferences } from "@hydro-problem-make/contracts";
+import type { AuthSession, AuthUser, UserPreferences } from "@setdraft/contracts";
+import { type ProgressRequestInit, uploadRequest } from "./upload-request.ts";
 
 export interface AuthState {
 	status: "loading" | "ready" | "anonymous" | "locked" | "error";
@@ -117,12 +118,16 @@ export class AuthClient {
 		this.accept(await this.authRequest("password", "PUT", { currentPassword, password }));
 		this.channel?.postMessage("changed");
 	}
-	async updateProfile(input: Omit<UserPreferences, "avatar"> & { avatar?: string | null }): Promise<void> {
+	async updateProfile(
+		input: Omit<UserPreferences, "avatar"> & { avatar?: string | null },
+		onUploadProgress?: ProgressRequestInit["onUploadProgress"],
+	): Promise<void> {
 		const generation = this.generation;
 		const response = await this.fetch("/api/auth/profile", {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(input),
+			onUploadProgress,
 		});
 		const value = (await response.json()) as AuthSession & { message?: string };
 		if (generation !== this.generation) throw new DOMException("Session changed", "AbortError");
@@ -136,7 +141,7 @@ export class AuthClient {
 		this.accept(snapshot);
 		this.channel?.postMessage("logout");
 	}
-	async fetch(url: string, init: RequestInit = {}): Promise<Response> {
+	async fetch(url: string, init: ProgressRequestInit = {}): Promise<Response> {
 		if (this.started && (this.state.status !== "ready" || this.state.user?.mustChangePassword))
 			throw new AuthenticationRequired();
 		const generation = this.generation;
@@ -144,7 +149,11 @@ export class AuthClient {
 		if (!["GET", "HEAD", "OPTIONS"].includes(init.method?.toUpperCase() ?? "GET") && this.state.csrfToken)
 			headers.set("x-csrf-token", this.state.csrfToken);
 		const signal = init.signal ? AbortSignal.any([init.signal, this.controller.signal]) : this.controller.signal;
-		const response = await fetch(url, { ...init, headers, signal, credentials: "same-origin" });
+		const { onUploadProgress, ...request } = init;
+		const options: RequestInit = { ...request, headers, signal, credentials: "same-origin" };
+		const response = onUploadProgress
+			? await uploadRequest(url, options, onUploadProgress)
+			: await fetch(url, options);
 		if (generation !== this.generation) throw new DOMException("Session changed", "AbortError");
 		const responseUser = response.headers.get("x-setdraft-user");
 		if (responseUser && this.state.user && responseUser !== this.state.user.id) {
@@ -171,4 +180,4 @@ export class AuthClient {
 	}
 }
 export const authClient = new AuthClient();
-export const authFetch = (url: string, init?: RequestInit): Promise<Response> => authClient.fetch(url, init);
+export const authFetch = (url: string, init?: ProgressRequestInit): Promise<Response> => authClient.fetch(url, init);

@@ -41,6 +41,6 @@ export function effectiveChecker(mode: CheckerMode | undefined, customSource: st
 	return undefined;
 }
 
-import type { CheckerMode } from "@hydro-problem-make/contracts";
+import type { CheckerMode } from "@setdraft/contracts";
 
-export type { CheckerMode } from "@hydro-problem-make/contracts";
+export type { CheckerMode } from "@setdraft/contracts";

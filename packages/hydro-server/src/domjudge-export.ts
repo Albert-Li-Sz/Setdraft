@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@hydro-problem-make/authoring";
+import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
 

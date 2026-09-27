@@ -1,10 +1,13 @@
 import { useRef, useState } from "react";
 import { authFetch } from "./auth-client.ts";
-import { createClientId } from "./browser-capabilities.ts";
+import { copyText, createClientId } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
+import { readSourceFile } from "./file-transfer.ts";
 import { type UiMessage, useLocale } from "./i18n.tsx";
+import { limitAmount } from "./limit-input.ts";
+import { PdfPreview } from "./PdfPreview.tsx";
 import { ProblemPreview } from "./ProblemPreview.tsx";
 import { ProjectReleases } from "./ProjectReleases.tsx";
 import {
@@ -95,7 +98,10 @@ function CodeEditor(props: {
 							accept={props.accept ?? ".cpp,.cc,.cxx,.txt"}
 							onChange={(event) => {
 								const file = event.currentTarget.files?.[0];
-								if (file) void file.text().then(props.onChange);
+								if (file)
+									void readSourceFile(file)
+										.then(props.onChange)
+										.catch(() => {});
 								event.currentTarget.value = "";
 							}}
 						/>
@@ -152,8 +158,7 @@ function ProgramEditor(props: {
 							onChange={(event) => {
 								const file = event.currentTarget.files?.[0];
 								if (file)
-									void file
-										.text()
+									void readSourceFile(file)
 										.then((code) =>
 											props.onChange(
 												file.name.endsWith(".py")
@@ -165,7 +170,8 @@ function ProgramEditor(props: {
 															: "cpp17",
 												code,
 											),
-										);
+										)
+										.catch(() => {});
 								event.currentTarget.value = "";
 							}}
 						/>
@@ -189,6 +195,8 @@ export function ManualWorkspace(props: Props) {
 	const [tab, setTab] = useState<Tab>("statement");
 	const [programSection, setProgramSection] = useState<ProgramSection>("reference");
 	const [publishing, setPublishing] = useState(false);
+	const [pdfPreview, setPdfPreview] = useState(false);
+	const [attachmentNotice, setAttachmentNotice] = useState("");
 	const [releaseName, setReleaseName] = useState("");
 	const [pendingDelete, setPendingDelete] = useState(false);
 	const [pendingCheckerPreset, setPendingCheckerPreset] = useState<
@@ -1310,19 +1318,27 @@ export function ManualWorkspace(props: Props) {
 						</label>
 						<div className="manual-limit-grid">
 							<label className="field">
-								<span>{t("时间限制")}</span>
+								<span>{t("时间限制")} · ms</span>
 								<input
-									value={project.timeLimit}
-									onChange={(event) => set("timeLimit", event.target.value)}
-									placeholder="1s"
+									type="number"
+									min="1"
+									step="1"
+									inputMode="numeric"
+									value={limitAmount(project.timeLimit, "time")}
+									onChange={(event) => set("timeLimit", event.target.value ? `${event.target.value}ms` : "")}
+									placeholder="1000"
 								/>
 							</label>
 							<label className="field">
-								<span>{t("内存限制")}</span>
+								<span>{t("内存限制")} · m</span>
 								<input
-									value={project.memoryLimit}
-									onChange={(event) => set("memoryLimit", event.target.value)}
-									placeholder="256m"
+									type="number"
+									min="1"
+									step="1"
+									inputMode="numeric"
+									value={limitAmount(project.memoryLimit, "memory")}
+									onChange={(event) => set("memoryLimit", event.target.value ? `${event.target.value}m` : "")}
+									placeholder="256"
 								/>
 							</label>
 						</div>
@@ -1346,6 +1362,17 @@ export function ManualWorkspace(props: Props) {
 							<div className="manual-attachment" key={item.name}>
 								<span>{item.name}</span>
 								<button
+									type="button"
+									className="text-button"
+									onClick={() => {
+										void copyText(`file://${item.name}`)
+											.then(() => setAttachmentNotice("附件引用已复制。"))
+											.catch(() => setAttachmentNotice("复制失败，请检查浏览器剪贴板权限。"));
+									}}
+								>
+									{t("复制引用")}
+								</button>
+								<button
 									className="text-button danger"
 									type="button"
 									onClick={() =>
@@ -1360,6 +1387,11 @@ export function ManualWorkspace(props: Props) {
 							</div>
 						))}
 					</section>
+					{attachmentNotice && (
+						<output className="manual-muted" aria-live="polite">
+							{t(attachmentNotice)}
+						</output>
+					)}
 					{isAcm && (
 						<section className="card manual-side-card">
 							<h2>DOMjudge PDF</h2>
@@ -1378,13 +1410,9 @@ export function ManualWorkspace(props: Props) {
 							</label>
 							{project.domjudgePdf && (
 								<div className="manual-attachment">
-									<a
-										href={apiUrl(props.apiOrigin, `/projects/${project.id}/domjudge-pdf`)}
-										target="_blank"
-										rel="noreferrer"
-									>
-										problem.pdf · {(project.domjudgePdf.size / 1024).toFixed(1)} KiB
-									</a>
+									<button className="text-button" type="button" onClick={() => setPdfPreview(true)}>
+										problem.pdf · {(project.domjudgePdf.size / 1024).toFixed(1)} KiB · {t("预览")}
+									</button>
 									<button
 										className="text-button danger"
 										type="button"
@@ -1410,6 +1438,25 @@ export function ManualWorkspace(props: Props) {
 					</section>
 				</aside>
 			</div>
+			<Dialog
+				open={pdfPreview}
+				onClose={() => setPdfPreview(false)}
+				labelledBy="pdf-preview-title"
+				className="pdf-preview-dialog"
+			>
+				<div className="preview-dialog-heading">
+					<h2 id="pdf-preview-title">DOMjudge PDF</h2>
+					<button type="button" className="button secondary" onClick={() => setPdfPreview(false)}>
+						{t("关闭")}
+					</button>
+				</div>
+				{pdfPreview && (
+					<PdfPreview url={apiUrl(props.apiOrigin, `/projects/${project.id}/domjudge-pdf?preview=1`)} />
+				)}
+				<a href={apiUrl(props.apiOrigin, `/projects/${project.id}/domjudge-pdf`)} download="problem.pdf">
+					{t("下载 PDF")}
+				</a>
+			</Dialog>
 			<Dialog open={publishing} onClose={() => setPublishing(false)} labelledBy="publish-title">
 				<form
 					className="account-form"

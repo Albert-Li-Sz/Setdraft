@@ -2,7 +2,7 @@
 
 The local API stores problems, tasks, chats, contests and releases in `workspace.sqlite`. Large files live in SHA-256 blobs under the workspace root. Existing file-based records are migrated on first startup; their original directories remain available as rollback copies and for historical downloads. The server can start without Docker. `GET /api/health` is an anonymous liveness probe returning only `{ "status": "ok" }`. Authenticated `GET /api/system/status` includes sandbox readiness.
 
-The default launcher builds the frontend and serves it on `0.0.0.0:4321` by default (`HYDRO_HOST=127.0.0.1` restricts it to loopback); `--mode dev` runs Vite on port 5173. See the repository README for install, upgrade, doctor, backup, restore and cleanup commands.
+The default Docker Compose launcher builds the frontend and serves it on `0.0.0.0:4321` by default (`SETDRAFT_HOST=127.0.0.1` restricts it to loopback); `--native --mode dev` runs Vite on port 5173. See the repository README for install, upgrade, doctor, backup, restore and cleanup commands.
 
 ## Module boundaries
 
@@ -18,7 +18,7 @@ The default launcher builds the frontend and serves it on `0.0.0.0:4321` by defa
 | `execution-context.ts`, `event-stream.ts` | Explicit execution context and paginated SSE replay |
 | `hydro-contracts` | Shared wire types and snapshot validation, without server dependencies |
 
-`identity.ts` owns the independent identity database; `auth-http.ts` validates origins, cookies, CSRF and account roles. `workspace-registry.ts` selects services using the verified session user. Client-supplied user IDs never select the source workspace. The copy endpoint accepts a recipient ID only to create a new independent problem in that recipient’s workspace; it never returns their content. The first administrator is permanently bound to the legacy root; other users have `users/<id>/workspace.sqlite` and files. `ai-configuration.ts` is shared through identity storage, while chat content remains private. The CLI's process lock enforces one server per data directory.
+`identity.ts` owns the independent identity database; `auth-http.ts` validates origins, cookies, CSRF and account roles. `workspace-registry.ts` selects services using the verified session user. Client-supplied user IDs never select the source workspace. The copy endpoint accepts a recipient ID only to create a new independent problem in that recipient’s workspace; it never returns their content. The first administrator is permanently bound to the legacy root; other users have `users/<id>/workspace.sqlite` and files. `ai-configuration.ts` is shared through identity storage, while chat content remains private. The native CLI uses a process lock; the container entrypoint uses a kernel file lock that survives PID namespace changes.
 
 `execution-scheduler.ts` admits at most two sandbox tasks and four AI calls globally, one of each per user. Connectivity probes share the AI scheduler; image builds run exclusively against sandbox work. Logout leaves durable work running, while disabling an account cancels its unfinished work. Restart recovers queued work across all users and marks interrupted executions for explicit retry.
 
@@ -48,7 +48,7 @@ All business endpoints, direct file URLs and event streams require the same sess
 
 Passwords use asynchronous Node scrypt (`N=2^17, r=8, p=1`, random salt), at most two hashes concurrently. Session tokens are random and only SHA-256 digests are stored; cookies are HttpOnly, SameSite=Lax, and Secure with the `__Host-` prefix under HTTPS. Sessions last at most seven days, expiring after 24 hours without requests. Login limits are persisted per account and source IP; error messages do not distinguish invalid, missing or disabled accounts. Setup is transactionally single-use with a 24-hour token. Identity auditing records account operations without passwords, cookies or model keys.
 
-Without `HYDRO_PUBLIC_ORIGIN`, direct HTTP access through the server IP and its listening port is supported; request Host and Origin must match. Set `HYDRO_PUBLIC_ORIGIN` to the exact browser origin when using your own reverse proxy or a domain. The installer does not provision a proxy or certificates. Host, Origin and CSRF checks remain active under both protocols. Forwarded IPs are trusted only from a loopback peer when a public origin is explicitly configured; a remote proxy uses its connection IP for rate limiting. The Web/API listener defaults to `0.0.0.0`; set `HYDRO_HOST=127.0.0.1` for a same-host proxy-only deployment. See the root README for setup-token rotation, password recovery, backup/restore and proxy configuration.
+Without `SETDRAFT_PUBLIC_ORIGIN`, direct HTTP access through the server IP and its listening port is supported; request Host and Origin must match. Set `SETDRAFT_PUBLIC_ORIGIN` to the exact browser origin when using your own reverse proxy or a domain. The installer does not provision a proxy or certificates. Host, Origin and CSRF checks remain active under both protocols. Forwarded IPs are trusted only from a loopback peer when a public origin is explicitly configured; a remote proxy uses its connection IP for rate limiting. The Web/API listener defaults to `0.0.0.0`; set `SETDRAFT_HOST=127.0.0.1` for a same-host proxy-only deployment. See the root README for setup-token rotation, password recovery, backup/restore and proxy configuration.
 
 Security references: [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html), [session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html), [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 
@@ -73,15 +73,15 @@ Security references: [OWASP password storage](https://cheatsheetseries.owasp.org
 | `PATCH /api/releases/:id` | Rename a release with `{ name }`, 1–80 characters |
 | `GET /api/releases`, `DELETE /api/releases/:id` | List or remove an unreferenced release |
 | `GET /api/releases/:id/{hydro,source,report}` | Download immutable packages and report |
-| `GET/POST /api/contests`, `GET/PUT/DELETE /api/contests/:id` | Contest drafts |
-| `POST /api/contests/:id/export` | Queue Hydro or DOMjudge export |
+| `GET/POST /api/contests`, `GET/PUT/DELETE /api/contests/:id` | Independent contests |
+| `POST /api/contests/:id/export` | Queue Hydro or DOMjudge export with required `{ format, name }` (package log name, 1–80 characters) |
 | `GET /api/contest-releases/:id/download` | Download a contest bundle |
 
 The three long-running POST routes return `202` with `{ task }`. `GET /api/tasks` and `GET /api/tasks/:id` show state; `GET /api/tasks/:id/events` is an SSE stream with event IDs and `Last-Event-ID` replay. `POST /api/tasks/:id/cancel` stops the matching Docker container, and `/retry` creates another task. A problem revision can be sent as `expectedRevision` on JSON edits and case operations or `x-expected-revision` on file operations; conflicts return `409` with the current snapshot.
 
 Restoration checks the manifest and source hashes before replacing the editable document and all test/PDF file references in one transaction. It keeps the problem ID and creation date, increments the revision, and clears the current verification report. The release source tree must be present in backups. Copies use a fresh ID and timestamps, retain current code, attachments and both manual/generated tests, and omit releases, reports and tasks. Both operations reject stale revisions and recheck account access at commit.
 
-Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `HYDRO_CASE_MAX_BYTES`, `HYDRO_PROJECT_MAX_BYTES`, `HYDRO_TESTCASES_MAX` and `HYDRO_TOTAL_TIME_LIMIT_MS`.
+Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `SETDRAFT_CASE_MAX_BYTES`, `SETDRAFT_PROJECT_MAX_BYTES`, `SETDRAFT_TESTCASES_MAX` and `SETDRAFT_TOTAL_TIME_LIMIT_MS`.
 
 ## AI API
 

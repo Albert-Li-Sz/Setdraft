@@ -7,6 +7,7 @@ import "./styles.css";
 import "./shell.css";
 import "./auth.css";
 import "./problem-center.css";
+import "./workspace-refinements.css";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("Missing #root element.");

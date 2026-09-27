@@ -1,5 +1,5 @@
-import type { ChatRequest } from "@hydro-problem-make/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChatRequest } from "@setdraft/contracts";
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppSidebar } from "./AppShell.tsx";
 import { requestJson as jsonRequest } from "./api-client.ts";
@@ -8,6 +8,7 @@ import { copyText, createClientId } from "./browser-capabilities.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
+import { transferFiles } from "./file-transfer.ts";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
@@ -42,13 +43,14 @@ const acceptedImageTypes = ["image/png", "image/jpeg", "image/webp", "image/gif"
 const maxImageBytes = 5 * 1024 * 1024;
 const maxMessageImageBytes = 12 * 1024 * 1024;
 
-async function readImage(file: File): Promise<PendingImage> {
+async function readImage(file: File, progress: (loaded: number) => void): Promise<PendingImage> {
 	if (!acceptedImageTypes.includes(file.type)) throw new Error("图片只支持 PNG、JPEG、WebP 或 GIF。");
 	if (file.size === 0 || file.size > maxImageBytes) throw new Error("单张图片须大于 0 且不能超过 5 MiB。");
 	const name = file.name || "粘贴图片.png";
 	if (name.length > 120) throw new Error("图片文件名不能超过 120 个字符。");
 	const data = await new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
+		reader.onprogress = (event) => progress(event.loaded);
 		reader.onload = () => {
 			if (typeof reader.result !== "string") return reject(new Error("无法读取图片。"));
 			const separator = reader.result.indexOf(",");
@@ -83,6 +85,7 @@ export function AiChatPage(props: Props) {
 	const [copiedMessageId, setCopiedMessageId] = useState<string>();
 	const [attachProject, setAttachProject] = useState(false);
 	const [streaming, setStreaming] = useState("");
+	const deferredStreaming = useDeferredValue(streaming);
 	const [streamFailed, setStreamFailed] = useState(false);
 	const [failedRequest, setFailedRequest] = useState<{ chatId: string; requestId: string }>();
 	const [busy, setBusy] = useState(false);
@@ -252,7 +255,23 @@ export function AiChatPage(props: Props) {
 		readingImagesRef.current = true;
 		setReadingImages(true);
 		try {
-			const added = await Promise.all(files.map(readImage));
+			const added = await transferFiles(files.map((file) => file.name).join(", "), async (report) => {
+				const bytes = files.map(() => 0);
+				const total = files.reduce((sum, file) => sum + file.size, 0);
+				return Promise.all(
+					files.map((file, index) =>
+						readImage(file, (loaded) => {
+							bytes[index] = loaded;
+							report({
+								phase: "reading",
+								file: file.name,
+								loaded: bytes.reduce((sum, value) => sum + value, 0),
+								total,
+							});
+						}),
+					),
+				);
+			});
 			if ([...images, ...added].reduce((total, item) => total + item.bytes, 0) > maxMessageImageBytes) {
 				throw new Error("每条消息的图片合计不能超过 12 MiB。");
 			}
@@ -309,11 +328,22 @@ export function AiChatPage(props: Props) {
 				const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
 				form.append("images", new File([bytes], image.name, { type: image.mimeType }));
 			}
-			const response = await authFetch(apiUrl(props.apiOrigin, `/chats/${current.id}/messages`), {
-				method: "POST",
-				signal: controller.signal,
-				body: form,
-			});
+			const submit = (onUploadProgress?: (loaded: number, total?: number) => void) =>
+				authFetch(apiUrl(props.apiOrigin, `/chats/${current.id}/messages`), {
+					method: "POST",
+					signal: controller.signal,
+					body: form,
+					onUploadProgress,
+				});
+			const response = images.length
+				? await transferFiles(images.map((image) => image.name).join(", "), async (report) => {
+						const response = await submit((loaded, total) =>
+							report({ phase: total && loaded >= total ? "saving" : "uploading", loaded, total }),
+						);
+						if (!response.ok) throw new Error(responseError(await response.json()));
+						return response;
+					})
+				: await submit();
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			activeRequestRef.current = { chatId: current.id, requestId };
 			setInput("");
@@ -626,10 +656,18 @@ export function AiChatPage(props: Props) {
 									)}
 								</div>
 								{streaming ? (
-									<ChatMarkdown content={streaming} />
+									<ChatMarkdown content={deferredStreaming} />
 								) : (
-									<p className="manual-chat-waiting">{t("正在等待模型输出…")}</p>
+									<output className="manual-chat-waiting">
+										<span className="thinking-dots" aria-hidden="true">
+											<i />
+											<i />
+											<i />
+										</span>
+										<span>{t("正在等待模型输出…")}</span>
+									</output>
 								)}
+								{busy && streaming && <output className="streaming-indicator" aria-label={t("生成中")} />}
 							</article>
 						)}
 					</div>

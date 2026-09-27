@@ -1,4 +1,4 @@
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 import { useState } from "react";
 import { AdminUsers } from "./AdminUsers.tsx";
 import { AiApiSettings } from "./AiApiSettings.tsx";

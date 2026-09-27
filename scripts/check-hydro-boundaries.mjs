@@ -50,7 +50,7 @@ for (const path of files) {
 		if (path.startsWith(contractsRoot) && (!local || !local.startsWith(`${contractsRoot}/`))) {
 			failures.push(`${relative(root, path)}: contracts must remain independent (${specifier})`);
 		}
-		if (path.startsWith(webRoot) && (specifier.startsWith("node:") || specifier.startsWith("@hydro-problem-make/server") || specifier.startsWith("@earendil-works/pi-ai") || local?.startsWith(serverRoot))) {
+		if (path.startsWith(webRoot) && (specifier.startsWith("node:") || specifier.startsWith("@setdraft/server") || specifier.startsWith("@earendil-works/pi-ai") || local?.startsWith(serverRoot))) {
 			failures.push(`${relative(root, path)}: browser code must use shared contracts (${specifier})`);
 		}
 		if (typeOnly || !local) continue;

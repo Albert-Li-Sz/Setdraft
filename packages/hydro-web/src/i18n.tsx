@@ -4,7 +4,7 @@ import { englishMessages } from "./locales/en.ts";
 export type Locale = "zh-CN" | "en";
 export type UiMessage = string | { key: string; values: readonly MessageValue[] };
 type MessageValue = UiMessage | number;
-export const localeStorageKey = "hydro-problem-make.locale";
+export const localeStorageKey = "setdraft.locale";
 
 export function uiMessage(key: string, ...values: MessageValue[]): UiMessage {
 	return { key, values };
@@ -28,7 +28,9 @@ export function translate(locale: Locale, value: UiMessage, ...parameters: Messa
 
 export function readLocale(storage?: Pick<Storage, "getItem">): Locale {
 	try {
-		return storage?.getItem(localeStorageKey) === "en" ? "en" : "zh-CN";
+		return (storage?.getItem(localeStorageKey) ?? storage?.getItem("hydro-problem-make.locale")) === "en"
+			? "en"
+			: "zh-CN";
 	} catch {
 		return "zh-CN";
 	}

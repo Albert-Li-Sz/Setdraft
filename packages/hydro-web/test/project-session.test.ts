@@ -1,4 +1,4 @@
-import type { ProjectSnapshot } from "@hydro-problem-make/contracts";
+import type { ProjectSnapshot } from "@setdraft/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RevisionConflict } from "../src/api-client.ts";
 import { ProjectSession } from "../src/project-session.ts";

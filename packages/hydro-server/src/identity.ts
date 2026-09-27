@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "no
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AuthSession, AuthUser, UserPreferences, UserRole } from "@hydro-problem-make/contracts";
+import type { AuthSession, AuthUser, UserPreferences, UserRole } from "@setdraft/contracts";
 
 const day = 86_400_000;
 const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");

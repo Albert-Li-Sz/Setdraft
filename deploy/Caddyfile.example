@@ -1,6 +1,6 @@
 # Optional example for a proxy you install and manage yourself; Setdraft never installs this file.
-# Set HYDRO_PUBLIC_ORIGIN=http://setdraft.example.com in Setdraft's .env.
-# For this same-host example, optionally set HYDRO_HOST=127.0.0.1 (the default is 0.0.0.0).
+# Set SETDRAFT_PUBLIC_ORIGIN=http://setdraft.example.com in Setdraft's .env.
+# For this same-host example, optionally set SETDRAFT_HOST=127.0.0.1 (the default is 0.0.0.0).
 http://setdraft.example.com {
     reverse_proxy 127.0.0.1:4321 {
         header_up Host {hostport}
@@ -8,6 +8,6 @@ http://setdraft.example.com {
         flush_interval -1
     }
 }
-# For HTTPS, change the site and HYDRO_PUBLIC_ORIGIN to https:// and add inside the site:
+# For HTTPS, change the site and SETDRAFT_PUBLIC_ORIGIN to https:// and add inside the site:
 # tls /absolute/path/fullchain.pem /absolute/path/privkey.pem
 # Caddy reference: https://caddyserver.com/docs/caddyfile/directives/reverse_proxy

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authFetch } from "./auth-client.ts";
+import { Dialog } from "./Dialog.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	apiUrl,
@@ -69,6 +70,61 @@ function BalloonEditor(props: {
 	);
 }
 
+function ContestDetails({
+	contest,
+	disabled,
+	onSave,
+}: {
+	contest: ContestDraft;
+	disabled: boolean;
+	onSave(value: ContestDraft): void;
+}) {
+	const { t } = useLocale();
+	const [title, setTitle] = useState(contest.title);
+	const [slug, setSlug] = useState(contest.slug);
+	useEffect(() => {
+		setTitle(contest.title);
+		setSlug(contest.slug);
+	}, [contest.title, contest.slug]);
+	return (
+		<form
+			className="contest-details-form"
+			onSubmit={(event) => {
+				event.preventDefault();
+				onSave({ ...contest, title: title.trim(), slug: slug.trim() });
+			}}
+		>
+			<label className="field">
+				<span>{t("竞赛名称")}</span>
+				<input
+					required
+					maxLength={160}
+					disabled={disabled}
+					value={title}
+					onChange={(event) => setTitle(event.target.value)}
+				/>
+			</label>
+			<label className="field">
+				<span>{t("竞赛标识")}</span>
+				<input
+					required
+					maxLength={80}
+					disabled={disabled}
+					value={slug}
+					onChange={(event) => setSlug(event.target.value)}
+				/>
+			</label>
+			<button
+				className="button secondary"
+				type="submit"
+				disabled={disabled || !title.trim() || !slug.trim() || (title === contest.title && slug === contest.slug)}
+			>
+				{t("保存竞赛")}
+			</button>
+		</form>
+	);
+}
+
 function labelAt(index: number): string {
 	let number = index + 1;
 	let label = "";
@@ -97,7 +153,9 @@ export function ContestsPage({ apiOrigin }: Props) {
 	const [message, setMessage] = useState<UiMessage>("");
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [createOpen, setCreateOpen] = useState(false);
-	const [historyOpen, setHistoryOpen] = useState(false);
+	const [historyOpen, setHistoryOpen] = useState<string>();
+	const [exportFormat, setExportFormat] = useState<"hydro" | "domjudge">();
+	const [bundleName, setBundleName] = useState("");
 
 	useEffect(() => {
 		let cancelled = false;
@@ -136,7 +194,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 			setTitle("");
 			setSlug("");
 			setCreateOpen(false);
-			setMessage("竞赛草稿已创建，选择已验证的题目版本加入。");
+			setMessage("竞赛已创建，选择已验证的题目版本加入。");
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "新建竞赛失败。");
 		} finally {
@@ -161,7 +219,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 			});
 			setDraft(saved);
 			setContests((items) => items.map((item) => (item.id === saved.id ? saved : item)));
-			setMessage("竞赛题序与颜色已保存。");
+			setMessage("竞赛已保存。");
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "保存竞赛失败。");
 		} finally {
@@ -170,7 +228,8 @@ export function ContestsPage({ apiOrigin }: Props) {
 	}
 
 	async function exportBundle(format: "hydro" | "domjudge"): Promise<void> {
-		if (!draft) return;
+		if (!draft || !bundleName.trim()) return;
+		setExportFormat(undefined);
 		setBusy(true);
 		setMessage("正在整理已验证的题包…");
 		try {
@@ -179,11 +238,12 @@ export function ContestsPage({ apiOrigin }: Props) {
 				{
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ format }),
+					body: JSON.stringify({ format, name: bundleName.trim() }),
 				},
 			);
 			const result = await waitForTask<ContestRelease>(apiOrigin, accepted.task.id);
 			setBundles((items) => [result, ...items]);
+			setHistoryOpen(result.contestId);
 			setMessage(uiMessage("{0} 竞赛包已生成，可在下方下载。", format === "hydro" ? "Hydro" : "DOMjudge"));
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "竞赛导出失败。");
@@ -202,7 +262,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 			setContests(remaining);
 			setDraft(remaining[0]);
 			setDeleteOpen(false);
-			setMessage("竞赛草稿已删除。");
+			setMessage("竞赛已删除。");
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : "删除竞赛失败。");
 		} finally {
@@ -219,18 +279,23 @@ export function ContestsPage({ apiOrigin }: Props) {
 	const selectedProjectIds = new Set(selected.map((item) => item.projectId));
 	const candidates = releases.filter((item) => isContestReadyRelease(item) && !selectedProjectIds.has(item.projectId));
 	const oldReleaseCount = releases.filter((item) => !isContestReadyRelease(item)).length;
+	const history = bundles.filter((item) => item.contestId === historyOpen);
+	const archived = [
+		...new Map(
+			bundles
+				.filter((item) => !contests.some((contest) => contest.id === item.contestId))
+				.map((item) => [item.contestId, item]),
+		).values(),
+	];
 
 	return (
 		<main className="page" id="contests">
 			<section className="page-heading">
 				<div>
-					<h1>{t("竞赛打包")}</h1>
+					<h1>{t("竞赛列表")}</h1>
 					<p>{t("Hydro 包可包含 ACM 和 OI 题；DOMjudge 包仅接受 ACM 题。竞赛赛程在目标平台设置。")}</p>
 				</div>
 				<div className="heading-actions">
-					<button className="button secondary" type="button" onClick={() => setHistoryOpen(true)}>
-						{t("历史竞赛包")}
-					</button>
 					<button
 						className="button primary"
 						type="button"
@@ -252,12 +317,13 @@ export function ContestsPage({ apiOrigin }: Props) {
 			)}
 			<div className="contest-layout">
 				<aside className="card contest-sidebar">
-					<h2>{t("竞赛草稿")}</h2>
+					<h2>{t("竞赛列表")}</h2>
 					<div className="contest-list">
 						{contests.map((item) => (
 							<button
 								key={item.id}
 								className={item.id === draft?.id ? "active" : ""}
+								disabled={busy}
 								type="button"
 								onClick={() => {
 									setDraft(item);
@@ -268,7 +334,13 @@ export function ContestsPage({ apiOrigin }: Props) {
 								<small>{t("题目数量：{0}", item.releaseIds.length)}</small>
 							</button>
 						))}
-						{contests.length === 0 && <p className="manual-muted">{t("暂无竞赛草稿。")}</p>}
+						{archived.map((item) => (
+							<button type="button" key={item.contestId} onClick={() => setHistoryOpen(item.contestId)}>
+								<strong>{item.title}</strong>
+								<small>{t("已删除竞赛 · 查看历史包")}</small>
+							</button>
+						))}
+						{contests.length === 0 && <p className="manual-muted">{t("暂无竞赛。")}</p>}
 					</div>
 				</aside>
 				<section className="card contest-main">
@@ -281,10 +353,24 @@ export function ContestsPage({ apiOrigin }: Props) {
 										{draft.slug} · {t("题目数量：{0}", selected.length)}
 									</p>
 								</div>
-								<button className="text-button danger" type="button" onClick={() => setDeleteOpen(true)}>
-									{t("删除草稿")}
+								<button className="button secondary" type="button" onClick={() => setHistoryOpen(draft.id)}>
+									{t("历史竞赛包")} · {bundles.filter((item) => item.contestId === draft.id).length}
+								</button>
+								<button
+									disabled={busy}
+									className="text-button danger"
+									type="button"
+									onClick={() => setDeleteOpen(true)}
+								>
+									{t("删除竞赛")}
 								</button>
 							</div>
+							<ContestDetails
+								key={draft.id}
+								contest={draft}
+								disabled={busy}
+								onSave={(next) => void update(next)}
+							/>
 							<div className="contest-add-row">
 								<select
 									aria-label={t("选择已验证题目")}
@@ -428,7 +514,10 @@ export function ContestsPage({ apiOrigin }: Props) {
 									className="button primary"
 									type="button"
 									disabled={busy || selected.length === 0 || !allReady}
-									onClick={() => void exportBundle("hydro")}
+									onClick={() => {
+										setBundleName("");
+										setExportFormat("hydro");
+									}}
 								>
 									{t("导出 Hydro 多题包")}
 								</button>
@@ -436,7 +525,10 @@ export function ContestsPage({ apiOrigin }: Props) {
 									className="button secondary"
 									type="button"
 									disabled={busy || selected.length === 0 || !allReady || !allAcm}
-									onClick={() => void exportBundle("domjudge")}
+									onClick={() => {
+										setBundleName("");
+										setExportFormat("domjudge");
+									}}
 								>
 									{t("导出 DOMjudge 竞赛包")}
 								</button>
@@ -451,6 +543,38 @@ export function ContestsPage({ apiOrigin }: Props) {
 					)}
 				</section>
 			</div>
+			<Dialog open={!!exportFormat} onClose={() => setExportFormat(undefined)} labelledBy="contest-export-title">
+				<form
+					className="account-form"
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (exportFormat) void exportBundle(exportFormat);
+					}}
+				>
+					<h2 id="contest-export-title">{t("生成竞赛包")}</h2>
+					<p>
+						{draft?.title} · {exportFormat === "hydro" ? "Hydro" : "DOMjudge"}
+					</p>
+					<label>
+						{t("竞赛包日志名称")}
+						<input
+							required
+							maxLength={80}
+							value={bundleName}
+							onChange={(event) => setBundleName(event.target.value)}
+							placeholder={t("例如：正式赛 / 修正测试数据")}
+						/>
+					</label>
+					<div className="confirmation-actions">
+						<button className="button secondary" type="button" onClick={() => setExportFormat(undefined)}>
+							{t("取消")}
+						</button>
+						<button className="button primary" type="submit" disabled={busy || !bundleName.trim()}>
+							{t("生成竞赛包")}
+						</button>
+					</div>
+				</form>
+			</Dialog>
 			{createOpen && (
 				<div className="confirmation-backdrop" role="presentation">
 					<form
@@ -464,7 +588,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 						}}
 					>
 						<div className="confirmation-heading">
-							<span>{t("竞赛草稿")}</span>
+							<span>{t("竞赛")}</span>
 							<h2 id="contest-create-title">{t("新建竞赛")}</h2>
 						</div>
 						<label className="field">
@@ -509,15 +633,16 @@ export function ContestsPage({ apiOrigin }: Props) {
 							<span>{t("竞赛打包")}</span>
 							<h2 id="contest-history-title">{t("历史竞赛包")}</h2>
 						</div>
-						<p>{t("与题目发布版本绑定；删除竞赛草稿后仍可下载。")}</p>
-						{bundles.length === 0 ? (
+						<p>{t("与题目发布版本绑定；删除竞赛后仍可下载。")}</p>
+						{history.length === 0 ? (
 							<p className="manual-muted">{t("尚无历史竞赛包。")}</p>
 						) : (
 							<div className="contest-history-list">
-								{bundles.map((item) => (
+								{history.map((item) => (
 									<div className="contest-bundle" key={item.id}>
 										<span>
-											<strong>{item.title}</strong> · {item.format === "hydro" ? "Hydro" : "DOMjudge"} ·{" "}
+											<strong>{item.name || item.title}</strong> ·{" "}
+											{item.format === "hydro" ? "Hydro" : "DOMjudge"} ·{" "}
 											{t("题目数量：{0}", item.problems.length)} ·
 											{new Date(item.createdAt).toLocaleString(locale)}
 										</span>
@@ -533,7 +658,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 							</div>
 						)}
 						<div className="confirmation-actions">
-							<button className="button secondary" type="button" onClick={() => setHistoryOpen(false)}>
+							<button className="button secondary" type="button" onClick={() => setHistoryOpen(undefined)}>
 								{t("关闭")}
 							</button>
 						</div>
@@ -552,7 +677,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 							<span>{t("删除确认")}</span>
 							<h2 id="contest-delete-title">{t("删除“{0}”？", draft.title)}</h2>
 						</div>
-						<p>{t("将删除竞赛草稿。历史上已导出的竞赛包仍可下载。")}</p>
+						<p>{t("将删除竞赛。历史上已导出的竞赛包仍可下载。")}</p>
 						<div className="confirmation-actions">
 							<button className="button secondary" type="button" onClick={() => setDeleteOpen(false)}>
 								{t("取消")}

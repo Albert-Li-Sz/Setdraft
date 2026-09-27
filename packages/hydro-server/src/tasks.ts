@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@hydro-problem-make/contracts";
+import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
 import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
 import type { ExecutionContext } from "./execution-context.ts";
@@ -9,7 +9,7 @@ import type { ExecutionScheduler } from "./execution-scheduler.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
-export type { TaskEvent, TaskKind, TaskRecord, TaskState } from "@hydro-problem-make/contracts";
+export type { TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
 
 function digest(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -40,7 +40,7 @@ export class TaskQueue {
 		for (const task of this.list().filter((item) => item.state === "running")) {
 			let alive = false;
 			try {
-				if (task.ownerPid) {
+				if (task.ownerPid && process.env.SETDRAFT_CONTAINER_LOCKED !== "1") {
 					process.kill(task.ownerPid, 0);
 					alive = true;
 				}
@@ -49,7 +49,9 @@ export class TaskQueue {
 			}
 			if (!alive) {
 				this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
-				const child = spawn("docker", ["rm", "-f", `hydro-task-${task.id}`], { stdio: "ignore" });
+				const child = spawn("docker", ["rm", "-f", `setdraft-task-${task.id}`, `hydro-task-${task.id}`], {
+					stdio: "ignore",
+				});
 				child.on("error", () => {});
 			}
 		}
@@ -98,8 +100,12 @@ export class TaskQueue {
 
 	async submit(kind: TaskKind, resourceId: string, format?: ContestFormat, releaseName?: string): Promise<TaskRecord> {
 		this.assertWritable();
-		if (kind === "contest-export") await this.contests.get(resourceId);
-		else if (kind !== "image-build") await this.projects.get(resourceId);
+		const resourceTitle =
+			kind === "image-build"
+				? undefined
+				: kind === "contest-export"
+					? (await this.contests.get(resourceId)).title
+					: (await this.projects.get(resourceId)).title;
 		const now = new Date().toISOString();
 		const task: TaskRecord = {
 			id: randomUUID(),
@@ -108,6 +114,7 @@ export class TaskQueue {
 				kind === "image-build" ? "image" : `${kind === "contest-export" ? "contest" : "project"}:${resourceId}`,
 			format,
 			releaseName,
+			resourceTitle,
 			state: "queued",
 			fingerprint: this.fingerprint(kind, resourceId),
 			createdAt: now,
@@ -121,7 +128,7 @@ export class TaskQueue {
 						"INSERT INTO tasks (id,kind,resource,format,state,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
 					)
 					.run(task.id, task.kind, task.resource, task.format ?? null, task.state, task.fingerprint, now, now);
-				if (releaseName) this.database.put("task-options", task.id, { releaseName });
+				this.database.put("task-options", task.id, { releaseName, resourceTitle });
 				this.emit(task.id, "queued", "任务已排队。", { kind, resourceId });
 			});
 		} catch (error) {
@@ -133,14 +140,21 @@ export class TaskQueue {
 		return task;
 	}
 
-	get(id: string): TaskRecord {
+	get(id: string, includeResult = true): TaskRecord {
 		const row = this.database.db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as
 			| Record<string, unknown>
 			| undefined;
 		if (!row) throw new ManualProjectError("任务不存在。", 404);
+		const options = this.database.get<{ releaseName?: string; resourceTitle?: string }>("task-options", id);
+		const [kind, resourceId] = String(row.resource).split(":");
+		const title =
+			kind === "project" || kind === "contest"
+				? this.database.get<{ title: string }>(kind, resourceId)?.title
+				: undefined;
 		return {
 			id: String(row.id),
-			releaseName: this.database.get<{ releaseName: string }>("task-options", id)?.releaseName,
+			resourceTitle: title ?? options?.resourceTitle,
+			releaseName: options?.releaseName,
 			kind: row.kind as TaskKind,
 			resource: String(row.resource),
 			format: row.format as ContestFormat | undefined,
@@ -148,17 +162,17 @@ export class TaskQueue {
 			fingerprint: String(row.fingerprint),
 			createdAt: String(row.created_at),
 			updatedAt: String(row.updated_at),
-			result: row.result ? JSON.parse(String(row.result)) : undefined,
+			result: includeResult && row.result ? JSON.parse(String(row.result)) : undefined,
 			error: row.error ? String(row.error) : undefined,
 			ownerPid: row.owner_pid ? Number(row.owner_pid) : undefined,
 		};
 	}
 
 	list(): TaskRecord[] {
-		const rows = this.database.db.prepare("SELECT id FROM tasks ORDER BY created_at DESC LIMIT 100").all() as Array<{
+		const rows = this.database.db.prepare("SELECT id FROM tasks ORDER BY created_at DESC").all() as Array<{
 			id: string;
 		}>;
-		return rows.map((row) => this.get(row.id));
+		return rows.map((row) => this.get(row.id, false));
 	}
 
 	events(id: string, after = 0): TaskEvent[] {
@@ -232,7 +246,7 @@ export class TaskQueue {
 			this.pump();
 		} else {
 			this.controllers.get(id)?.abort();
-			const cleaner = spawn("docker", ["rm", "-f", `hydro-task-${id}`], { stdio: "ignore" });
+			const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${id}`], { stdio: "ignore" });
 			cleaner.on("error", () => {});
 		}
 		return this.get(id);
@@ -337,7 +351,7 @@ export class TaskQueue {
 				else if (task.kind === "finalize")
 					result = await this.projects.pipeline.finalize(resourceId, context, task.releaseName);
 				else if (task.kind === "contest-export")
-					result = await this.contests.export(resourceId, task.format ?? "hydro", context);
+					result = await this.contests.export(resourceId, task.format ?? "hydro", context, task.releaseName);
 				else result = await this.buildImage(context);
 				if (this.cancellationRequested(task.id, controller.signal)) {
 					this.finish(task.id, "cancelled", undefined, "任务已取消。 ");

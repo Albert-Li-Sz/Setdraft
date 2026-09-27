@@ -139,6 +139,7 @@ export interface ContestDraft {
 }
 
 export interface ContestRelease {
+	name?: string;
 	id: string;
 	contestId: string;
 	title: string;
@@ -210,6 +211,7 @@ export type TaskKind = "generate" | "finalize" | "contest-export" | "image-build
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "stale" | "interrupted";
 
 export interface TaskRecord {
+	resourceTitle?: string;
 	releaseName?: string;
 	id: string;
 	kind: TaskKind;

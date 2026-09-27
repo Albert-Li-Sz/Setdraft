@@ -1,4 +1,4 @@
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
+import { formatHydroStatement } from "@setdraft/authoring/statement";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";

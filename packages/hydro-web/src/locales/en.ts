@@ -1,4 +1,11 @@
 export const englishMessages: Readonly<Record<string, string>> = {
+	下一页: "Next page",
+	上一页: "Previous page",
+	"PDF 第 {0} 页": "PDF page {0}",
+	"正在渲染 PDF…": "Rendering PDF\u2026",
+	"PDF 预览失败，请下载后查看。": "Unable to preview this PDF. Download it to view.",
+	"第 {0} / {1} 页": "Page {0} of {1}",
+	"PDF 页码": "PDF pages",
 	刷新: "Refresh",
 	保存: "Save",
 	完成: "Done",
@@ -806,4 +813,90 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"Enter 发送 · Shift+Enter 换行": "Enter to send \u00b7 Shift+Enter for a new line",
 	"Tab 缩进 · Ctrl+Space 补全 · Esc 后按 Tab 离开编辑器":
 		"Tab to indent · Ctrl+Space for suggestions · Esc, then Tab to leave the editor",
+
+	竞赛列表: "Contest list",
+
+	"已删除竞赛 · 查看历史包": "Deleted contest · View packages",
+
+	"竞赛已创建，选择已验证的题目版本加入。": "Contest created. Add verified problem versions.",
+
+	"竞赛已保存。": "Contest saved.",
+
+	"竞赛已删除。": "Contest deleted.",
+
+	"暂无竞赛。": "No contests yet.",
+
+	删除竞赛: "Delete contest",
+
+	"将删除竞赛。历史上已导出的竞赛包仍可下载。":
+		"The contest will be deleted. Its previously exported packages remain available.",
+
+	竞赛包日志名称: "Package log name",
+
+	"例如：正式赛 v1 / 修正题目顺序": "For example: Finals v1 / Problem order corrected",
+
+	"请输入竞赛包日志名称。": "Enter a package log name.",
+
+	竞赛标识: "Contest ID",
+
+	保存竞赛: "Save contest",
+
+	筛选赛制: "Filter by format",
+
+	全部赛制: "All formats",
+
+	"时间限制 · ms": "Time limit · ms",
+
+	"内存限制 · m": "Memory limit · m",
+
+	复制引用: "Copy reference",
+
+	"引用已复制。": "Reference copied.",
+
+	"复制失败，请手动复制引用。": "Copy failed. Copy the reference manually.",
+
+	"附件已上传，可一键复制引用。": "Attachments uploaded. You can now copy their references.",
+
+	"预览 PDF": "Preview PDF",
+
+	"DOMjudge PDF 预览": "DOMjudge PDF preview",
+
+	系统任务: "System tasks",
+
+	"{0} 次任务": "{0} runs",
+
+	文件处理失败: "File processing failed",
+
+	文件处理完成: "File processing complete",
+
+	正在读取文件: "Reading files",
+
+	正在上传文件: "Uploading files",
+
+	正在保存文件: "Saving files",
+
+	"上传完成，正在等待服务端保存…": "Upload complete. Waiting for the server to save…",
+
+	"请等待当前文件处理完成。": "Wait for the current file operation to finish.",
+
+	"文件上传失败，请检查网络连接。": "Upload failed. Check your network connection.",
+
+	生成竞赛包: "Generate contest package",
+
+	"例如：正式赛 / 修正测试数据": "For example: Finals / Corrected test data",
+
+	"与题目发布版本绑定；删除竞赛后仍可下载。":
+		"Tied to released problem versions. Downloads remain available after the contest is deleted.",
+
+	"题面 PDF 预览": "Problem PDF preview",
+
+	"下载 PDF": "Download PDF",
+
+	头像: "Avatar",
+
+	"附件引用已复制。": "Attachment reference copied.",
+
+	"竞赛版本已变化，请刷新后重试。": "The contest has changed. Refresh and try again.",
+
+	"竞赛版本已变化，请重试导出。": "The contest has changed. Try exporting again.",
 };

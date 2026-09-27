@@ -1,4 +1,4 @@
-import { type ComponentProps, memo, useEffect, useState } from "react";
+import { type ComponentProps, memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -51,6 +51,23 @@ function ChatCodeBlock({
 	);
 }
 
+const HighlightedCode = memo(function HighlightedCode({ source, language }: { source: string; language: string }) {
+	const tokens = useMemo(() => highlightCode(source, language), [source, language]);
+	return (
+		<>
+			{tokens.map((token) =>
+				token.className ? (
+					<span className={token.className} key={token.from}>
+						{token.text}
+					</span>
+				) : (
+					token.text
+				),
+			)}
+		</>
+	);
+});
+
 const components: Components = {
 	pre({ node, children, ...props }) {
 		const code = node?.children.find((child) => child.type === "element" && child.tagName === "code");
@@ -70,17 +87,11 @@ const components: Components = {
 		const language = /(?:^|\s)language-([^\s]+)/.exec(className ?? "")?.[1];
 		return (
 			<code className={className} {...props}>
-				{language && typeof children === "string"
-					? highlightCode(children, language).map((token) =>
-							token.className ? (
-								<span className={token.className} key={token.from}>
-									{token.text}
-								</span>
-							) : (
-								token.text
-							),
-						)
-					: children}
+				{language && typeof children === "string" ? (
+					<HighlightedCode source={children} language={language} />
+				) : (
+					children
+				)}
 			</code>
 		);
 	},

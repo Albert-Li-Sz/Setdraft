@@ -1,4 +1,4 @@
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
+import { formatHydroStatement } from "@setdraft/authoring/statement";
 import { describe, expect, it } from "vitest";
 import type { ProjectSnapshot } from "../src/platform.ts";
 import { editableProject, parseTags, projectContextSnapshot } from "../src/problem.ts";

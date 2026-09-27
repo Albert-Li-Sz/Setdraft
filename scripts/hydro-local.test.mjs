@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function copyInstaller(fixture) {
-	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "packages/hydro-server/sandbox/build-args.mjs"]) {
+	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/sandbox/build-args.mjs"]) {
 		mkdirSync(dirname(join(fixture, file)), { recursive: true });
 		copyFileSync(join(root, file), join(fixture, file));
 	}
@@ -48,13 +48,13 @@ test("the standard build produces workspace dependencies before their consumers"
 });
 
 test("quick install and upgrade dry runs list the exact preparation steps", () => {
-	const install = command("sh", [join(root, "install.sh"), "--dry-run"]);
+	const install = command("sh", [join(root, "install.sh"), "--native", "--dry-run"]);
 	assert.equal(install.status, 0, install.stderr);
 	assert.match(install.stdout, /npm ci --ignore-scripts/);
 	assert.match(install.stdout, /npm 镜像 https:\/\/registry\.npmmirror\.com/);
 	assert.match(install.stdout, /模型数据缺失时先补齐/);
-	assert.match(install.stdout, /docker build -t hydro-problem-make\/sandbox:local/);
-	const upgrade = command("sh", [join(root, "upgrade.sh"), "--dry-run"]);
+	assert.match(install.stdout, /docker build -t setdraft\/sandbox:local/);
+	const upgrade = command("sh", [join(root, "upgrade.sh"), "--native", "--dry-run"]);
 	assert.equal(upgrade.status, 0, upgrade.stderr);
 	assert.match(upgrade.stdout, /git fetch origin main/);
 	assert.match(upgrade.stdout, /git merge --ff-only FETCH_HEAD/);
@@ -72,11 +72,11 @@ test("model catalog loads its JSON snapshot before the API starts", () => {
 });
 
 test("uninstall dry run makes data and dependency deletion explicit", () => {
-	const defaultRun = command("sh", [join(root, "uninstall.sh"), "--dry-run"]);
+	const defaultRun = command("sh", [join(root, "uninstall.sh"), "--native", "--dry-run"]);
 	assert.equal(defaultRun.status, 0, defaultRun.stderr);
 	assert.doesNotMatch(defaultRun.stdout, /永久删除/);
 	const purge = command("sh", [
-		join(root, "uninstall.sh"),
+		join(root, "uninstall.sh"), "--native",
 		"--purge-data",
 		"--remove-deps",
 		"--dry-run",
@@ -100,12 +100,12 @@ test("uninstall preserves project data unless purge is requested", () => {
 	try {
 		mkdirSync(join(fixture, "scripts"));
 		mkdirSync(join(fixture, "bin"));
-		mkdirSync(join(fixture, ".hydro-problem-make", "runtime"), { recursive: true });
+		mkdirSync(join(fixture, ".setdraft", "runtime"), { recursive: true });
 		copyInstaller(fixture);
-		writeFileSync(join(fixture, ".hydro-problem-make", "project.txt"), "keep");
-		mkdirSync(join(fixture, ".hydro-problem-make", "deployment", "data"), { recursive: true });
-		writeFileSync(join(fixture, ".hydro-problem-make", "deployment", "data", "certificate.key"), "keep certificate");
-		writeFileSync(join(fixture, ".hydro-problem-make", "runtime", "api.log"), "temporary log");
+		writeFileSync(join(fixture, ".setdraft", "project.txt"), "keep");
+		mkdirSync(join(fixture, ".setdraft", "deployment", "data"), { recursive: true });
+		writeFileSync(join(fixture, ".setdraft", "deployment", "data", "certificate.key"), "keep certificate");
+		writeFileSync(join(fixture, ".setdraft", "runtime", "api.log"), "temporary log");
 		writeFileSync(join(fixture, "bin", "docker"), "#!/bin/sh\necho 'No such image' >&2\nexit 1\n", {
 			mode: 0o755,
 		});
@@ -116,16 +116,16 @@ test("uninstall preserves project data unless purge is requested", () => {
 			env,
 		});
 		assert.equal(uninstall.status, 0, uninstall.stderr);
-		assert.equal(existsSync(join(fixture, ".hydro-problem-make", "project.txt")), true);
-		assert.equal(existsSync(join(fixture, ".hydro-problem-make", "deployment", "data", "certificate.key")), true);
-		assert.equal(existsSync(join(fixture, ".hydro-problem-make", "runtime")), false);
+		assert.equal(existsSync(join(fixture, ".setdraft", "project.txt")), true);
+		assert.equal(existsSync(join(fixture, ".setdraft", "deployment", "data", "certificate.key")), true);
+		assert.equal(existsSync(join(fixture, ".setdraft", "runtime")), false);
 		const purge = spawnSync(
 			process.execPath,
 			[join(fixture, "scripts/hydro-local.mjs"), "uninstall", "--purge-data"],
 			{ cwd: fixture, encoding: "utf8", env },
 		);
 		assert.equal(purge.status, 0, purge.stderr);
-		assert.equal(existsSync(join(fixture, ".hydro-problem-make")), false);
+		assert.equal(existsSync(join(fixture, ".setdraft")), false);
 	} finally {
 		rmSync(fixture, { recursive: true, force: true });
 	}
@@ -136,7 +136,7 @@ test("backup validates blobs and restore rejects a damaged copy without replacin
 	try {
 		mkdirSync(join(fixture, "scripts"));
 		copyInstaller(fixture);
-		const data = join(fixture, ".hydro-problem-make");
+		const data = join(fixture, ".setdraft");
 		mkdirSync(data);
 		const database = new DatabaseSync(join(data, "workspace.sqlite"));
 		database.exec("CREATE TABLE files (hash TEXT NOT NULL); CREATE TABLE metadata (value TEXT NOT NULL)");
@@ -176,8 +176,8 @@ test("multi-user backups include identity and personal blobs, revoke restored se
  try {
   mkdirSync(join(fixture, "scripts"));
   copyInstaller(fixture);
-  const data = join(fixture, ".hydro-problem-make");
-  writeFileSync(join(fixture, ".env"), 'HYDRO_NETWORK="global"\n');
+  const data = join(fixture, ".setdraft");
+  writeFileSync(join(fixture, ".env"), 'SETDRAFT_NETWORK="global"\n');
   mkdirSync(join(data, "deployment", "data"), { recursive: true });
   writeFileSync(join(data, "deployment", "data", "certificate.key"), "private certificate");
   const id = "10000000-0000-4000-8000-000000000000";
@@ -205,12 +205,12 @@ test("multi-user backups include identity and personal blobs, revoke restored se
   const backup = command(process.execPath, [script, "backup", saved]);
   assert.equal(backup.status, 0, backup.stderr);
   assert.equal(existsSync(join(saved, "users", id, "blobs", hash.slice(0, 2), hash)), true);
-  assert.equal(readFileSync(join(saved, "deployment.env"), "utf8"), 'HYDRO_NETWORK="global"\n');
+  assert.equal(readFileSync(join(saved, "deployment.env"), "utf8"), 'SETDRAFT_NETWORK="global"\n');
   assert.equal(readFileSync(join(saved, "deployment", "data", "certificate.key"), "utf8"), "private certificate");
-  writeFileSync(join(fixture, ".env"), 'HYDRO_NETWORK="cn"\n');
+  writeFileSync(join(fixture, ".env"), 'SETDRAFT_NETWORK="cn"\n');
   const restored = command(process.execPath, [script, "restore", saved]);
   assert.equal(restored.status, 0, restored.stderr);
-  assert.equal(readFileSync(join(fixture, ".env"), "utf8"), 'HYDRO_NETWORK="cn"\n');
+  assert.equal(readFileSync(join(fixture, ".env"), "utf8"), 'SETDRAFT_NETWORK="cn"\n');
   const checked = new DatabaseSync(join(data, "identity.sqlite"));
   assert.equal(checked.prepare("SELECT count(*) AS count FROM sessions").get().count, 0);
   assert.equal(checked.prepare("SELECT value FROM settings WHERE key='ai-config'").get().value, "team config");
@@ -225,12 +225,12 @@ test("multi-user backups include identity and personal blobs, revoke restored se
 test("deployment precedence, persistence, profile switching and scoped proxies", async () => {
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-config-"));
 	try {
-		writeFileSync(join(fixture, ".env"), '# Keep this comment\nUNRELATED="keep"\nNODE_OPTIONS="--bad-option"\nHYDRO_NETWORK="global"\nHYDRO_NPM_REGISTRY=""\nHYDRO_WORKSPACE_ROOT="data with spaces"\n');
-		const config = await loadDeployment(fixture, { HYDRO_NETWORK: "cn" }, {
-			HYDRO_PUBLIC_ORIGIN: "http://setdraft.example.com", HYDRO_HOST: "127.0.0.1",
-			HYDRO_DOWNLOAD_PROXY: "http://user:secret@127.0.0.1:8080",
+		writeFileSync(join(fixture, ".env"), '# Keep this comment\nUNRELATED="keep"\nNODE_OPTIONS="--bad-option"\nSETDRAFT_NETWORK="global"\nSETDRAFT_NPM_REGISTRY=""\nSETDRAFT_WORKSPACE_ROOT="data with spaces"\n');
+		const config = await loadDeployment(fixture, { SETDRAFT_NETWORK: "cn" }, {
+			SETDRAFT_PUBLIC_ORIGIN: "http://setdraft.example.com", SETDRAFT_HOST: "127.0.0.1",
+			SETDRAFT_DOWNLOAD_PROXY: "http://user:secret@127.0.0.1:8080",
 		});
-		assert.equal(config.values.HYDRO_PUBLIC_ORIGIN, "http://setdraft.example.com");
+		assert.equal(config.values.SETDRAFT_PUBLIC_ORIGIN, "http://setdraft.example.com");
 		assert.equal(config.registry, "https://registry.npmmirror.com");
 		assert.equal(config.dataRoot, join(fixture, "data with spaces"));
 		assert.equal(deploymentEnvironment(config, {}).NODE_OPTIONS, undefined);
@@ -244,11 +244,11 @@ test("deployment precedence, persistence, profile switching and scoped proxies",
 		if (process.platform !== "win32") assert.equal(statSync(join(fixture, ".env")).mode & 0o777, 0o600);
 		const reloaded = await loadDeployment(fixture, {});
 		assert.deepEqual(reloaded.values, config.values);
-		const global = await loadDeployment(fixture, {}, { HYDRO_NETWORK: "global" });
+		const global = await loadDeployment(fixture, {}, { SETDRAFT_NETWORK: "global" });
 		assert.equal(global.registry, "https://registry.npmjs.org");
 		assert.equal(global.debianMirror, "https://deb.debian.org");
-		assert.equal(global.values.HYDRO_PUBLIC_ORIGIN, "http://setdraft.example.com");
-		assert.equal(global.values.HYDRO_HOST, "127.0.0.1");
+		assert.equal(global.values.SETDRAFT_PUBLIC_ORIGIN, "http://setdraft.example.com");
+		assert.equal(global.values.SETDRAFT_HOST, "127.0.0.1");
 		assert.equal(redact("https://user:secret@example.com/a"), "https://***@example.com/a");
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
 });
@@ -257,13 +257,13 @@ test("deployment rejects invalid origins, injection, invalid limits and destruct
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-invalid-"));
 	try {
 		for (const overrides of [
-			{ HYDRO_PUBLIC_ORIGIN: "https://example.com/path" }, { HYDRO_PUBLIC_ORIGIN: "http://example.com\nadmin off" },
-			{ HYDRO_PUBLIC_ORIGIN: "https://example.com/" }, { HYDRO_PUBLIC_ORIGIN: "https://u:p@example.com" },
-			{ HYDRO_PUBLIC_ORIGIN: "ftp://example.com" }, { HYDRO_HOST: "not-a-host" },
-			{ HYDRO_NPM_REGISTRY: "http://mirror.example.com" }, { HYDRO_NETWORK: "oops" },
-			{ HYDRO_DOCKER_REGISTRY: "https://mirror.example.com" }, { HYDRO_TESTCASES_MAX: "0" },
-			{ HYDRO_WORKSPACE_ROOT: fixture }, { HYDRO_WORKSPACE_ROOT: dirname(fixture) },
-			{ HYDRO_DOWNLOAD_PROXY: "http://proxy.example.com/path" },
+			{ SETDRAFT_PUBLIC_ORIGIN: "https://example.com/path" }, { SETDRAFT_PUBLIC_ORIGIN: "http://example.com\nadmin off" },
+			{ SETDRAFT_PUBLIC_ORIGIN: "https://example.com/" }, { SETDRAFT_PUBLIC_ORIGIN: "https://u:p@example.com" },
+			{ SETDRAFT_PUBLIC_ORIGIN: "ftp://example.com" }, { SETDRAFT_HOST: "not-a-host" },
+			{ SETDRAFT_NPM_REGISTRY: "http://mirror.example.com" }, { SETDRAFT_NETWORK: "oops" },
+			{ SETDRAFT_DOCKER_REGISTRY: "https://mirror.example.com" }, { SETDRAFT_TESTCASES_MAX: "0" },
+			{ SETDRAFT_WORKSPACE_ROOT: fixture }, { SETDRAFT_WORKSPACE_ROOT: dirname(fixture) },
+			{ SETDRAFT_DOWNLOAD_PROXY: "http://proxy.example.com/path" },
 		]) await assert.rejects(loadDeployment(fixture, {}, overrides));
 		await assert.rejects(loadDeployment(fixture, { PORT: "9999" }), /PORT=4321/);
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
@@ -299,31 +299,31 @@ test("installation defaults to an all-interface web server without provisioning 
 test("direct IP access and custom proxy origins persist without certificate or proxy settings", async () => {
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-origin-config-"));
 	try {
-		writeFileSync(join(fixture, ".env"), 'HYDRO_PROXY_MODE="caddy"\nHYDRO_SSL_CERT="missing.pem"\nHYDRO_CADDY_BIN="missing-caddy"\nUNRELATED="keep"\n');
+		writeFileSync(join(fixture, ".env"), 'SETDRAFT_PROXY_MODE="caddy"\nSETDRAFT_SSL_CERT="missing.pem"\nSETDRAFT_CADDY_BIN="missing-caddy"\nUNRELATED="keep"\n');
 		for (const origin of ["", "http://192.168.1.20:4321", "http://[2001:db8::20]:4321", "https://setdraft.example.com"]) {
-			const config = await loadDeployment(fixture, {}, { HYDRO_PUBLIC_ORIGIN: origin });
-			assert.equal(config.values.HYDRO_HOST, "0.0.0.0");
-			assert.equal(config.values.HYDRO_PUBLIC_ORIGIN, origin);
-			assert.equal(config.values.HYDRO_PROXY_MODE, undefined);
-			assert.equal(deploymentEnvironment(config, { HYDRO_CADDY_BIN: "old" }).HYDRO_CADDY_BIN, undefined);
+			const config = await loadDeployment(fixture, {}, { SETDRAFT_PUBLIC_ORIGIN: origin });
+			assert.equal(config.values.SETDRAFT_HOST, "0.0.0.0");
+			assert.equal(config.values.SETDRAFT_PUBLIC_ORIGIN, origin);
+			assert.equal(config.values.SETDRAFT_PROXY_MODE, undefined);
+			assert.equal(deploymentEnvironment(config, { SETDRAFT_CADDY_BIN: "old" }).SETDRAFT_CADDY_BIN, undefined);
 			await saveDeployment(config);
 			const restored = await loadDeployment(fixture, {});
 			assert.deepEqual(restored.values, config.values);
 		}
 		const saved = readFileSync(join(fixture, ".env"), "utf8");
 		assert.match(saved, /UNRELATED="keep"/);
-		assert.doesNotMatch(saved, /HYDRO_PROXY_MODE|HYDRO_SSL_CERT|HYDRO_CADDY_BIN/);
-		assert.equal(existsSync(join(fixture, ".hydro-problem-make", "deployment")), false);
+		assert.doesNotMatch(saved, /SETDRAFT_PROXY_MODE|SETDRAFT_SSL_CERT|SETDRAFT_CADDY_BIN/);
+		assert.equal(existsSync(join(fixture, ".setdraft", "deployment")), false);
 	} finally { rmSync(fixture, { recursive: true, force: true }); }
 });
 
 test("sandbox mirror settings preserve the pinned GCC digest and never add Docker daemon configuration", () => {
-	const args = sandboxBuildArgs({ HYDRO_DOCKER_REGISTRY: "mirror.example.com", HYDRO_DEBIAN_MIRROR: "https://mirrors.tuna.tsinghua.edu.cn/" });
+	const args = sandboxBuildArgs({ SETDRAFT_DOCKER_REGISTRY: "mirror.example.com", SETDRAFT_DEBIAN_MIRROR: "https://mirrors.tuna.tsinghua.edu.cn/" });
 	assert.ok(args.includes("PYTHON_IMAGE=mirror.example.com/library/python:3.14-slim-trixie"));
 	assert.ok(args.some((arg) => /^GCC_IMAGE=mirror\.example\.com\/library\/gcc:16\.2\.0-trixie@sha256:[a-f0-9]{64}$/.test(arg)));
 	assert.ok(args.includes("DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn"));
 	assert.deepEqual(sandboxBuildArgs({}), []);
-	assert.throws(() => sandboxBuildArgs({ HYDRO_DOCKER_REGISTRY: "user:password@mirror.example.com" }));
+	assert.throws(() => sandboxBuildArgs({ SETDRAFT_DOCKER_REGISTRY: "user:password@mirror.example.com" }));
 });
 
 async function freePort() {
@@ -344,12 +344,12 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 	mkdirSync(join(fixture, "packages/hydro-web/dist"), { recursive: true });
 	mkdirSync(join(fixture, "packages/hydro-server/dist"), { recursive: true });
 	writeFileSync(join(fixture, "packages/hydro-web/dist/index.html"), "fixture");
-	writeFileSync(join(fixture, "packages/hydro-server/dist/cli.js"), `require('node:http').createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({setupRequired:false,origin:process.env.HYDRO_PUBLIC_ORIGIN,mirror:process.env.HYDRO_DEBIAN_MIRROR,listenHost:process.env.HYDRO_HOST}));}).listen(${port},'127.0.0.1');`);
+	writeFileSync(join(fixture, "packages/hydro-server/dist/cli.js"), `require('node:http').createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({setupRequired:false,origin:process.env.SETDRAFT_PUBLIC_ORIGIN,mirror:process.env.SETDRAFT_DEBIAN_MIRROR,listenHost:process.env.SETDRAFT_HOST}));}).listen(${port},'127.0.0.1');`);
 	writeFileSync(join(fixture, "bin/npm"), '#!/bin/sh\necho "npm $*" >> commands.log\ncase "$*" in *ping*registry.npmmirror.com*) exit 1;; esac\nexit 0\n', { mode: 0o755 });
 	writeFileSync(join(fixture, "bin/docker"), '#!/bin/sh\necho "docker $*" >> commands.log\nexit 0\n', { mode: 0o755 });
 	writeFileSync(join(fixture, "bin/git"), '#!/bin/sh\necho "git $*" >> commands.log\ncase "$1" in branch) echo main;; remote) echo https://example.com/project.git;; esac\nexit 0\n', { mode: 0o755 });
 	const env = { ...process.env, PATH: `${join(fixture, "bin")}:${process.env.PATH ?? ""}` };
-	for (const key of Object.keys(env)) if (key.startsWith("HYDRO_") || key === "PORT") delete env[key];
+	for (const key of Object.keys(env)) if (key.startsWith("HYDRO_") || key.startsWith("SETDRAFT_") || key === "PORT") delete env[key];
 	const invoke = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: fixture, encoding: "utf8", env, timeout: 65_000 });
 	try {
 		const installed = invoke("install", "--network", "cn", "--docker-registry", "mirror.example.com");
@@ -360,7 +360,7 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 		assert.match(logged, /registry.npmjs.org.*ci --ignore-scripts/);
 		assert.match(logged, /DEBIAN_MIRROR=https:\/\/mirrors.tuna.tsinghua.edu.cn/);
 		assert.match(logged, /GCC_IMAGE=mirror.example.com/);
-		const config = await loadDeployment(fixture, {}, { HYDRO_PUBLIC_ORIGIN: `http://127.0.0.1:${port}` });
+		const config = await loadDeployment(fixture, {}, { SETDRAFT_PUBLIC_ORIGIN: `http://127.0.0.1:${port}` });
 		await saveDeployment(config);
 		const restarted = invoke("start");
 		assert.equal(restarted.status, 0, restarted.stderr);
@@ -375,7 +375,7 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 		const uninstalled = invoke("uninstall");
 		assert.equal(uninstalled.status, 0, uninstalled.stderr);
 		assert.equal(readFileSync(join(fixture, ".env"), "utf8"), before);
-		assert.equal(existsSync(join(fixture, ".hydro-problem-make/runtime")), false);
+		assert.equal(existsSync(join(fixture, ".setdraft/runtime")), false);
 		await assert.rejects(fetch(`http://127.0.0.1:${port}/api/health`));
 	} finally { invoke("stop"); rmSync(fixture, { recursive: true, force: true }); }
 });

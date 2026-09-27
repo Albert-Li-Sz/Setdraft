@@ -56,7 +56,7 @@ export class AuthHttp {
 		if (publicOrigin) {
 			const url = new URL(publicOrigin);
 			if (url.origin !== publicOrigin || url.username || url.password || !["http:", "https:"].includes(url.protocol))
-				throw new Error("HYDRO_PUBLIC_ORIGIN 须为完整 HTTP(S) 站点来源，不含路径或末尾斜杠。");
+				throw new Error("SETDRAFT_PUBLIC_ORIGIN 须为完整 HTTP(S) 站点来源，不含路径或末尾斜杠。");
 		}
 		this.publicOrigin = publicOrigin;
 		this.secure = publicOrigin?.startsWith("https://") ?? false;

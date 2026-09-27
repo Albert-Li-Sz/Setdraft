@@ -6,15 +6,15 @@
 		"moduleResolution": "NodeNext",
 		"paths": {
 			"*": ["./*"],
-			"@hydro-problem-make/authoring": ["./packages/hydro-authoring/src/index.ts"],
-			"@hydro-problem-make/server": ["./packages/hydro-server/src/index.ts"],
+			"@setdraft/authoring": ["./packages/hydro-authoring/src/index.ts"],
+			"@setdraft/server": ["./packages/hydro-server/src/index.ts"],
 			"@earendil-works/pi-telemetry": ["./packages/telemetry/src/index.ts"],
 			"@earendil-works/pi-telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
 			"@earendil-works/pi-ai": ["./packages/ai/src/index.ts"],
 			"@earendil-works/pi-ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@earendil-works/pi-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
 			"typebox": ["./node_modules/typebox"],
-			"@hydro-problem-make/contracts": ["./packages/hydro-contracts/src/index.ts"]
+			"@setdraft/contracts": ["./packages/hydro-contracts/src/index.ts"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],

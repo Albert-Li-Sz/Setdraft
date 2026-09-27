@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { isSafeFlatName } from "@hydro-problem-make/authoring";
-import type { ManualCaseSummary } from "@hydro-problem-make/contracts";
+import { isSafeFlatName } from "@setdraft/authoring";
+import type { ManualCaseSummary } from "@setdraft/contracts";
 import { ManualProjectError } from "./project-error.ts";
 
 const dataNamePattern = /^([A-Za-z0-9][A-Za-z0-9._-]*)\.(in|out|ans)$/;

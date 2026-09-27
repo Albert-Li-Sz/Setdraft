@@ -1,0 +1,218 @@
+.info-strip,
+.notice,
+.manual-attachment,
+.manual-file-list,
+.manual-case-form {
+	border-radius: 0;
+}
+.info-strip::before {
+	border-radius: 0;
+}
+.manual-code-editor [contenteditable]:focus-visible {
+	outline: none;
+	box-shadow: none;
+}
+.manual-code-editor .cm-cursor {
+	border-left: 1.5px solid #202020;
+}
+.chat-code-block {
+	border-radius: 8px;
+	background: #fafafa;
+}
+.chat-code-toolbar {
+	background: #f4f4f4;
+}
+.manual-chat-markdown pre code {
+	display: block;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: inherit;
+}
+.manual-chat-waiting {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	color: var(--muted);
+	min-height: 52px;
+}
+.thinking-dots {
+	display: inline-flex;
+	gap: 5px;
+}
+.thinking-dots i,
+.streaming-indicator {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+	animation: thinking-pulse 1.35s ease-in-out infinite;
+}
+.thinking-dots i:nth-child(2) {
+	animation-delay: 150ms;
+}
+.thinking-dots i:nth-child(3) {
+	animation-delay: 300ms;
+}
+.streaming-indicator {
+	margin-block: 8px;
+}
+@keyframes thinking-pulse {
+	0%,
+	80%,
+	100% {
+		opacity: 0.25;
+		transform: translateY(0);
+	}
+	40% {
+		opacity: 1;
+		transform: translateY(-3px);
+	}
+}
+.pdf-preview-dialog {
+	width: min(1040px, calc(100vw - 32px));
+	max-width: none;
+}
+.pdf-preview-viewport {
+	position: relative;
+	height: 65dvh;
+	overflow: auto;
+	padding: 16px;
+	border: 1px solid var(--line);
+	background: #f4f4f4;
+	text-align: center;
+}
+.pdf-preview-viewport canvas {
+	display: block;
+	margin: 0 auto;
+	background: white;
+}
+.pdf-preview-viewport p,
+.pdf-preview-viewport output {
+	position: absolute;
+	inset: 24px 12px auto;
+}
+.pdf-preview-pages {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 16px;
+	padding: 12px 0;
+}
+.pdf-preview-pages span {
+	font-size: 13px;
+	color: var(--muted);
+}
+.pdf-preview-dialog > a {
+	display: inline-block;
+	margin-top: 12px;
+}
+.preview-dialog-heading {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+}
+.problem-center-toolbar select {
+	padding: 8px 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--panel);
+	color: var(--ink);
+}
+.manual-attachment > span {
+	flex: 1;
+}
+.manual-attachment button {
+	flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+	.thinking-dots i,
+	.streaming-indicator {
+		animation: none;
+		opacity: 0.6;
+	}
+}
+
+.task-groups {
+	display: grid;
+	gap: 24px;
+}
+.task-group {
+	padding: 20px 24px;
+}
+.task-group-heading {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+}
+.task-group-heading h2 {
+	font-size: 16px;
+}
+.task-group-heading > span,
+.task-row small {
+	color: var(--muted);
+	font-size: 12px;
+}
+.task-row {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 16px 0;
+	border: 0;
+	border-top: 1px solid var(--line);
+	background: transparent;
+	color: var(--ink);
+	text-align: left;
+	cursor: pointer;
+}
+.task-row > span:first-child {
+	display: grid;
+	gap: 6px;
+}
+.task-row:hover {
+	background: var(--surface-subtle);
+}
+.task-detail-dialog {
+	width: min(880px, calc(100vw - 32px));
+	max-width: none;
+}
+.task-detail-dialog .tasks-detail {
+	min-height: 0;
+	padding: 0;
+}
+.task-detail-dialog .tasks-events {
+	max-height: 60dvh;
+	overflow: auto;
+}
+
+.upload-progress-dialog progress {
+	display: block;
+	width: 100%;
+	height: 8px;
+	margin: 24px 0 12px;
+	accent-color: #171717;
+}
+.upload-progress-dialog output {
+	font-size: 13px;
+	color: var(--muted);
+}
+.transfer-filename {
+	overflow-wrap: anywhere;
+}
+
+.contest-details-form {
+	display: flex;
+	align-items: end;
+	gap: 12px;
+	margin: 20px 0;
+	flex-wrap: wrap;
+}
+.contest-details-form .field {
+	flex: 1 1 180px;
+}

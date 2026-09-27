@@ -12,8 +12,8 @@ import {
 	validateHydroProblemSpec,
 	writeHydroDirectoryArchive,
 	writeStoredArchiveFromFiles,
-} from "@hydro-problem-make/authoring";
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
+} from "@setdraft/authoring";
+import { formatHydroStatement } from "@setdraft/authoring/statement";
 import type {
 	ManualCaseSummary,
 	ManualProject,
@@ -21,7 +21,7 @@ import type {
 	ManualRelease,
 	ManualSandboxReport,
 	ManualVerificationReport,
-} from "@hydro-problem-make/contracts";
+} from "@setdraft/contracts";
 import { effectiveChecker } from "./acm-checker.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";

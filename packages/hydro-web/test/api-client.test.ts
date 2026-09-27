@@ -1,4 +1,4 @@
-import { readProjectSnapshot } from "@hydro-problem-make/contracts";
+import { readProjectSnapshot } from "@setdraft/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, RevisionConflict, requestJson, waitForTask } from "../src/api-client.ts";
 import { projectFixture } from "./project-fixture.ts";

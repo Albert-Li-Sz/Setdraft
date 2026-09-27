@@ -1,6 +1,6 @@
-import type { AiConfiguration, CppLanguage } from "@hydro-problem-make/contracts";
+import type { AiConfiguration, CppLanguage } from "@setdraft/contracts";
 
-export * from "@hydro-problem-make/contracts";
+export * from "@setdraft/contracts";
 export { apiUrl, requestJson, responseError, waitForTask } from "./api-client.ts";
 export type PageRoute = "workspace" | "chat" | "records" | "contests" | "tasks" | "settings" | "admin";
 export type ApiStatus = "checking" | "online" | "offline";

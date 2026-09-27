@@ -1,4 +1,4 @@
-import type { AuthUser, UserRole } from "@hydro-problem-make/contracts";
+import type { AuthUser, UserRole } from "@setdraft/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { copyText } from "./browser-capabilities.ts";

@@ -1,4 +1,4 @@
-import type { AuthSession } from "@hydro-problem-make/contracts";
+import type { AuthSession } from "@setdraft/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthClient, AuthenticationRequired } from "../src/auth-client.ts";
 

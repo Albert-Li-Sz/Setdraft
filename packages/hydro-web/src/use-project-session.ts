@@ -1,4 +1,4 @@
-import { readProjectSnapshot } from "@hydro-problem-make/contracts";
+import { readProjectSnapshot } from "@setdraft/contracts";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { apiUrl, requestJson } from "./api-client.ts";
 import { editableProject } from "./problem.ts";

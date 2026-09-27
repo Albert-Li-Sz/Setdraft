@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ManualRelease, ManualVerificationReport } from "@hydro-problem-make/contracts";
+import type { ManualRelease, ManualVerificationReport } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ManualProjectStore } from "../src/manual-projects.ts";
 import { copyProject, restoreProject } from "../src/project-history.ts";

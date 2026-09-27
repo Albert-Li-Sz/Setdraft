@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import type { ChatProtocol } from "@hydro-problem-make/contracts";
+import type { ChatProtocol } from "@setdraft/contracts";
 import { ChatError } from "./chat-error.ts";
 
 export interface StoredConfiguration {

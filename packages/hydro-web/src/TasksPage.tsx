@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authClient } from "./auth-client.ts";
+import { Dialog } from "./Dialog.tsx";
 import { useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type TaskEvent } from "./platform.ts";
 
@@ -48,7 +49,6 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 				});
 				if (active) {
 					setTasks(body.tasks ?? []);
-					setSelected((current) => current ?? body.tasks?.[0]?.id);
 				}
 			} catch (cause) {
 				if (active) setError(cause instanceof Error ? cause.message : "任务读取失败。");
@@ -101,7 +101,10 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 			const body = await requestJson<{ task: BackgroundTask }>(apiUrl(apiOrigin, `/tasks/${selected}/${kind}`), {
 				method: "POST",
 			});
-			if (body.task) setSelected(body.task.id);
+			if (body.task) {
+				setTasks((current) => [body.task, ...current.filter((item) => item.id !== body.task.id)]);
+				setSelected(body.task.id);
+			}
 			setError("");
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : "操作失败。");
@@ -111,6 +114,8 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	}
 
 	const task = tasks.find((item) => item.id === selected);
+	const groups = new Map<string, BackgroundTask[]>();
+	for (const item of tasks) groups.set(item.resource, [...(groups.get(item.resource) ?? []), item]);
 	return (
 		<main className="page tasks-page" id="tasks">
 			<section className="page-heading">
@@ -124,33 +129,51 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 					{t(error)}
 				</output>
 			)}
-			<div className="tasks-layout">
-				<aside className="card tasks-list" aria-label={t("任务列表")}>
-					{tasks.length === 0 ? (
-						<div className="tasks-empty">{t("暂无任务。运行 Gen 或验证打包后会显示在这里。")}</div>
-					) : (
-						tasks.map((item) => (
-							<button
-								key={item.id}
-								className={selected === item.id ? "active" : ""}
-								type="button"
-								onClick={() => setSelected(item.id)}
-							>
-								<span>{t(taskNames[item.kind])}</span>
-								<small>
-									{t(stateNames[item.state])} · {new Date(item.createdAt).toLocaleString(locale)}
-								</small>
+			<section className="task-groups" aria-label={t("任务列表")}>
+				{!tasks.length && <div className="tasks-empty">{t("暂无任务。运行 Gen 或验证打包后会显示在这里。")}</div>}
+				{[...groups].map(([resource, items]) => (
+					<section className="card task-group" key={resource}>
+						<div className="task-group-heading">
+							<h2>{items[0].resourceTitle || (resource === "image" ? t("系统任务") : resource)}</h2>
+							<span>{t("{0} 次任务", items.length)}</span>
+						</div>
+						{items.map((item) => (
+							<button className="task-row" key={item.id} type="button" onClick={() => setSelected(item.id)}>
+								<span>
+									<strong>
+										{t(taskNames[item.kind])}
+										{item.releaseName ? ` · ${item.releaseName}` : ""}
+									</strong>
+									<small>
+										{new Date(item.createdAt).toLocaleString(locale)} · {item.id.slice(0, 8)}
+									</small>
+								</span>
+								<span
+									className={`status-badge ${item.state === "succeeded" ? "online" : item.state === "failed" ? "offline" : ""}`}
+								>
+									{t(stateNames[item.state])}
+								</span>
 							</button>
-						))
-					)}
-				</aside>
-				<section className="card tasks-detail">
+						))}
+					</section>
+				))}
+			</section>
+			<Dialog
+				open={!!selected}
+				onClose={() => setSelected(undefined)}
+				labelledBy="task-detail-title"
+				className="task-detail-dialog"
+			>
+				<section className="tasks-detail">
 					{task ? (
 						<>
 							<div className="tasks-detail-head">
 								<div>
 									<div className="eyebrow">{task.kind}</div>
-									<h2>{t(taskNames[task.kind])}</h2>
+									<h2 id="task-detail-title">{t(taskNames[task.kind])}</h2>
+									<p>
+										{task.resourceTitle} · {new Date(task.createdAt).toLocaleString(locale)}
+									</p>
 									<span
 										className={`status-badge ${task.state === "succeeded" ? "online" : task.state === "failed" ? "offline" : ""}`}
 									>
@@ -158,6 +181,9 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									</span>
 								</div>
 								<div className="heading-actions">
+									<button className="button secondary" type="button" onClick={() => setSelected(undefined)}>
+										{t("关闭")}
+									</button>
 									{["queued", "running"].includes(task.state) && (
 										<button
 											className="button secondary"
@@ -203,7 +229,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 						<div className="tasks-empty">{t("选择任务查看运行日志与验证进度。")}</div>
 					)}
 				</section>
-			</div>
+			</Dialog>
 		</main>
 	);
 }

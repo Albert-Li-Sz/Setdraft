@@ -3,7 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Api, Context, ImageContent, Message, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@hydro-problem-make/contracts";
+import type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@setdraft/contracts";
 import {
 	AiConfigurationStore,
 	type ChatConfigurationSnapshot,
@@ -17,7 +17,7 @@ export { ChatError } from "./chat-error.ts";
 
 import { WorkspaceDatabase } from "./workspace-db.ts";
 
-export type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@hydro-problem-make/contracts";
+export type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage } from "@setdraft/contracts";
 
 export interface ChatModelRequest {
 	configuration: StoredConfiguration;

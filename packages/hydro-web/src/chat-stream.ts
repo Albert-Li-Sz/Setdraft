@@ -1,7 +1,7 @@
-import type { ChatStreamEvent } from "@hydro-problem-make/contracts";
+import type { ChatStreamEvent } from "@setdraft/contracts";
 import type { ChatConversation } from "./platform.ts";
 
-export type { ChatStreamEvent } from "@hydro-problem-make/contracts";
+export type { ChatStreamEvent } from "@setdraft/contracts";
 
 function decodeEvent(name: string, data: string): ChatStreamEvent | undefined {
 	if (!(["start", "delta", "done", "error"] as string[]).includes(name)) return undefined;

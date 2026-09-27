@@ -20,10 +20,13 @@ interface Props {
 export function RecordsPage(props: Props) {
 	const { t, locale } = useLocale();
 	const [query, setQuery] = useState("");
+	const [scoringMode, setScoringMode] = useState("all");
 	const [pendingDelete, setPendingDelete] = useState<ProjectSnapshot>();
 	const search = query.trim().toLocaleLowerCase();
-	const projects = props.projects.filter((item) =>
-		[item.title, item.slug, ...item.tags].join(" ").toLocaleLowerCase().includes(search),
+	const projects = props.projects.filter(
+		(item) =>
+			(scoringMode === "all" || item.scoringMode === scoringMode) &&
+			[item.title, item.slug, ...item.tags].join(" ").toLocaleLowerCase().includes(search),
 	);
 	return (
 		<main className="page problem-center" id="records">
@@ -43,6 +46,15 @@ export function RecordsPage(props: Props) {
 			</section>
 			<div className="problem-center-toolbar">
 				<span>{t("{0} 道题目", projects.length)}</span>
+				<select
+					aria-label={t("筛选赛制")}
+					value={scoringMode}
+					onChange={(event) => setScoringMode(event.target.value)}
+				>
+					<option value="all">{t("全部赛制")}</option>
+					<option value="acm">ACM</option>
+					<option value="oi">OI</option>
+				</select>
 				<label className="problem-search">
 					<Icon name="search" />
 					<input
@@ -107,7 +119,15 @@ export function RecordsPage(props: Props) {
 				{!projects.length && (
 					<div className="home-empty">
 						<Icon name="files" />
-						<h3>{t(search ? "没有匹配的题目" : props.loading ? "正在读取题目…" : "暂无题目")}</h3>
+						<h3>
+							{t(
+								search || scoringMode !== "all"
+									? "没有匹配的题目"
+									: props.loading
+										? "正在读取题目…"
+										: "暂无题目",
+							)}
+						</h3>
 						<p>{t(search ? "试试其他标题、标识或标签。" : "新建题目后，会显示在这里。")}</p>
 					</div>
 				)}

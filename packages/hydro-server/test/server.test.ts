@@ -29,7 +29,7 @@ const authenticatedFetch = (url: string, init: RequestInit = {}) => {
 
 const dockerAvailable = (() => {
 	try {
-		execFileSync("docker", ["image", "inspect", "hydro-problem-make/sandbox:local"], { stdio: "ignore" });
+		execFileSync("docker", ["image", "inspect", "setdraft/sandbox:local"], { stdio: "ignore" });
 		return true;
 	} catch {
 		return false;
@@ -143,7 +143,7 @@ beforeEach(async () => {
 	const session = identity.createSession(user.id);
 	cookie = `setdraft-session=${session.token}`;
 	csrf = session.access.csrfToken;
-	server = createHydroServer({ projects: store, chat, identity });
+	server = createHydroServer({ projects: store, chat, identity, staticRoot: join(root, "web") });
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -156,6 +156,20 @@ afterEach(async () => {
 });
 
 describe("manual project API", () => {
+	it("serves PDF worker modules and codecs with executable MIME types", async () => {
+		await mkdir(join(root, "web"));
+		for (const [name, type] of [
+			["pdf.worker.mjs", "text/javascript; charset=utf-8"],
+			["openjpeg.wasm", "application/wasm"],
+		]) {
+			await writeFile(join(root, "web", name), "test-asset");
+			const response = await fetch(`${origin}/${name}`);
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toBe(type);
+			expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+		}
+	});
+
 	it("does not discover incomplete or deleted releases from leftover directories", async () => {
 		const project = await createProject();
 		const release = await seedRelease(project.id);
@@ -524,6 +538,16 @@ describe("manual project API", () => {
 			body: original,
 		});
 		expect(uploaded.status).toBe(200);
+		const inline = await authenticatedFetch(`${origin}/api${pdfPath}?preview=1`);
+		expect(inline.headers.get("content-type")).toContain("application/pdf");
+		expect(inline.headers.get("content-disposition")).toBeNull();
+		expect(inline.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+		expect(inline.headers.get("content-security-policy")).toBe("frame-ancestors 'self'");
+		expect(await inline.text()).toBe(original);
+		expect((await authenticatedFetch(`${origin}/api${pdfPath}`)).headers.get("content-disposition")).toContain(
+			"attachment",
+		);
+		expect((await fetch(`${origin}/api${pdfPath}?preview=1`)).status).toBe(401);
 		const revision = (await json<{ revision: number }>(`/projects/${project.id}`)).body.revision;
 		store.database.db.exec(
 			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
@@ -749,14 +773,14 @@ describe("manual project API", () => {
 		"compiles reference, oracle, Gen, SPJ and validator with their selected GCC 16.2 standards",
 		async () => {
 			expect(
-				execFileSync("docker", ["run", "--rm", "hydro-problem-make/sandbox:local", "g++", "-dumpfullversion"])
+				execFileSync("docker", ["run", "--rm", "setdraft/sandbox:local", "g++", "-dumpfullversion"])
 					.toString("utf8")
 					.trim(),
 			).toBe("16.2.0");
 			const generated = await runManualSandbox({
 				mode: "generate",
 				stage: join(root, "cpp-standards-generate"),
-				image: "hydro-problem-make/sandbox:local",
+				image: "setdraft/sandbox:local",
 				reference: {
 					language: "cpp11",
 					code: '#include <iostream>\n#if __cplusplus != 201103L\n#error wrong C++ standard\n#endif\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b<<"\\n";}',
@@ -787,7 +811,7 @@ describe("manual project API", () => {
 			const finalized = await runManualSandbox({
 				mode: "finalize",
 				stage: join(root, "cpp-standards-finalize"),
-				image: "hydro-problem-make/sandbox:local",
+				image: "setdraft/sandbox:local",
 				reference: {
 					language: "cpp23",
 					code: '#include <iostream>\n#if __cplusplus != 202302L\n#error wrong C++ standard\n#endif\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b<<"\\n";}',
@@ -1223,7 +1247,7 @@ describe("manual project API", () => {
 				`type=bind,source=${checkerDirectory},target=/work`,
 				"--workdir",
 				"/work",
-				"hydro-problem-make/sandbox:local",
+				"setdraft/sandbox:local",
 				"sh",
 				"-c",
 			];
@@ -1285,7 +1309,7 @@ describe("manual project API", () => {
 			const bundle = await json<{ id: string }>(`/contests/${contest.body.id}/export`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ format: "domjudge" }),
+				body: JSON.stringify({ format: "domjudge", name: "Finals v1" }),
 			});
 			expect(bundle.status).toBe(201);
 			const bundlePath = join(root, "contest-releases", bundle.body.id, "bundle.zip");
@@ -1392,14 +1416,14 @@ describe("manual project API", () => {
 					await json(`/contests/${created.body.id}/export`, {
 						method: "POST",
 						headers: { "content-type": "application/json" },
-						body: JSON.stringify({ format: "domjudge" }),
+						body: JSON.stringify({ format: "domjudge", name: "Finals v1" }),
 					})
 				).status,
 			).toBe(422);
 			const bundle = await json<{ id: string }>(`/contests/${created.body.id}/export`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ format: "hydro" }),
+				body: JSON.stringify({ format: "hydro", name: "Hydro v1" }),
 			});
 			expect(bundle.status).toBe(201);
 			const download = await authenticatedFetch(`${origin}/api/contest-releases/${bundle.body.id}/download`);

@@ -4,7 +4,7 @@ import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AuthSession, AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthSession, AuthUser } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatService } from "../src/chat.ts";
 import { IdentityStore } from "../src/identity.ts";

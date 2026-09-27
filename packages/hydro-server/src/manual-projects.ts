@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { DEFAULT_HYDRO_JUDGE_LIMITS, type HydroJudgeLimits, isSafeFlatName } from "@hydro-problem-make/authoring";
+import { DEFAULT_HYDRO_JUDGE_LIMITS, type HydroJudgeLimits, isSafeFlatName } from "@setdraft/authoring";
 import {
 	type AddedManualCase,
 	type CppLanguage,
@@ -12,7 +12,7 @@ import {
 	type ManualProjectSnapshot,
 	type ManualRelease,
 	type ManualSubtask,
-} from "@hydro-problem-make/contracts";
+} from "@setdraft/contracts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, dataStem, hashFile } from "./project-files.ts";
@@ -29,7 +29,7 @@ export type {
 	ManualRelease,
 	ManualSubtask,
 	ManualVerificationReport,
-} from "@hydro-problem-make/contracts";
+} from "@setdraft/contracts";
 export { parseGeneratorScript } from "./project-files.ts";
 
 const projectIdPattern = /^[a-f0-9-]{36}$/;
@@ -108,7 +108,7 @@ export class ManualProjectStore {
 		this.root = resolve(options.root);
 		this.database = options.database ?? new WorkspaceDatabase(this.root);
 		if (this.database.root !== this.root) throw new Error("Workspace database root must match the project root.");
-		this.image = options.image ?? "hydro-problem-make/sandbox:local";
+		this.image = options.image ?? "setdraft/sandbox:local";
 		this.judgeLimits = options.judgeLimits ?? DEFAULT_HYDRO_JUDGE_LIMITS;
 		this.maxFileBytes = options.maxFileBytes ?? defaultMaxFileBytes;
 		this.maxProjectBytes = options.maxProjectBytes ?? defaultMaxProjectBytes;

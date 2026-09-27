@@ -1,4 +1,4 @@
-import type { ProjectSnapshot } from "@hydro-problem-make/contracts";
+import type { ProjectSnapshot } from "@setdraft/contracts";
 
 export function projectFixture(overrides: Partial<ProjectSnapshot> = {}): ProjectSnapshot {
 	return {

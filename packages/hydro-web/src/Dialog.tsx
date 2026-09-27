@@ -7,11 +7,13 @@ export function Dialog({
 	onClose,
 	labelledBy,
 	children,
+	className = "",
 }: {
 	open: boolean;
 	onClose(): void;
 	labelledBy: string;
 	children: ReactNode;
+	className?: string;
 }) {
 	const paused = useContext(WorkspacePausedContext);
 	const open = requestedOpen && !paused;
@@ -53,7 +55,7 @@ export function Dialog({
 	return (
 		<dialog
 			ref={ref}
-			className="card confirmation-dialog motion-dialog"
+			className={`card confirmation-dialog motion-dialog ${className}`}
 			aria-labelledby={labelledBy}
 			data-closing={!open}
 			inert={!open}

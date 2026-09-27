@@ -1,4 +1,4 @@
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AccountControls } from "./AccountControls.tsx";
 import { Icon } from "./Icon.tsx";

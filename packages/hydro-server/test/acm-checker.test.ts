@@ -8,7 +8,7 @@ import { defaultTextChecker } from "../src/acm-checker.ts";
 
 const dockerAvailable = (() => {
 	try {
-		execFileSync("docker", ["image", "inspect", "hydro-problem-make/sandbox:local"], { stdio: "ignore" });
+		execFileSync("docker", ["image", "inspect", "setdraft/sandbox:local"], { stdio: "ignore" });
 		return true;
 	} catch {
 		return false;
@@ -42,7 +42,7 @@ it.skipIf(!dockerAvailable)(
 							`type=bind,source=${directory},target=/work`,
 							"--workdir",
 							"/work",
-							"hydro-problem-make/sandbox:local",
+							"setdraft/sandbox:local",
 							"sh",
 							"-c",
 							`g++ -std=c++17 -I. checker.cc -o checker && ./checker input.in ${output} answer.out`,

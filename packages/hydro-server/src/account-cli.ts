@@ -1,11 +1,8 @@
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { workspaceRoot } from "./environment.ts";
 import { IdentityStore } from "./identity.ts";
 
-const root = resolve(
-	fileURLToPath(new URL("../../..", import.meta.url)),
-	process.env.HYDRO_WORKSPACE_ROOT ?? ".hydro-problem-make",
-);
+const root = workspaceRoot(fileURLToPath(new URL("../../..", import.meta.url)));
 const identity = new IdentityStore(root);
 try {
 	const [command, name, ...extra] = process.argv.slice(2);

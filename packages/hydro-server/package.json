@@ -1,5 +1,5 @@
 {
-	"name": "@hydro-problem-make/server",
+	"name": "@setdraft/server",
 	"version": "0.1.0",
 	"description": "Local HTTP API for Setdraft",
 	"private": true,
@@ -32,8 +32,8 @@
 	"license": "UNLICENSED",
 	"dependencies": {
 		"@earendil-works/pi-ai": "^0.87.0",
-		"@hydro-problem-make/authoring": "0.1.0",
-		"@hydro-problem-make/contracts": "0.1.0"
+		"@setdraft/authoring": "0.1.0",
+		"@setdraft/contracts": "0.1.0"
 	},
 	"devDependencies": {
 		"shx": "0.4.0",

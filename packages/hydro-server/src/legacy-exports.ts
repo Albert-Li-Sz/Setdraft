@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@hydro-problem-make/authoring";
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
+import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
+import { formatHydroStatement } from "@setdraft/authoring/statement";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 
 interface SourceManifest {

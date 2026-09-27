@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { closeSync, createReadStream, openSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/promises";
 import { connect } from "node:net";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
+
+import { validateWorkspaceDirectory, workspaceDirectories } from "./workspace-integrity.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(scriptPath), "..");
@@ -68,7 +69,7 @@ function usage() {
   node scripts/hydro-local.mjs account setup-code|reset-password <用户名>
 
 部署参数保存到仓库 .env；升级和启动自动加载，命令行 > 环境变量 > .env。
-卸载默认保留 .env 以及 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
+卸载默认保留 .env 以及 .setdraft 中的题目、发布包、对话和 API 配置。
 --purge-data 会永久删除这些数据；--remove-deps 额外删除根目录 node_modules。`);
 }
 
@@ -272,8 +273,8 @@ async function startAll() {
 		for (const name of started.reverse()) await stopService(name);
 		throw error;
 	}
-	console.log(`打开 ${process.env.HYDRO_PUBLIC_ORIGIN ?? `http://127.0.0.1:${currentMode === "dev" ? "5173" : "4321"}`} 使用制题工作台。`);
-	if (currentMode === "production") console.log(`Web/API 监听 ${deployment.values.HYDRO_HOST}:4321；${deployment.values.HYDRO_HOST === "0.0.0.0" ? "可通过 http://服务器IP:4321 访问" : "仅本机可直接访问"}。反向代理由使用者自行配置。`);
+	console.log(`打开 ${process.env.SETDRAFT_PUBLIC_ORIGIN ?? `http://127.0.0.1:${currentMode === "dev" ? "5173" : "4321"}`} 使用制题工作台。`);
+	if (currentMode === "production") console.log(`Web/API 监听 ${deployment.values.SETDRAFT_HOST}:4321；${deployment.values.SETDRAFT_HOST === "0.0.0.0" ? "可通过 http://服务器IP:4321 访问" : "仅本机可直接访问"}。反向代理由使用者自行配置。`);
 	try {
 		const session = await fetch("http://127.0.0.1:4321/api/auth/session").then((response) => response.json());
 		if (session.setupRequired) await account(["setup-code"]);
@@ -291,12 +292,12 @@ function installDependencies() {
 	runNpm(["run", "build", "--workspace=@earendil-works/pi-telemetry"]);
 	runNpm(["run", "build:offline", "--workspace=@earendil-works/pi-ai"]);
 	for (const workspace of [
-		"@hydro-problem-make/authoring",
-		"@hydro-problem-make/server",
-		"@hydro-problem-make/web",
+		"@setdraft/authoring",
+		"@setdraft/server",
+		"@setdraft/web",
 	]) runNpm(["run", "build", `--workspace=${workspace}`]);
 	try { run("docker", ["build", "-t", image, ...sandboxBuildArgs(process.env), "packages/hydro-server/sandbox"]); }
-	catch (error) { console.warn(`沙盒镜像未能构建，网页可继续使用；请检查 Docker Hub 访问或配置 HYDRO_DOCKER_REGISTRY，稍后在管理员设置页重试：${redact(error instanceof Error ? error.message : String(error))}`); }
+	catch (error) { console.warn(`沙盒镜像未能构建，网页可继续使用；请检查 Docker Hub 访问或配置 SETDRAFT_DOCKER_REGISTRY，稍后在管理员设置页重试：${redact(error instanceof Error ? error.message : String(error))}`); }
 }
 
 function selectRegistry() {
@@ -305,7 +306,7 @@ function selectRegistry() {
 	}).status === 0;
 	if (available(npmRegistry)) return;
 	const fallback = "https://registry.npmjs.org";
-	if (!deployment.values.HYDRO_NPM_REGISTRY && npmRegistry !== fallback && available(fallback)) {
+	if (!deployment.values.SETDRAFT_NPM_REGISTRY && npmRegistry !== fallback && available(fallback)) {
 		console.warn("默认 npm 镜像不可达，本次安装回退到 npm 官方源；继续保留锁文件完整性校验。");
 		npmRegistry = fallback;
 		return;
@@ -325,10 +326,10 @@ function checkUpgrade() {
 
 function printDryRun(command, options) {
 	if (["install", "upgrade", "start"].includes(command)) {
-		console.log(`将写入 ${deployment.path}（仅项目配置），网络 ${deployment.values.HYDRO_NETWORK}，生产监听 ${deployment.values.HYDRO_HOST}:4321。`);
-		console.log(`Debian 软件源：${deployment.debianMirror}；Docker 镜像仓库：${deployment.values.HYDRO_DOCKER_REGISTRY || "Docker Hub（可自定义可信镜像）"}。`);
-		if (deployment.values.HYDRO_DOWNLOAD_PROXY) console.log("下载代理：已配置（地址不显示）。");
-		if (deployment.values.HYDRO_PUBLIC_ORIGIN) console.log(`浏览器访问来源：${deployment.values.HYDRO_PUBLIC_ORIGIN}。`);
+		console.log(`将写入 ${deployment.path}（仅项目配置），网络 ${deployment.values.SETDRAFT_NETWORK}，生产监听 ${deployment.values.SETDRAFT_HOST}:4321。`);
+		console.log(`Debian 软件源：${deployment.debianMirror}；Docker 镜像仓库：${deployment.values.SETDRAFT_DOCKER_REGISTRY || "Docker Hub（可自定义可信镜像）"}。`);
+		if (deployment.values.SETDRAFT_DOWNLOAD_PROXY) console.log("下载代理：已配置（地址不显示）。");
+		if (deployment.values.SETDRAFT_PUBLIC_ORIGIN) console.log(`浏览器访问来源：${deployment.values.SETDRAFT_PUBLIC_ORIGIN}。`);
 		console.log("不安装或托管反向代理；可自行将代理指向 Web/API 的 4321 端口。");
 	}
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
@@ -348,7 +349,7 @@ function runService(name, mode) {
 	const child = spawn(executable, args, {
 		cwd: root,
 		stdio: "inherit",
-		env: production ? { ...process.env, HYDRO_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : { ...process.env, HYDRO_HOST: "127.0.0.1" },
+		env: production ? { ...process.env, SETDRAFT_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : { ...process.env, SETDRAFT_HOST: "127.0.0.1" },
 	});
 	const forward = () => child.kill("SIGTERM");
 	process.on("SIGTERM", forward);
@@ -370,7 +371,7 @@ async function main() {
 	dataRoot = deployment.dataRoot;
 	runtimeRoot = join(dataRoot, "runtime");
 	modePath = join(dataRoot, "mode.json");
-	image = process.env.HYDRO_SANDBOX_IMAGE || "hydro-problem-make/sandbox:local";
+	image = process.env.SETDRAFT_SANDBOX_IMAGE || "setdraft/sandbox:local";
 	npmRegistry = deployment.registry;
 	if (command === "service") {
 		if (argumentsList.length !== 2 || !Object.hasOwn(services, argumentsList[0]) || !["dev", "production"].includes(argumentsList[1]))
@@ -398,7 +399,7 @@ async function main() {
 		if (!["dev", "production"].includes(requestedMode) || !["install", "upgrade", "start"].includes(command)) throw new Error("--mode 只能指定 dev 或 production。");
 	}
 	currentMode = requestedMode ?? (command === "install" ? "production" : await readMode());
-	if (["install", "upgrade", "start"].includes(command) && currentMode === "dev" && deployment.values.HYDRO_PUBLIC_ORIGIN)
+	if (["install", "upgrade", "start"].includes(command) && currentMode === "dev" && deployment.values.SETDRAFT_PUBLIC_ORIGIN)
 		throw new Error("反向代理仅支持 production 模式；开发环境请使用独立检出并清空公开站点配置。");
 	const options = new Set(argumentsList);
 	const allowed =
@@ -498,10 +499,10 @@ async function account(args) {
 
 async function doctor() {
 	console.log(`Node.js ${process.version} · 模式 ${await readMode()}`);
-	console.log(`配置：${deployment.path} · 网络 ${deployment.values.HYDRO_NETWORK} · npm ${npmRegistry}`);
-	console.log(`生产监听：${deployment.values.HYDRO_HOST}:4321 · 站点来源：${deployment.values.HYDRO_PUBLIC_ORIGIN || "通过服务器 IP 直接访问"}`);
-	if (deployment.values.HYDRO_PUBLIC_ORIGIN)
-		console.log(`外部站点：${await ready(`${deployment.values.HYDRO_PUBLIC_ORIGIN}/api/health`) ? "可访问" : "未确认，请检查自建反向代理配置"}`);
+	console.log(`配置：${deployment.path} · 网络 ${deployment.values.SETDRAFT_NETWORK} · npm ${npmRegistry}`);
+	console.log(`生产监听：${deployment.values.SETDRAFT_HOST}:4321 · 站点来源：${deployment.values.SETDRAFT_PUBLIC_ORIGIN || "通过服务器 IP 直接访问"}`);
+	if (deployment.values.SETDRAFT_PUBLIC_ORIGIN)
+		console.log(`外部站点：${await ready(`${deployment.values.SETDRAFT_PUBLIC_ORIGIN}/api/health`) ? "可访问" : "未确认，请检查自建反向代理配置"}`);
 	try { console.log(`npm ${output(npm, [...npmPrefix, "--version"])}`); } catch (error) { console.log(`npm 不可用：${error}`); }
 	try {
 		console.log(`Docker ${output("docker", ["info", "--format", "{{.ServerVersion}}"])}`);
@@ -563,49 +564,6 @@ async function restore(source) {
 	}
 	catch (error) { await rm(dataRoot, { recursive: true, force: true }); if (await stat(previous).catch(() => undefined)) await rename(previous, dataRoot); throw error; }
 	console.log(`恢复完成：${dataRoot}。旧数据保存在 ${previous}；本机 .env 保留，迁移时请核对备份中的 deployment.env。运行 start 启动。`);
-}
-
-async function workspaceDirectories(directory) {
-	const directories = [directory];
-	const identityPath = join(directory, "identity.sqlite");
-	if (!(await stat(identityPath).catch(() => undefined))) return directories;
-	const identity = new DatabaseSync(identityPath, { readOnly: true });
-	try {
-		if (identity.prepare("PRAGMA integrity_check").get().integrity_check !== "ok") throw new Error("账号数据库校验失败。");
-		const legacyOwner = identity.prepare("SELECT value FROM metadata WHERE key='legacy-owner'").get()?.value;
-		for (const user of identity.prepare("SELECT id FROM users").all()) {
-			if (!/^[a-f0-9-]{36}$/u.test(user.id)) throw new Error("账号 ID 无效。");
-			if (user.id === legacyOwner) continue;
-			const path = join(directory, "users", user.id);
-			if (await stat(join(path, "workspace.sqlite")).catch(() => undefined)) directories.push(path);
-			else if (await stat(path).catch(() => undefined)) throw new Error(`个人工作区缺少 workspace.sqlite：${user.id}`);
-		}
-	} finally { identity.close(); }
-	return directories;
-}
-
-async function validateWorkspaceDirectory(directory) {
-	for (const workspace of await workspaceDirectories(directory)) await validateOneWorkspace(workspace);
-}
-
-async function validateOneWorkspace(directory) {
-	const path = join(directory, "workspace.sqlite");
-	if (!(await stat(path).catch(() => undefined))) throw new Error("备份目录缺少 workspace.sqlite。");
-	const database = new DatabaseSync(path, { readOnly: true });
-	let hashes;
-	try {
-		const integrity = database.prepare("PRAGMA integrity_check").get();
-		if (integrity.integrity_check !== "ok") throw new Error(`SQLite 校验失败：${integrity.integrity_check}`);
-		hashes = database.prepare("SELECT DISTINCT hash FROM files").all().map((row) => row.hash);
-	} finally { database.close(); }
-	for (const hash of hashes) {
-		if (!/^[a-f0-9]{64}$/u.test(hash)) throw new Error(`文件索引哈希无效：${hash}`);
-		const blob = join(directory, "blobs", hash.slice(0, 2), hash);
-		const actual = createHash("sha256");
-		try { for await (const chunk of createReadStream(blob)) actual.update(chunk); }
-		catch { throw new Error(`备份文件缺失：${hash}`); }
-		if (actual.digest("hex") !== hash) throw new Error(`备份文件哈希不匹配：${hash}`);
-	}
 }
 
 async function prune(args) {

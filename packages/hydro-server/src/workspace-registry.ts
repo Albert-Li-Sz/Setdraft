@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 import { AiConfigurationStore } from "./ai-configuration.ts";
 import type { ChatService } from "./chat.ts";
 import { ChatRequestQueue } from "./chat-requests.ts";

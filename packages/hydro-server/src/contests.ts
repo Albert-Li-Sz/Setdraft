@@ -1,18 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { isSafeFlatName, writeStoredArchiveFromFiles } from "@hydro-problem-make/authoring";
-import {
-	type ContestDraft,
-	type ContestFormat,
-	type ContestRelease,
-	isContestReadyRelease,
-} from "@hydro-problem-make/contracts";
+import { isSafeFlatName, writeStoredArchiveFromFiles } from "@setdraft/authoring";
+import { type ContestDraft, type ContestFormat, type ContestRelease, isContestReadyRelease } from "@setdraft/contracts";
 import { domjudgeProblemId } from "./domjudge-export.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { ManualProjectError, type ManualProjectStore, type ManualRelease } from "./manual-projects.ts";
+import { releaseName } from "./releases.ts";
 
-export type { ContestDraft, ContestFormat, ContestRelease } from "@hydro-problem-make/contracts";
+export type { ContestDraft, ContestFormat, ContestRelease } from "@setdraft/contracts";
 
 const idPattern = /^[a-f0-9-]{36}$/u;
 const colorPattern = /^#[0-9a-fA-F]{6}$/u;
@@ -82,7 +78,7 @@ export class ContestStore {
 			});
 		} catch (error) {
 			if (String(error).includes("VERSION_CONFLICT")) {
-				throw new ManualProjectError("竞赛草稿版本已变化，请刷新后重试。", 409, await this.get(draft.id));
+				throw new ManualProjectError("竞赛版本已变化，请刷新后重试。", 409, await this.get(draft.id));
 			}
 			throw error;
 		}
@@ -161,7 +157,7 @@ export class ContestStore {
 		const input = value as Record<string, unknown>;
 		const draft = await this.get(id);
 		if (input.expectedRevision !== undefined && input.expectedRevision !== draft.revision) {
-			throw new ManualProjectError("竞赛草稿版本已变化，请刷新后重试。", 409, draft);
+			throw new ManualProjectError("竞赛版本已变化，请刷新后重试。", 409, draft);
 		}
 		const title = typeof input.title === "string" ? input.title.trim() : "";
 		const slug = typeof input.slug === "string" ? input.slug.trim() : "";
@@ -223,7 +219,7 @@ export class ContestStore {
 		return updated;
 	}
 
-	async export(id: string, format: ContestFormat, context?: ExecutionContext): Promise<ContestRelease> {
+	async export(id: string, format: ContestFormat, context?: ExecutionContext, name?: string): Promise<ContestRelease> {
 		if (this.projects.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		if (this.busy.has(id)) throw new ManualProjectError("竞赛正在导出。", 409);
 		this.busy.add(id);
@@ -272,6 +268,7 @@ export class ContestStore {
 			const contestRelease: ContestRelease = {
 				id: archiveId,
 				contestId: id,
+				name: name === undefined ? draft.title : releaseName(name),
 				title: draft.title,
 				slug: draft.slug,
 				format,
@@ -308,7 +305,7 @@ export class ContestStore {
 				() => {
 					context?.signal.throwIfAborted();
 					if (this.projects.database.version("contest", id) !== this.documentVersions.get(draft))
-						throw new ManualProjectError("竞赛草稿版本已变化，请重试导出。", 409);
+						throw new ManualProjectError("竞赛版本已变化，请重试导出。", 409);
 					this.projects.database.put("contest-release", contestRelease.id, contestRelease);
 				},
 			);
@@ -362,7 +359,7 @@ export class ContestStore {
 		const targeted = new Set(releaseIds);
 		for (const draft of await this.list()) {
 			if (draft.releaseIds.some((id) => targeted.has(id))) {
-				throw new ManualProjectError(`题目已被竞赛“${draft.title}”引用，请先从竞赛草稿移出再删除。`, 409);
+				throw new ManualProjectError(`题目已被竞赛“${draft.title}”引用，请先从竞赛移出再删除。`, 409);
 			}
 		}
 	}

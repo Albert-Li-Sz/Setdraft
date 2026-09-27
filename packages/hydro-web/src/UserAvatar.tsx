@@ -1,4 +1,4 @@
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 export function UserAvatar({ user, large = false }: { user: Pick<AuthUser, "username" | "avatar">; large?: boolean }) {
 	return (
 		<span className={`workspace-avatar${large ? " profile-avatar" : ""}`}>

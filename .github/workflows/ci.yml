@@ -47,7 +47,7 @@ jobs:
 
       - name: Production page smoke test
         run: |
-          HYDRO_WEB_ROOT="$PWD/packages/hydro-web/dist" HYDRO_WORKSPACE_ROOT="$RUNNER_TEMP/hydro-smoke" node packages/hydro-server/dist/cli.js > "$RUNNER_TEMP/hydro-smoke.log" 2>&1 &
+          SETDRAFT_WEB_ROOT="$PWD/packages/hydro-web/dist" SETDRAFT_WORKSPACE_ROOT="$RUNNER_TEMP/hydro-smoke" node packages/hydro-server/dist/cli.js > "$RUNNER_TEMP/hydro-smoke.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
@@ -72,6 +72,6 @@ jobs:
       - name: Build runtime dependencies
         run: npm run build:hydro
       - name: Build sandbox image
-        run: docker build -t hydro-problem-make/sandbox:local packages/hydro-server/sandbox
+        run: docker build -t setdraft/sandbox:local packages/hydro-server/sandbox
       - name: Sandbox integration tests
-        run: npm run test --workspace=@hydro-problem-make/server
+        run: npm run test --workspace=@setdraft/server

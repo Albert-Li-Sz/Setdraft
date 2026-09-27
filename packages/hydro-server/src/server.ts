@@ -26,6 +26,8 @@ const contentTypes: Readonly<Record<string, string>> = {
 	".css": "text/css; charset=utf-8",
 	".html": "text/html; charset=utf-8",
 	".js": "text/javascript; charset=utf-8",
+	".mjs": "text/javascript; charset=utf-8",
+	".wasm": "application/wasm",
 	".json": "application/json; charset=utf-8",
 	".svg": "image/svg+xml",
 };
@@ -375,7 +377,8 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 							? (value as Record<string, unknown>).format
 							: undefined;
 					if (format !== "hydro" && format !== "domjudge") throw new ManualProjectError("竞赛导出格式无效。");
-					sendJson(response, 202, { task: await tasks.submit("contest-export", id, format) });
+					const name = releaseName((value as Record<string, unknown>).name);
+					sendJson(response, 202, { task: await tasks.submit("contest-export", id, format, name) });
 				} else if (request.method === "DELETE" && !contestRoute[2]) {
 					await contests.delete(id);
 					response.writeHead(204, { "cache-control": "no-store" });
@@ -477,7 +480,17 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 				const id = pdfRoute[1];
 				if (request.method === "GET") {
 					const file = await projects.domjudgePdfFile(id);
-					await sendFile(response, file.path, "problem.pdf", file.size, "application/pdf");
+					if (url.searchParams.get("preview") === "1") {
+						response.setHeader("x-frame-options", "SAMEORIGIN");
+						response.setHeader("content-security-policy", "frame-ancestors 'self'");
+					}
+					await sendFile(
+						response,
+						file.path,
+						url.searchParams.get("preview") === "1" ? undefined : "problem.pdf",
+						file.size,
+						"application/pdf",
+					);
 				} else if (request.method === "PUT") {
 					if (request.headers["content-type"]?.split(";", 1)[0] !== "application/pdf") {
 						throw new ManualProjectError("上传题面须使用 application/pdf。");

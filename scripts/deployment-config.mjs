@@ -1,19 +1,20 @@
+import { existsSync } from "node:fs";
 import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseEnv } from "node:util";
 
 const fields = [
-	"HYDRO_WORKSPACE_ROOT", "HYDRO_HOST", "HYDRO_PUBLIC_ORIGIN",
-	"HYDRO_NETWORK", "HYDRO_NPM_REGISTRY", "HYDRO_DOWNLOAD_PROXY",
-	"HYDRO_DOCKER_REGISTRY", "HYDRO_DEBIAN_MIRROR",
-	"HYDRO_SANDBOX_IMAGE", "HYDRO_TESTCASES_MAX", "HYDRO_TOTAL_TIME_LIMIT_MS",
-	"HYDRO_CASE_MAX_BYTES", "HYDRO_PROJECT_MAX_BYTES", "HYDRO_AI_CONFIG_PATH",
+	"SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
+	"SETDRAFT_NETWORK", "SETDRAFT_NPM_REGISTRY", "SETDRAFT_DOWNLOAD_PROXY",
+	"SETDRAFT_DOCKER_REGISTRY", "SETDRAFT_DEBIAN_MIRROR",
+	"SETDRAFT_SANDBOX_IMAGE", "SETDRAFT_TESTCASES_MAX", "SETDRAFT_TOTAL_TIME_LIMIT_MS",
+	"SETDRAFT_CASE_MAX_BYTES", "SETDRAFT_PROJECT_MAX_BYTES", "SETDRAFT_AI_CONFIG_PATH",
 ];
-const retiredFields = ["HYDRO_PROXY_MODE", "HYDRO_ACME_EMAIL", "HYDRO_SSL_CERT", "HYDRO_SSL_KEY", "HYDRO_CADDY_DOWNLOAD_BASE", "HYDRO_CADDY_ARCHIVE", "HYDRO_CADDY_BIN"];
+const retiredFields = ["SETDRAFT_PROXY_MODE", "SETDRAFT_ACME_EMAIL", "SETDRAFT_SSL_CERT", "SETDRAFT_SSL_KEY", "SETDRAFT_CADDY_DOWNLOAD_BASE", "SETDRAFT_CADDY_ARCHIVE", "SETDRAFT_CADDY_BIN"];
 const flags = {
-	"--host": "HYDRO_HOST", "--public-origin": "HYDRO_PUBLIC_ORIGIN", "--network": "HYDRO_NETWORK",
-	"--download-proxy": "HYDRO_DOWNLOAD_PROXY", "--registry": "HYDRO_NPM_REGISTRY",
-	"--docker-registry": "HYDRO_DOCKER_REGISTRY",
+	"--host": "SETDRAFT_HOST", "--public-origin": "SETDRAFT_PUBLIC_ORIGIN", "--network": "SETDRAFT_NETWORK",
+	"--download-proxy": "SETDRAFT_DOWNLOAD_PROXY", "--registry": "SETDRAFT_NPM_REGISTRY",
+	"--docker-registry": "SETDRAFT_DOCKER_REGISTRY",
 };
 
 export function takeDeploymentOptions(args, command) {
@@ -45,10 +46,10 @@ function safeUrl(value, name, { proxy = false } = {}) {
 function origin(value) {
 	if (!value) return "";
 	let url;
-	try { url = new URL(value); } catch { throw new Error("HYDRO_PUBLIC_ORIGIN 不是有效来源。"); }
+	try { url = new URL(value); } catch { throw new Error("SETDRAFT_PUBLIC_ORIGIN 不是有效来源。"); }
 	if (url.origin !== value || url.username || url.password ||
 		!["http:", "https:"].includes(url.protocol))
-		throw new Error("HYDRO_PUBLIC_ORIGIN 需要完整 HTTP(S) 来源，不含路径或末尾斜杠。");
+		throw new Error("SETDRAFT_PUBLIC_ORIGIN 需要完整 HTTP(S) 来源，不含路径或末尾斜杠。");
 	return value;
 }
 
@@ -59,50 +60,59 @@ export async function loadDeployment(root, environment = process.env, overrides 
 	try { source = await readFile(path, "utf8"); } catch (error) { if (error.code !== "ENOENT") throw error; }
 	const saved = parseEnv(source);
 	const values = {};
-	for (const key of fields) values[key] = overrides[key] ?? environment[key] ?? saved[key] ?? "";
-	values.HYDRO_HOST ||= "0.0.0.0";
-	if (!["0.0.0.0", "127.0.0.1"].includes(values.HYDRO_HOST)) throw new Error("--host 只能是 0.0.0.0 或 127.0.0.1。");
-	const network = values.HYDRO_NETWORK || "cn";
+	for (const key of fields) {
+		const legacy = key.replace(/^SETDRAFT_/u, "HYDRO_");
+		values[key] = overrides[key] ?? environment[key] ?? environment[legacy] ?? saved[key] ?? saved[legacy] ?? "";
+	}
+	values.SETDRAFT_HOST ||= "0.0.0.0";
+	if (!["0.0.0.0", "127.0.0.1"].includes(values.SETDRAFT_HOST)) throw new Error("--host 只能是 0.0.0.0 或 127.0.0.1。");
+	const network = values.SETDRAFT_NETWORK || "cn";
 	if (!["cn", "global"].includes(network)) throw new Error("--network 只能是 cn 或 global。");
-	values.HYDRO_NETWORK = network;
+	values.SETDRAFT_NETWORK = network;
 	// Empty mirror values follow the network profile; explicit choices survive upgrades/profile changes.
-	const registry = safeUrl(values.HYDRO_NPM_REGISTRY || (network === "cn" ? "https://registry.npmmirror.com" : "https://registry.npmjs.org"), "HYDRO_NPM_REGISTRY");
-	const debianMirror = safeUrl(values.HYDRO_DEBIAN_MIRROR || (network === "cn" ? "https://mirrors.tuna.tsinghua.edu.cn" : "https://deb.debian.org"), "HYDRO_DEBIAN_MIRROR");
-	values.HYDRO_PUBLIC_ORIGIN = origin(values.HYDRO_PUBLIC_ORIGIN);
-	if (values.HYDRO_DOWNLOAD_PROXY) safeUrl(values.HYDRO_DOWNLOAD_PROXY, "HYDRO_DOWNLOAD_PROXY", { proxy: true });
-	if (values.HYDRO_DOCKER_REGISTRY && !/^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?(?:\/[a-zA-Z0-9._-]+)*$/u.test(values.HYDRO_DOCKER_REGISTRY))
-		throw new Error("HYDRO_DOCKER_REGISTRY 需要仓库主机及可选路径，不含协议、凭据或末尾斜杠。");
+	const registry = safeUrl(values.SETDRAFT_NPM_REGISTRY || (network === "cn" ? "https://registry.npmmirror.com" : "https://registry.npmjs.org"), "SETDRAFT_NPM_REGISTRY");
+	const debianMirror = safeUrl(values.SETDRAFT_DEBIAN_MIRROR || (network === "cn" ? "https://mirrors.tuna.tsinghua.edu.cn" : "https://deb.debian.org"), "SETDRAFT_DEBIAN_MIRROR");
+	values.SETDRAFT_PUBLIC_ORIGIN = origin(values.SETDRAFT_PUBLIC_ORIGIN);
+	if (values.SETDRAFT_DOWNLOAD_PROXY) safeUrl(values.SETDRAFT_DOWNLOAD_PROXY, "SETDRAFT_DOWNLOAD_PROXY", { proxy: true });
+	if (values.SETDRAFT_DOCKER_REGISTRY && !/^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?(?:\/[a-zA-Z0-9._-]+)*$/u.test(values.SETDRAFT_DOCKER_REGISTRY))
+		throw new Error("SETDRAFT_DOCKER_REGISTRY 需要仓库主机及可选路径，不含协议、凭据或末尾斜杠。");
 	if (environment.PORT && environment.PORT !== "4321") throw new Error("托管服务固定使用 PORT=4321；请取消其他 PORT 设置。");
-	for (const key of ["HYDRO_TESTCASES_MAX", "HYDRO_TOTAL_TIME_LIMIT_MS", "HYDRO_CASE_MAX_BYTES", "HYDRO_PROJECT_MAX_BYTES"]) {
+	for (const key of ["SETDRAFT_TESTCASES_MAX", "SETDRAFT_TOTAL_TIME_LIMIT_MS", "SETDRAFT_CASE_MAX_BYTES", "SETDRAFT_PROJECT_MAX_BYTES"]) {
 		if (values[key] && (!/^\d+$/u.test(values[key]) || !Number.isSafeInteger(Number(values[key])) || Number(values[key]) < 1))
 			throw new Error(`${key} 需要正整数。`);
 	}
 	for (const [key, value] of Object.entries(values)) {
 		if (/[\r\n\0]/u.test(value) || (value.includes('"') && value.includes("'"))) throw new Error(`${key} 含不支持的字符。`);
 	}
-	const dataRoot = resolve(root, values.HYDRO_WORKSPACE_ROOT || ".hydro-problem-make");
+	const dataRoot = resolve(root, values.SETDRAFT_WORKSPACE_ROOT || (existsSync(join(root, ".setdraft")) || !existsSync(join(root, ".hydro-problem-make")) ? ".setdraft" : ".hydro-problem-make"));
 	const toRoot = relative(dataRoot, root);
 	if (!toRoot || (!toRoot.startsWith("..") && !isAbsolute(toRoot))) throw new Error("工作区不能是仓库根目录或其父目录。");
+	for (const directory of ["packages", "scripts", "deploy", "node_modules", ".git"]) {
+		const within = relative(join(root, directory), dataRoot);
+		if (!within || (!within.startsWith("..") && !isAbsolute(within)))
+			throw new Error("数据目录不能放在源代码、部署脚本或依赖目录中。");
+	}
 	return { path, source, values, registry, debianMirror, dataRoot, root };
 }
 
 export function deploymentEnvironment(config, base = process.env) {
 	const environment = { ...base };
+	for (const key of [...fields, ...retiredFields]) delete environment[key.replace(/^SETDRAFT_/u, "HYDRO_")];
 	for (const key of retiredFields) delete environment[key];
 	for (const [key, value] of Object.entries(config.values)) {
 		if (value) environment[key] = value;
 		else delete environment[key];
 	}
-	environment.HYDRO_WORKSPACE_ROOT = config.dataRoot;
-	environment.HYDRO_DEBIAN_MIRROR = config.debianMirror;
+	environment.SETDRAFT_WORKSPACE_ROOT = config.dataRoot;
+	environment.SETDRAFT_DEBIAN_MIRROR = config.debianMirror;
 	return environment;
 }
 
 export function networkEnvironment(config, base = process.env) {
 	const environment = { ...base };
-	if (config.values.HYDRO_DOWNLOAD_PROXY) {
+	if (config.values.SETDRAFT_DOWNLOAD_PROXY) {
 		for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"])
-			environment[key] = config.values.HYDRO_DOWNLOAD_PROXY;
+			environment[key] = config.values.SETDRAFT_DOWNLOAD_PROXY;
 	}
 	const exclusions = ["127.0.0.1", "localhost", "::1", base.NO_PROXY, base.no_proxy].filter(Boolean).join(",");
 	environment.NO_PROXY = exclusions;
@@ -112,7 +122,7 @@ export function networkEnvironment(config, base = process.env) {
 
 export async function saveDeployment(config) {
 	let source = config.source;
-	for (const key of retiredFields) source = source.replace(new RegExp(`^(?:export\\s+)?${key}\\s*=.*(?:\\n|$)`, "gmu"), "");
+	for (const key of [...retiredFields, ...[...fields, ...retiredFields].map((field) => field.replace(/^SETDRAFT_/u, "HYDRO_"))]) source = source.replace(new RegExp(`^(?:export\\s+)?${key}\\s*=.*(?:\\n|$)`, "gmu"), "");
 	// Replace only known keys, preserving unrelated variables and comments.
 	for (const key of fields) {
 		const value = config.values[key];

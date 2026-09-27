@@ -4,7 +4,7 @@ import { indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { type CSSProperties, useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { codeHighlightStyle, codeLanguageSupport, type EditorLanguage } from "./code-language.ts";
 import { useLocale } from "./i18n.tsx";
 
@@ -16,7 +16,7 @@ interface Props {
 	onChange(value: string): void;
 }
 
-export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16, onChange }: Props) {
+export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props) {
 	const { t } = useLocale();
 	const hintId = useId();
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -31,6 +31,12 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 	useEffect(() => {
 		const parent = containerRef.current;
 		if (!parent) return;
+		const sizeToViewport = () => {
+			const top = Math.max(96, parent.getBoundingClientRect().top);
+			parent.style.setProperty("--editor-height", `${Math.max(200, window.innerHeight - top - 64)}px`);
+		};
+		sizeToViewport();
+		window.addEventListener("resize", sizeToViewport);
 		const state = EditorState.create({
 			doc: initialPropsRef.current.value,
 			extensions: [
@@ -52,6 +58,7 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 		const view = new EditorView({ state, parent });
 		viewRef.current = view;
 		return () => {
+			window.removeEventListener("resize", sizeToViewport);
 			viewRef.current = null;
 			view.destroy();
 		};
@@ -78,11 +85,8 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 		});
 	}, [ariaLabel]);
 
-	const sizing: CSSProperties & { "--editor-min-height": string } = {
-		"--editor-min-height": `${previewLines * 22 + 24}px`,
-	};
 	return (
-		<div className="manual-code-editor" style={sizing}>
+		<div className="manual-code-editor">
 			<div ref={containerRef} />
 			<p className="code-editor-help" id={hintId}>
 				{t("Tab 缩进 · Ctrl+Space 补全 · Esc 后按 Tab 离开编辑器")}

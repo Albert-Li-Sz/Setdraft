@@ -6,7 +6,7 @@
 		"paths": {
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
 			"@earendil-works/pi-ai/compat": ["../ai/dist/compat.d.ts"],
-			"@hydro-problem-make/authoring": ["../hydro-authoring/dist/index.d.ts"]
+			"@setdraft/authoring": ["../hydro-authoring/dist/index.d.ts"]
 		}
 	},
 	"include": ["src/**/*.ts"],

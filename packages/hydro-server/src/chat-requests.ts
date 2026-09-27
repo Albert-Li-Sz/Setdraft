@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { ChatRequest, ChatRequestEvent } from "@hydro-problem-make/contracts";
+import type { ChatRequest, ChatRequestEvent } from "@setdraft/contracts";
 
 import type { ChatImageUpload, ChatService } from "./chat.ts";
 import { ChatError } from "./chat.ts";
 import type { ExecutionScheduler } from "./execution-scheduler.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
-export type { ChatRequest, ChatRequestEvent } from "@hydro-problem-make/contracts";
+export type { ChatRequest, ChatRequestEvent } from "@setdraft/contracts";
 
 interface StoredImage {
 	name: string;
@@ -81,7 +81,7 @@ export class ChatRequestQueue {
 			.all() as Array<{ id: string; chat_id: string; state: "queued" | "running"; owner_pid: number | null }>;
 		for (const request of active) {
 			let alive = false;
-			if (request.owner_pid) {
+			if (request.owner_pid && process.env.SETDRAFT_CONTAINER_LOCKED !== "1") {
 				try {
 					process.kill(request.owner_pid, 0);
 					alive = true;

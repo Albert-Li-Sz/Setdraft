@@ -1,5 +1,5 @@
 {
-	"name": "@hydro-problem-make/authoring",
+	"name": "@setdraft/authoring",
 	"version": "0.1.0",
 	"description": "Deterministic Hydro problem validation and package generation",
 	"private": true,

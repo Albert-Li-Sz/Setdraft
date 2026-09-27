@@ -1,4 +1,4 @@
-import { type ProjectSnapshot, readProjectSnapshot } from "@hydro-problem-make/contracts";
+import { type ProjectSnapshot, readProjectSnapshot } from "@setdraft/contracts";
 import { RevisionConflict } from "./api-client.ts";
 import { editableProject } from "./problem.ts";
 

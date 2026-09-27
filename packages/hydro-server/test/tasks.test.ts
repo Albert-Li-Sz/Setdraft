@@ -36,6 +36,7 @@ describe("persistent task queue", () => {
 		initial.close();
 		const submitted = await initial.submit("finalize", project.id, undefined, "初版");
 		expect(initial.get(submitted.id).releaseName).toBe("初版");
+		expect(initial.get(submitted.id).resourceTitle).toBe(project.title);
 		await initial.cancel(submitted.id);
 		const next = new TaskQueue(projects, new ContestStore(projects));
 		queues.push(next);
@@ -43,6 +44,30 @@ describe("persistent task queue", () => {
 		const retried = await next.retry(submitted.id);
 		expect(next.get(retried.id).releaseName).toBe("初版");
 		projects.database.db.close();
+	});
+	it("recovers a container's stale PID and keeps every task run in its problem group", async () => {
+		const projects = new ManualProjectStore({ root });
+		const project = await projects.create("acm");
+		const now = new Date().toISOString();
+		const insert = projects.database.db.prepare(
+			"INSERT INTO tasks (id,kind,resource,state,fingerprint,created_at,updated_at,owner_pid) VALUES (?,?,?,?,?,?,?,?)",
+		);
+		for (let index = 0; index < 101; index++)
+			insert.run(randomUUID(), "finalize", `project:${project.id}`, "succeeded", "hash", now, now, null);
+		const runningId = randomUUID();
+		insert.run(runningId, "generate", `project:${project.id}`, "running", "hash", now, now, process.pid);
+		vi.stubEnv("SETDRAFT_CONTAINER_LOCKED", "1");
+		try {
+			const queue = new TaskQueue(projects, new ContestStore(projects));
+			queues.push(queue);
+			queue.close();
+			expect(queue.get(runningId).state).toBe("interrupted");
+			expect(queue.list()).toHaveLength(102);
+			expect(queue.list().every((task) => task.resourceTitle === project.title)).toBe(true);
+		} finally {
+			vi.unstubAllEnvs();
+			projects.database.db.close();
+		}
 	});
 	it("rolls back a terminal state if its event cannot be persisted", async () => {
 		const projects = new ManualProjectStore({ root });

@@ -1,6 +1,7 @@
-import type { AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthUser } from "@setdraft/contracts";
 import { useRef, useState } from "react";
 import { authClient } from "./auth-client.ts";
+import { transferFiles } from "./file-transfer.ts";
 import { type Locale, useLocale } from "./i18n.tsx";
 import { PasswordSettings } from "./PasswordSettings.tsx";
 import { UserAvatar } from "./UserAvatar.tsx";
@@ -48,8 +49,16 @@ export function SettingsPage({ user }: { user: AuthUser }) {
 					if (busy || processing) return;
 					setBusy(true);
 					setMessage("");
-					void authClient
-						.updateProfile({ locale: language, avatar: avatar ?? null })
+					const input = { locale: language, avatar: avatar ?? null };
+					const save =
+						avatar !== user.avatar && avatar
+							? transferFiles(t("头像"), (report) =>
+									authClient.updateProfile(input, (loaded, total) =>
+										report({ phase: total && loaded >= total ? "saving" : "uploading", loaded, total }),
+									),
+								)
+							: authClient.updateProfile(input);
+					void save
 						.then(() => {
 							setMessage("个人设置已保存。");
 							setFailed(false);
@@ -103,7 +112,7 @@ export function SettingsPage({ user }: { user: AuthUser }) {
 							if (!file) return;
 							setProcessing(true);
 							setMessage("");
-							void avatarFromFile(file)
+							void transferFiles(file.name, () => avatarFromFile(file))
 								.then(setAvatar)
 								.catch((cause: unknown) => {
 									setMessage(cause instanceof Error ? cause.message : "无法处理头像图片。");

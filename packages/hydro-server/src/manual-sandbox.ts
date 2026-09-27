@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CppLanguage, ManualCheck, ManualProgram, ManualSandboxReport } from "@hydro-problem-make/contracts";
+import type { CppLanguage, ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
 import type { ExecutionContext } from "./execution-context.ts";
 
 export interface SandboxCase {
@@ -271,8 +271,8 @@ export type {
 	ManualProgram,
 	ManualSandboxReport,
 	ProgramLanguage,
-} from "@hydro-problem-make/contracts";
-export { cppLanguages } from "@hydro-problem-make/contracts";
+} from "@setdraft/contracts";
+export { cppLanguages } from "@setdraft/contracts";
 
 function runDocker(
 	args: string[],
@@ -287,7 +287,7 @@ function runDocker(
 		const errors: Buffer[] = [];
 		const stopContainer = () => {
 			if (taskId) {
-				const cleaner = spawn("docker", ["rm", "-f", `hydro-task-${taskId}`], { stdio: "ignore" });
+				const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${taskId}`], { stdio: "ignore" });
 				cleaner.on("error", () => {});
 			}
 			child.kill("SIGKILL");
@@ -375,7 +375,7 @@ export async function runManualSandbox(input: SandboxInput): Promise<ManualSandb
 		[
 			"run",
 			"--rm",
-			...(context ? ["--name", `hydro-task-${context.id}`] : []),
+			...(context ? ["--name", `setdraft-task-${context.id}`] : []),
 			"--network",
 			"none",
 			"--cpus",

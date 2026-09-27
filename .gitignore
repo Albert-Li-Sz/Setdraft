@@ -26,4 +26,9 @@ packages/ai/src/providers/.model-generation-*/
 # Generated output
 coverage/
 .nyc_output/
+.setdraft/
+
+# Legacy workspace, retained only for migration
 .hydro-problem-make/
+
+.env.compose
