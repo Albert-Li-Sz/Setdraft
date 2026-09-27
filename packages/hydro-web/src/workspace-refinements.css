@@ -139,6 +139,14 @@
 	display: grid;
 	gap: 20px;
 }
+.task-queue-status {
+	display: grid;
+	gap: 4px;
+	margin-top: 6px;
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 400;
+}
 .task-group {
 	padding: 8px;
 }

@@ -239,6 +239,14 @@ export interface TaskRecord {
 	result?: unknown;
 	error?: string;
 	ownerPid?: number;
+	queue?: {
+		/** Position within this user's FIFO queue, not a global ETA. */
+		position: number;
+		running: number;
+		concurrency: number;
+		reason: "user" | "maintenance" | "capacity" | "dispatch";
+		expiresAt: string;
+	};
 }
 
 export interface TaskEvent {

@@ -8,6 +8,7 @@ import { ContestStore } from "./contests.ts";
 import { ExecutionScheduler } from "./execution-scheduler.ts";
 import { AuthError, type IdentityStore } from "./identity.ts";
 import { ManualProjectStore } from "./manual-projects.ts";
+import { sandboxPolicy } from "./sandbox-policy.ts";
 import { TaskQueue } from "./tasks.ts";
 import { WebSearch } from "./web-search.ts";
 import { WorkspaceDatabase } from "./workspace-db.ts";
@@ -27,7 +28,8 @@ export class WorkspaceRegistry {
 	private readonly projectTemplate: ManualProjectStore;
 	private readonly chatTemplate: ChatService;
 	private readonly workspaces = new Map<string, UserWorkspace>();
-	private readonly sandbox = new ExecutionScheduler(2);
+	private readonly policy = sandboxPolicy();
+	private readonly sandbox = new ExecutionScheduler(this.policy.concurrency, this.policy);
 	private readonly ai = new ExecutionScheduler(4);
 	private readonly probes = new Map<AbortController, { userId: string; done: Promise<unknown> }>();
 	constructor(identity: IdentityStore, projects: ManualProjectStore, chat: ChatService) {
@@ -83,7 +85,12 @@ export class WorkspaceRegistry {
 			projects,
 			chat,
 			contests,
-			tasks: new TaskQueue(projects, contests, { scheduler: this.sandbox, userId: user.id, enabled }),
+			tasks: new TaskQueue(projects, contests, {
+				scheduler: this.sandbox,
+				userId: user.id,
+				enabled,
+				policy: this.policy,
+			}),
 			chatRequests: new ChatRequestQueue(database, chat, { scheduler: this.ai, userId: user.id, enabled }),
 		};
 		this.workspaces.set(user.id, workspace);

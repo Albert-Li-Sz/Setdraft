@@ -56,3 +56,18 @@ test("cleared modern options cannot be restored by legacy process variables", as
   }
  } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("sandbox scheduling options survive Compose generation and environment loading", async () => {
+ const root = await mkdtemp(join(tmpdir(), "setdraft-scheduling-config-"));
+ try {
+  const limits = {
+   SETDRAFT_SANDBOX_CONCURRENCY: "1", SETDRAFT_SANDBOX_MAX_OUTSTANDING: "12", SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER: "3",
+   SETDRAFT_SANDBOX_QUEUE_TIMEOUT_MS: "60000", SETDRAFT_SANDBOX_RUN_TIMEOUT_MS: "120000", SETDRAFT_SANDBOX_BUILD_TIMEOUT_MS: "180000",
+  };
+  await composeConfiguration(root, [], limits);
+  const compose = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  const native = deploymentEnvironment(await loadDeployment(root, {}), {});
+  for (const [key,value] of Object.entries(limits)) { assert.equal(compose[key], value); assert.equal(native[key], value); }
+  await assert.rejects(loadDeployment(root, {SETDRAFT_SANDBOX_CONCURRENCY: "0"}), /正整数/u);
+ } finally { await rm(root, { recursive: true, force: true }); }
+});

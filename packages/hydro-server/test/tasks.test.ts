@@ -100,8 +100,11 @@ describe("persistent task queue", () => {
 	it("limits global concurrency to two and rejects another task for the same project", async () => {
 		const projects = new ManualProjectStore({ root });
 		const resolvers = new Map<string, () => void>();
-		vi.spyOn(projects.pipeline, "generate").mockImplementation(async (id) => {
-			await new Promise<void>((resolveWork) => resolvers.set(id, resolveWork));
+		vi.spyOn(projects.pipeline, "generate").mockImplementation(async (id, context) => {
+			await new Promise<void>((resolveWork) => {
+				resolvers.set(id, resolveWork);
+				context?.signal.addEventListener("abort", () => resolveWork(), { once: true });
+			});
 			return {
 				project: await projects.get(id),
 				report: {
@@ -128,10 +131,13 @@ describe("persistent task queue", () => {
 		expect((await queue.get(third.id)).state).toBe("queued");
 		const competing = queue;
 		await expect(competing.submit("finalize", ids[0].id)).rejects.toThrow("已有排队或运行中的任务");
+		await vi.waitFor(() => expect(resolvers.has(ids[0].id)).toBe(true));
 		resolvers.get(ids[0].id)?.();
 		await waitFor(queue, first.id, "succeeded");
 		await waitFor(queue, third.id, "running");
+		await vi.waitFor(() => expect(resolvers.has(ids[1].id)).toBe(true));
 		resolvers.get(ids[1].id)?.();
+		await vi.waitFor(() => expect(resolvers.has(ids[2].id)).toBe(true));
 		resolvers.get(ids[2].id)?.();
 		await waitFor(queue, second.id, "succeeded");
 		await waitFor(queue, third.id, "succeeded");
@@ -161,8 +167,11 @@ describe("persistent task queue", () => {
 	it("resumes two queued tasks after a service restart", async () => {
 		const projects = new ManualProjectStore({ root });
 		const resolvers = new Map<string, () => void>();
-		vi.spyOn(projects.pipeline, "generate").mockImplementation(async (id) => {
-			await new Promise<void>((resolveWork) => resolvers.set(id, resolveWork));
+		vi.spyOn(projects.pipeline, "generate").mockImplementation(async (id, context) => {
+			await new Promise<void>((resolveWork) => {
+				resolvers.set(id, resolveWork);
+				context?.signal.addEventListener("abort", () => resolveWork(), { once: true });
+			});
 			return {
 				project: await projects.get(id),
 				report: {
@@ -189,9 +198,12 @@ describe("persistent task queue", () => {
 		await waitFor(recovered, queued[0].id, "running");
 		await waitFor(recovered, queued[1].id, "running");
 		expect((await recovered.get(queued[2].id)).state).toBe("queued");
+		await vi.waitFor(() => expect(resolvers.has(ids[0].id)).toBe(true));
 		resolvers.get(ids[0].id)?.();
+		await vi.waitFor(() => expect(resolvers.has(ids[1].id)).toBe(true));
 		resolvers.get(ids[1].id)?.();
 		await waitFor(recovered, queued[2].id, "running");
+		await vi.waitFor(() => expect(resolvers.has(ids[2].id)).toBe(true));
 		resolvers.get(ids[2].id)?.();
 		for (const task of queued) await waitFor(recovered, task.id, "succeeded");
 		recovered.close();

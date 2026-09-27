@@ -46,6 +46,35 @@ function TaskState({ state }: { state: BackgroundTask["state"] }) {
 	);
 }
 
+function QueueStatus({ task, detail = false }: { task: BackgroundTask; detail?: boolean }) {
+	const { t, locale } = useLocale();
+	if (task.state !== "queued" || !task.queue) return null;
+	const queue = task.queue;
+	const reasons = {
+		user: "等待本账号前序任务",
+		maintenance: "等待沙箱维护窗口",
+		capacity: "等待空闲执行名额",
+		dispatch: "正在分配执行环境",
+	};
+	return (
+		<span className="task-queue-status">
+			<span>
+				{t("个人队列第 {0} 项", queue.position)} · {t(reasons[queue.reason])}
+			</span>
+			{detail && (
+				<span>
+					{t(
+						"全站运行 {0} / {1} · 排队截止 {2}",
+						queue.running,
+						queue.concurrency,
+						new Date(queue.expiresAt).toLocaleTimeString(locale),
+					)}
+				</span>
+			)}
+		</span>
+	);
+}
+
 export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: boolean }) {
 	const { t, locale } = useLocale();
 	const [tasks, setTasks] = useState<BackgroundTask[]>([]);
@@ -114,13 +143,15 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 		if (!selected) return;
 		setBusy(true);
 		try {
-			const body = await requestJson<{ task: BackgroundTask }>(apiUrl(apiOrigin, `/tasks/${selected}/${kind}`), {
-				method: "POST",
-			});
-			if (body.task) {
-				setTasks((current) => [body.task, ...current.filter((item) => item.id !== body.task.id)]);
-				setSelected(body.task.id);
-			}
+			const body = await requestJson<BackgroundTask | { task: BackgroundTask }>(
+				apiUrl(apiOrigin, `/tasks/${selected}/${kind}`),
+				{
+					method: "POST",
+				},
+			);
+			const updated = "task" in body ? body.task : body;
+			setTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+			setSelected(updated.id);
 			setError("");
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : "操作失败。");
@@ -169,6 +200,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									<small>
 										{new Date(item.createdAt).toLocaleString(locale)} · {item.id.slice(0, 8)}
 									</small>
+									<QueueStatus task={item} />
 								</span>
 								<TaskState state={item.state} />
 							</button>
@@ -193,6 +225,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 										{task.resourceTitle} · {new Date(task.createdAt).toLocaleString(locale)}
 									</p>
 									<TaskState state={task.state} />
+									<QueueStatus task={task} detail />
 								</div>
 								<div className="heading-actions">
 									<button className="button secondary" type="button" onClick={() => setSelected(undefined)}>
@@ -232,7 +265,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 											<time>{new Date(item.createdAt).toLocaleTimeString(locale)}</time>
 											<span>
 												{details.caseId ? `#${details.caseId} · ` : ""}
-												{item.message}
+												{t(item.message)}
 											</span>
 										</div>
 									);

@@ -274,6 +274,18 @@ export type {
 } from "@setdraft/contracts";
 export { cppLanguages } from "@setdraft/contracts";
 
+export function removeTaskContainer(taskId: string): Promise<void> {
+	return new Promise((done) => {
+		const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${taskId}`], {
+			stdio: "ignore",
+			timeout: 10_000,
+			killSignal: "SIGKILL",
+		});
+		cleaner.once("error", () => done());
+		cleaner.once("close", () => done());
+	});
+}
+
 function runDocker(
 	args: string[],
 	timeoutMs: number,
@@ -285,11 +297,10 @@ function runDocker(
 	return new Promise((resolve, reject) => {
 		const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
 		const errors: Buffer[] = [];
+		let stopping: Promise<void> | undefined;
 		const stopContainer = () => {
-			if (taskId) {
-				const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${taskId}`], { stdio: "ignore" });
-				cleaner.on("error", () => {});
-			}
+			if (stopping) return;
+			stopping = taskId ? removeTaskContainer(taskId) : Promise.resolve();
 			child.kill("SIGKILL");
 		};
 		const timeout = setTimeout(stopContainer, timeoutMs);
@@ -326,11 +337,14 @@ function runDocker(
 			cleanup();
 			reject(error);
 		});
-		child.once("close", (code) => {
+		child.once("close", async (code) => {
 			cleanup();
-			if (code === 0) resolve();
+			// Do not return the scheduler slot while Docker is still removing a cancelled container.
+			await stopping;
+			if (code === 0 && !stopping) resolve();
 			else reject(new Error(Buffer.concat(errors).toString("utf8").slice(0, 4000) || `Docker exited with ${code}.`));
 		});
+		if (signal?.aborted) stopContainer();
 	});
 }
 

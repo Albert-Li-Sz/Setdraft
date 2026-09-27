@@ -8,13 +8,60 @@ interface Ticket {
 	abort(): void;
 }
 
+export class QueueAdmissionError extends Error {
+	readonly statusCode: number;
+	constructor(message: string, statusCode = 429) {
+		super(message);
+		this.statusCode = statusCode;
+	}
+}
+
 /** One process-wide queue; an execution slot is acquired before marking durable work running. */
 export class ExecutionScheduler {
 	private readonly limit: number;
 	private readonly active = new Map<string, { userId: string; exclusive: boolean }>();
 	private readonly waiting: Ticket[] = [];
-	constructor(limit: number) {
+	private readonly turns = new Map<string, number>();
+	private turn = 0;
+	private readonly reservations = new Map<string, { userId: string; exclusive: boolean }>();
+	private readonly capacity?: { maxOutstanding: number; maxOutstandingPerUser: number };
+	constructor(limit: number, capacity?: { maxOutstanding: number; maxOutstandingPerUser: number }) {
+		if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Execution concurrency must be positive.");
 		this.limit = limit;
+		this.capacity = capacity;
+	}
+	/** Reserve admission before the durable insert; recovered work may exceed newly lowered limits. */
+	reserve(userId: string, key: string, exclusive = false, recovered = false): () => void {
+		const id = `${userId}:${key}`;
+		if (this.reservations.has(id)) throw new Error("Task already reserved.");
+		if (!recovered) {
+			if (exclusive && [...this.reservations.values()].some((item) => item.exclusive))
+				throw new QueueAdmissionError("已有沙箱镜像构建任务，请等待其完成。", 409);
+			if (this.capacity && this.reservations.size >= this.capacity.maxOutstanding)
+				throw new QueueAdmissionError("全站任务队列已满，请稍后重试。");
+			if (
+				this.capacity &&
+				[...this.reservations.values()].filter((item) => item.userId === userId).length >=
+					this.capacity.maxOutstandingPerUser
+			)
+				throw new QueueAdmissionError("你的未完成任务已达上限，请等待完成或取消排队任务。");
+		}
+		this.reservations.set(id, { userId, exclusive });
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.reservations.delete(id);
+		};
+	}
+	status(userId: string) {
+		return {
+			concurrency: this.limit,
+			running: this.active.size,
+			outstanding: this.reservations.size,
+			userRunning: [...this.active.values()].some((item) => item.userId === userId),
+			maintenance: [...this.active.values(), ...this.waiting].some((item) => item.exclusive),
+		};
 	}
 	acquire(userId: string, key: string, signal: AbortSignal, exclusive = false): Promise<() => void> {
 		return new Promise((resolve, reject) => {
@@ -36,21 +83,34 @@ export class ExecutionScheduler {
 				reject(signal.reason);
 				return;
 			}
+			if (this.active.has(ticket.key) || this.waiting.some((item) => item.key === ticket.key)) {
+				reject(new Error("Execution already scheduled."));
+				return;
+			}
+			if (!this.turns.has(userId)) this.turns.set(userId, this.turn++);
 			signal.addEventListener("abort", ticket.abort, { once: true });
 			this.waiting.push(ticket);
 			this.pump();
 		});
 	}
 	private pump(): void {
-		for (let index = 0; index < this.waiting.length && this.active.size < this.limit; ) {
-			const ticket = this.waiting[index];
+		while (this.waiting.length && this.active.size < this.limit) {
 			const active = [...this.active.values()];
-			if (active.some((item) => item.exclusive) || (ticket.exclusive && active.length > 0)) return;
-			if (active.some((item) => item.userId === ticket.userId)) {
-				index++;
-				continue;
+			if (active.some((item) => item.exclusive)) return;
+			// A build is a barrier: drain earlier work, then run it alone. Later jobs cannot starve it.
+			const barrier = this.waiting.findIndex((item) => item.exclusive);
+			const candidates = barrier < 0 ? this.waiting : this.waiting.slice(0, barrier || 1);
+			let ticket: Ticket | undefined;
+			for (const candidate of candidates) {
+				if (candidate.exclusive && active.length) continue;
+				if (active.some((item) => item.userId === candidate.userId)) continue;
+				if (!ticket || (this.turns.get(candidate.userId) ?? 0) < (this.turns.get(ticket.userId) ?? 0))
+					ticket = candidate;
 			}
+			if (!ticket) return;
+			const index = this.waiting.indexOf(ticket);
 			this.waiting.splice(index, 1);
+			this.turns.set(ticket.userId, this.turn++);
 			ticket.signal.removeEventListener("abort", ticket.abort);
 			this.active.set(ticket.key, { userId: ticket.userId, exclusive: ticket.exclusive });
 			let released = false;
