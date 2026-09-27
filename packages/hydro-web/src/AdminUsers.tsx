@@ -1,10 +1,13 @@
 import type { AuthUser, UserRole } from "@hydro-problem-make/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
+import { copyText } from "./browser-capabilities.ts";
 import { Dialog } from "./Dialog.tsx";
 import { useLocale } from "./i18n.tsx";
 
 type Pending = { user: AuthUser; action: "reset" | "toggle" | "role"; role?: UserRole };
+type Credentials = { username: string; password: string };
+type TemporaryCredentials = Credentials & { copyStatus: "pending" | "copying" | "copied" | "failed" };
 export function AdminUsers() {
 	const { t } = useLocale();
 	const [users, setUsers] = useState<AuthUser[]>([]);
@@ -12,7 +15,7 @@ export function AdminUsers() {
 	const [role, setRole] = useState<UserRole>("user");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
-	const [temporary, setTemporary] = useState<{ username: string; password: string }>();
+	const [temporary, setTemporary] = useState<TemporaryCredentials>();
 	const [pending, setPending] = useState<Pending>();
 	const refresh = useCallback(async () => {
 		setUsers((await requestJson<{ users: AuthUser[] }>("/api/admin/users")).users);
@@ -20,6 +23,28 @@ export function AdminUsers() {
 	useEffect(() => {
 		void refresh().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "账号读取失败。"));
 	}, [refresh]);
+	const copyCredentials = useCallback(
+		async (credentials: Credentials) => {
+			setTemporary({ ...credentials, copyStatus: "copying" });
+			let copyStatus: TemporaryCredentials["copyStatus"];
+			try {
+				await copyText(`${t("用户名")}: ${credentials.username}\n${t("临时密码")}: ${credentials.password}`);
+				copyStatus = "copied";
+			} catch {
+				copyStatus = "failed";
+			}
+			setTemporary((current) =>
+				current?.username === credentials.username && current.password === credentials.password
+					? { ...current, copyStatus }
+					: current,
+			);
+		},
+		[t],
+	);
+	useEffect(() => {
+		// Wait for the credentials dialog to open before selecting text for HTTP copying.
+		if (temporary?.copyStatus === "pending") void copyCredentials(temporary);
+	}, [temporary, copyCredentials]);
 	const create = async () => {
 		setBusy(true);
 		setError("");
@@ -29,7 +54,7 @@ export function AdminUsers() {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ username, role }),
 			});
-			setTemporary({ username: result.user.username, password: result.temporaryPassword });
+			setTemporary({ username: result.user.username, password: result.temporaryPassword, copyStatus: "pending" });
 			setUsername("");
 			await refresh();
 		} catch (cause) {
@@ -50,7 +75,11 @@ export function AdminUsers() {
 					`/api/admin/users/${selected.user.id}/reset-password`,
 					{ method: "POST" },
 				);
-				setTemporary({ username: selected.user.username, password: result.temporaryPassword });
+				setTemporary({
+					username: selected.user.username,
+					password: result.temporaryPassword,
+					copyStatus: "pending",
+				});
 			} else
 				await requestJson(`/api/admin/users/${selected.user.id}`, {
 					method: "PATCH",
@@ -208,7 +237,24 @@ export function AdminUsers() {
 				<p>{temporary?.username}</p>
 				<p>{t("此密码仅显示一次。请交给对应用户，首次登录时必须修改。")}</p>
 				<code className="temporary-password">{temporary?.password}</code>
+				<output className={`notice ${temporary?.copyStatus === "failed" ? "failed" : ""}`} aria-live="polite">
+					{t(
+						temporary?.copyStatus === "copied"
+							? "用户名与临时密码已复制。"
+							: temporary?.copyStatus === "failed"
+								? "自动复制未完成，请点击下方按钮重试，或手动保存用户名与临时密码。"
+								: "正在复制用户名与临时密码…",
+					)}
+				</output>
 				<div className="confirmation-actions">
+					<button
+						className="button secondary"
+						type="button"
+						disabled={!temporary || temporary.copyStatus === "pending" || temporary.copyStatus === "copying"}
+						onClick={() => temporary && void copyCredentials(temporary)}
+					>
+						{t("复制用户名与密码")}
+					</button>
 					<button className="button primary" type="button" onClick={() => setTemporary(undefined)}>
 						{t("已保存")}
 					</button>

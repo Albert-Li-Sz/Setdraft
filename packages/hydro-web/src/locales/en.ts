@@ -150,6 +150,11 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	确认: "Confirm",
 	"此密码仅显示一次。请交给对应用户，首次登录时必须修改。":
 		"This password is shown once. Give it to the user, who must change it on first sign-in.",
+	"用户名与临时密码已复制。": "Username and temporary password copied.",
+	"自动复制未完成，请点击下方按钮重试，或手动保存用户名与临时密码。":
+		"Could not copy automatically. Try the button below, or save the username and temporary password manually.",
+	"正在复制用户名与临时密码…": "Copying username and temporary password…",
+	复制用户名与密码: "Copy username and password",
 	"管理团队 AI 配置、沙箱与账号。": "Manage team AI, the sandbox, and accounts.",
 	"AI 模型由管理员统一配置。": "AI models are configured by your administrator.",
 	"团队 AI": "Team AI",

@@ -23,7 +23,12 @@ export async function copyText(text: string): Promise<void> {
 	input.readOnly = true;
 	input.tabIndex = -1;
 	input.style.cssText = "position:fixed;left:0;top:0;opacity:0;pointer-events:none";
-	document.body.append(input);
+	// A modal makes the rest of the document inert, so its copy input must stay inside it.
+	const container =
+		(active instanceof HTMLElement ? active.closest("dialog:modal") : null) ??
+		document.querySelector("dialog:modal") ??
+		document.body;
+	container.append(input);
 	try {
 		input.focus({ preventScroll: true });
 		input.select();
