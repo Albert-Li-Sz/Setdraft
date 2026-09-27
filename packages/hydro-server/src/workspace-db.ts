@@ -18,7 +18,14 @@ import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { migrateWorkspaceSchema } from "./workspace-schema.ts";
 
-export type DocumentKind = "project" | "release" | "contest" | "contest-release" | "chat" | "ai-config";
+export type DocumentKind =
+	| "project"
+	| "release"
+	| "contest"
+	| "contest-release"
+	| "chat"
+	| "ai-config"
+	| "task-options";
 
 interface FileRow {
 	name: string;

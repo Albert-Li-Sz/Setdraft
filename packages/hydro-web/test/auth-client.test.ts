@@ -17,6 +17,41 @@ const snapshot = (id = "alice", csrfToken = "csrf-a"): AuthSession => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe("authentication request boundary", () => {
+	it("updates preferences without interrupting business requests and rejects a late result after logout", async () => {
+		const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(snapshot()));
+		vi.stubGlobal("fetch", fetcher);
+		const client = new AuthClient();
+		await client.refresh();
+		let finishBusiness!: (response: Response) => void;
+		fetcher.mockImplementationOnce((_url, options) => {
+			expect(options?.signal?.aborted).toBe(false);
+			return new Promise<Response>((resolve) => {
+				finishBusiness = resolve;
+			});
+		});
+		const business = client.fetch("/api/projects");
+		const profile = snapshot();
+		if (profile.user) profile.user.locale = "en";
+		fetcher.mockResolvedValueOnce(Response.json(profile));
+		await client.updateProfile({ locale: "en" });
+		expect(client.getSnapshot()).toMatchObject({ status: "ready", user: { locale: "en" } });
+		finishBusiness(Response.json({ projects: [] }));
+		await expect(business).resolves.toBeInstanceOf(Response);
+		let finishProfile!: (response: Response) => void;
+		fetcher.mockImplementationOnce(
+			() =>
+				new Promise<Response>((resolve) => {
+					finishProfile = resolve;
+				}),
+		);
+		const pending = client.updateProfile({ locale: "zh-CN" });
+		const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+		fetcher.mockResolvedValueOnce(Response.json({ user: null, setupRequired: false }));
+		await client.logout();
+		finishProfile(Response.json(profile));
+		await rejected;
+		expect(client.getSnapshot().user).toBeNull();
+	});
 	it("attaches CSRF, stops work on 401, retains identity, and resumes after same-account login", async () => {
 		const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(snapshot()));
 		vi.stubGlobal("fetch", fetcher);

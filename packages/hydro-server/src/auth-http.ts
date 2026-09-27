@@ -6,7 +6,7 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 	response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
 	response.end(JSON.stringify(body));
 }
-async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(request: IncomingMessage, maxBytes = 16_384): Promise<Record<string, unknown>> {
 	if (request.headers["content-type"]?.split(";", 1)[0] !== "application/json")
 		throw new AuthError("请求须使用 JSON。", 415);
 	const chunks: Buffer[] = [];
@@ -14,7 +14,7 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 	for await (const chunk of request) {
 		const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 		size += bytes.length;
-		if (size > 16_384) throw new AuthError("请求体过大。", 413);
+		if (size > maxBytes) throw new AuthError("请求体过大。", 413);
 		chunks.push(bytes);
 	}
 	try {
@@ -148,6 +148,14 @@ export class AuthHttp {
 			const session = this.identity.createSession(access.user.id);
 			this.cookie(response, session.token);
 			json(response, 200, this.identity.snapshot(session.access));
+			return true;
+		}
+		if (path === "/api/auth/profile" && request.method === "PUT") {
+			this.require(request);
+			const input = await body(request, 192 * 1024);
+			this.require(request);
+			const user = this.identity.updateProfile(access.user.id, input);
+			json(response, 200, this.identity.snapshot({ ...access, user }));
 			return true;
 		}
 		if (path.startsWith("/api/admin/")) {

@@ -25,7 +25,7 @@ const stateNames: Record<BackgroundTask["state"], string> = {
 	succeeded: "已完成",
 	failed: "失败",
 	cancelled: "已取消",
-	stale: "草稿已变化",
+	stale: "题目已变化",
 	interrupted: "服务中断",
 };
 

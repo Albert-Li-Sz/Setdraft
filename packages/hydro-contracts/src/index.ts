@@ -109,6 +109,7 @@ export interface HistoricHydroVerification {
 }
 
 export interface ManualRelease {
+	name?: string;
 	id: string;
 	scoringMode: "acm" | "oi";
 	projectId: string;
@@ -209,6 +210,7 @@ export type TaskKind = "generate" | "finalize" | "contest-export" | "image-build
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "stale" | "interrupted";
 
 export interface TaskRecord {
+	releaseName?: string;
 	id: string;
 	kind: TaskKind;
 	resource: string;
@@ -430,12 +432,16 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 }
 
 export function readProjectSnapshot(value: unknown): ProjectSnapshot {
-	if (!isProjectSnapshot(value)) throw new Error("服务端返回的草稿格式无效。");
+	if (!isProjectSnapshot(value)) throw new Error("服务端返回的题目格式无效。");
 	return value;
 }
 
 export type UserRole = "admin" | "user";
-export interface AuthUser {
+export interface UserPreferences {
+	locale?: "zh-CN" | "en";
+	avatar?: string;
+}
+export interface AuthUser extends UserPreferences {
 	id: string;
 	username: string;
 	role: UserRole;

@@ -2,7 +2,7 @@ import type { AiConfiguration, CppLanguage } from "@hydro-problem-make/contracts
 
 export * from "@hydro-problem-make/contracts";
 export { apiUrl, requestJson, responseError, waitForTask } from "./api-client.ts";
-export type PageRoute = "workspace" | "chat" | "records" | "contests" | "tasks" | "settings";
+export type PageRoute = "workspace" | "chat" | "records" | "contests" | "tasks" | "settings" | "admin";
 export type ApiStatus = "checking" | "online" | "offline";
 
 export const cppLanguageOptions: ReadonlyArray<{ value: CppLanguage; label: string }> = [
@@ -19,6 +19,7 @@ export function pageFromHash(hash: string): PageRoute {
 	if (hash === "#records") return "records";
 	if (hash === "#contests") return "contests";
 	if (hash === "#tasks") return "tasks";
+	if (hash === "#admin") return "admin";
 	if (hash === "#settings") return "settings";
 	return "workspace";
 }

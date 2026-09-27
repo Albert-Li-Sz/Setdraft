@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "no
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AuthSession, AuthUser, UserRole } from "@hydro-problem-make/contracts";
+import type { AuthSession, AuthUser, UserPreferences, UserRole } from "@hydro-problem-make/contracts";
 
 const day = 86_400_000;
 const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -211,7 +211,38 @@ export class IdentityStore {
 		return row;
 	}
 	getUser(id: string): AuthUser {
-		return publicUser(this.row(id));
+		return { ...publicUser(this.row(id)), ...(this.getSetting(`profile:${id}`) as UserPreferences | undefined) };
+	}
+	updateProfile(id: string, input: Record<string, unknown>): AuthUser {
+		const user = this.getUser(id);
+		if (!user.enabled || user.mustChangePassword) throw new AuthError("请先完成登录。", 403);
+		const profile: UserPreferences = { locale: user.locale, avatar: user.avatar };
+		if (input.locale !== undefined) {
+			if (input.locale !== "zh-CN" && input.locale !== "en") throw new AuthError("语言偏好无效。", 422);
+			profile.locale = input.locale;
+		}
+		if (input.avatar !== undefined) {
+			if (input.avatar === null) profile.avatar = undefined;
+			else {
+				const match =
+					typeof input.avatar === "string"
+						? /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/u.exec(input.avatar)
+						: null;
+				if (!match) throw new AuthError("头像须为 PNG、JPEG 或 WebP 图片。", 422);
+				const bytes = Buffer.from(match[2], "base64");
+				if (bytes.length > 128 * 1024) throw new AuthError("头像不能超过 128 KiB。", 413);
+				const valid =
+					match[1] === "png"
+						? bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
+						: match[1] === "jpeg"
+							? bytes.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))
+							: bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP";
+				if (!valid || bytes.toString("base64") !== match[2]) throw new AuthError("头像图片格式无效。", 422);
+				profile.avatar = input.avatar as string;
+			}
+		}
+		this.setSetting(`profile:${id}`, profile);
+		return this.getUser(id);
 	}
 	listUsers(): AuthUser[] {
 		return (this.db.prepare("SELECT * FROM users ORDER BY created_at,username").all() as unknown as UserRow[]).map(

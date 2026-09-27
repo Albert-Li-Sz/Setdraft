@@ -294,7 +294,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 									<option value="">{t("选择已发布题目…")}</option>
 									{candidates.map((item) => (
 										<option key={item.id} value={item.id}>
-											{item.title} · {item.scoringMode?.toUpperCase()} · v{item.revision}
+											{item.title} · {item.scoringMode?.toUpperCase()} · {item.name || `v${item.revision}`}
 										</option>
 									))}
 								</select>
@@ -340,7 +340,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 													<td>
 														<strong>{item.title}</strong>
 														<code>
-															{item.slug} · v{item.revision}
+															{item.slug} · {item.name || `v${item.revision}`}
 														</code>
 													</td>
 													<td>{item.scoringMode?.toUpperCase() ?? t("旧版")}</td>

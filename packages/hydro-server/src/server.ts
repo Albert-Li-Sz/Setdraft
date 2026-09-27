@@ -9,6 +9,8 @@ import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
 import { streamEvents } from "./event-stream.ts";
 import { AuthError, type IdentityStore } from "./identity.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
+import { copyProject, restoreProject } from "./project-history.ts";
+import { releaseName } from "./releases.ts";
 import { WorkspaceRegistry } from "./workspace-registry.ts";
 
 export interface HydroServerOptions {
@@ -61,10 +63,10 @@ function expectedRevision(request: IncomingMessage): number | undefined {
 	const header = request.headers["x-expected-revision"];
 	if (header === undefined) return undefined;
 	if (typeof header !== "string" || !/^(0|[1-9]\d*)$/u.test(header)) {
-		throw new ManualProjectError("草稿版本无效。", 422);
+		throw new ManualProjectError("题目版本无效。", 422);
 	}
 	const value = Number(header);
-	if (!Number.isSafeInteger(value)) throw new ManualProjectError("草稿版本无效。", 422);
+	if (!Number.isSafeInteger(value)) throw new ManualProjectError("题目版本无效。", 422);
 	return value;
 }
 
@@ -514,6 +516,56 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
+			if (url.pathname === "/api/people" && request.method === "GET") {
+				sendJson(response, 200, {
+					users: options.identity
+						.listUsers()
+						.filter((user) => user.enabled && user.id !== access.user.id)
+						.map(({ id, username }) => ({ id, username })),
+				});
+				return;
+			}
+			const historyRoute = /^\/api\/projects\/([^/]+)\/(copy|releases)(?:\/([^/]+)\/(restore))?$/u.exec(
+				url.pathname,
+			);
+			if (historyRoute) {
+				const [, id, action, releaseId] = historyRoute;
+				await projects.get(id);
+				if (action === "releases" && !releaseId && request.method === "GET") {
+					sendJson(response, 200, {
+						releases: (await projects.releases.listReleases()).filter((release) => release.projectId === id),
+					});
+				} else if (request.method === "POST") {
+					const input = (await readJson(request, 4096)) as {
+						recipientId?: unknown;
+						expectedRevision?: unknown;
+					} | null;
+					if (!input || typeof input !== "object" || Array.isArray(input))
+						throw new ManualProjectError("请求格式无效。", 422);
+					const assertAccess = () => {
+						auth.require(request);
+					};
+					if (action === "copy" && !releaseId) {
+						if (typeof input.recipientId !== "string" || input.recipientId === access.user.id)
+							throw new ManualProjectError("请选择其他用户。", 422);
+						const recipient = options.identity.getUser(input.recipientId);
+						if (!recipient.enabled) throw new ManualProjectError("接收用户不存在。", 404);
+						const target = registry.get(recipient).projects;
+						const copied = await copyProject(projects, id, target, input.expectedRevision, () => {
+							assertAccess();
+							registry.get(recipient);
+						});
+						sendJson(response, 201, { id: copied.id, title: copied.title, username: recipient.username });
+					} else if (action === "releases" && releaseId) {
+						sendJson(
+							response,
+							200,
+							await restoreProject(projects, id, releaseId, input.expectedRevision, assertAccess),
+						);
+					} else throw new ManualProjectError("接口不存在。", 404);
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
 			const projectRoute = /^\/api\/projects\/([^/]+)(?:\/(generate|finalize))?$/u.exec(url.pathname);
 			if (projectRoute) {
 				const id = projectRoute[1];
@@ -531,9 +583,16 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 					response.end();
 				} else if (request.method === "POST" && action === "generate")
 					sendJson(response, 202, { task: await tasks.submit("generate", id) });
-				else if (request.method === "POST" && action === "finalize")
-					sendJson(response, 202, { task: await tasks.submit("finalize", id) });
-				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				else if (request.method === "POST" && action === "finalize") {
+					let name: string | undefined;
+					if (request.headers["content-type"]) {
+						const input = (await readJson(request, 4096)) as { name?: unknown } | null;
+						if (!input || typeof input !== "object" || Array.isArray(input))
+							throw new ManualProjectError("请求格式无效。", 422);
+						if (input.name !== undefined) name = releaseName(input.name);
+					}
+					sendJson(response, 202, { task: await tasks.submit("finalize", id, undefined, name) });
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
 			const exportRoute = /^\/api\/releases\/([^/]+)\/exports\/(domjudge|fps|qduoj)$/u.exec(url.pathname);
@@ -556,6 +615,11 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 				return;
 			}
 			const releaseDeleteRoute = /^\/api\/releases\/([^/]+)$/u.exec(url.pathname);
+			if (releaseDeleteRoute && request.method === "PATCH") {
+				const input = (await readJson(request, 4096)) as { name?: unknown } | null;
+				sendJson(response, 200, await projects.releases.rename(releaseDeleteRoute[1], input?.name));
+				return;
+			}
 			if (releaseDeleteRoute && request.method === "DELETE") {
 				await contests.assertProblemReleasesUnreferenced([releaseDeleteRoute[1]]);
 				await projects.releases.deleteRelease(releaseDeleteRoute[1]);

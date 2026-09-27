@@ -102,8 +102,8 @@ export function AppShell({
 			<Navigation page={page} taskRunning={taskRunning} onNavigate={close} />
 			<div className="sidebar-scroll">
 				{page !== "chat" && (
-					<section className="sidebar-recents" aria-label={t("最近草稿")}>
-						<h2>{t("最近草稿")}</h2>
+					<section className="sidebar-recents" aria-label={t("最近题目")}>
+						<h2>{t("最近题目")}</h2>
 						{recent.length ? (
 							recent.map((project) => (
 								<button
@@ -122,7 +122,7 @@ export function AppShell({
 								</button>
 							))
 						) : (
-							<p className="sidebar-empty">{t("暂无草稿")}</p>
+							<p className="sidebar-empty">{t("暂无题目")}</p>
 						)}
 					</section>
 				)}
@@ -135,8 +135,18 @@ export function AppShell({
 					aria-current={page === "settings" ? "page" : undefined}
 				>
 					<Icon name="settings" />
-					{t("设置")}
+					{t("个人设置")}
 				</a>
+				{user.role === "admin" && (
+					<a
+						className={`sidebar-settings ${page === "admin" ? "active" : ""}`}
+						href="#admin"
+						aria-current={page === "admin" ? "page" : undefined}
+					>
+						<Icon name="layers" />
+						{t("管理员设置")}
+					</a>
+				)}
 				<AccountControls user={user} onLogout={onLogout} />
 			</div>
 		</>

@@ -5,6 +5,7 @@ import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import { ProblemPreview } from "./ProblemPreview.tsx";
+import { ProjectReleases } from "./ProjectReleases.tsx";
 import {
 	apiUrl,
 	type CppLanguage,
@@ -17,9 +18,9 @@ import {
 } from "./platform.ts";
 import { parseTags } from "./problem.ts";
 
-type Tab = "statement" | "data" | "generator" | "programs" | "validation";
+type Tab = "statement" | "data" | "generator" | "programs" | "validation" | "releases";
 type ProgramSection = "reference" | "oracle" | "checker" | "validator";
-type Busy = "upload" | "generate" | "finalize" | undefined;
+type Busy = "upload" | "generate" | "finalize" | "restore" | "copy" | undefined;
 const checkLabels: Record<string, string> = {
 	"compile:oracle": "编译第二标准程序",
 	oracle: "运行第二标准程序",
@@ -46,7 +47,10 @@ interface Props {
 	onDeleteDomjudgePdf(): Promise<void>;
 	onDeleteFile(name: string): Promise<void>;
 	onGenerate(): Promise<void>;
-	onFinalize(): Promise<void>;
+	onFinalize(name: string): Promise<void>;
+	onRestore(release: ManualRelease): Promise<void>;
+	onReleasesChanged(): void;
+	onCopy(): void;
 	onDelete(id: string): Promise<void>;
 }
 
@@ -183,6 +187,8 @@ export function ManualWorkspace(props: Props) {
 	const { project } = props;
 	const [tab, setTab] = useState<Tab>("statement");
 	const [programSection, setProgramSection] = useState<ProgramSection>("reference");
+	const [publishing, setPublishing] = useState(false);
+	const [releaseName, setReleaseName] = useState("");
 	const [pendingDelete, setPendingDelete] = useState(false);
 	const [pendingCheckerPreset, setPendingCheckerPreset] = useState<
 		{ projectId: string; preset: CheckerPreset } | undefined
@@ -271,7 +277,8 @@ export function ManualWorkspace(props: Props) {
 		{ id: "data", label: "测试数据", count: project.cases.length },
 		{ id: "generator", label: "Gen 生成" },
 		{ id: "programs", label: "程序与 SPJ" },
-		{ id: "validation", label: "验证与发布" },
+		{ id: "validation", label: "验证" },
+		{ id: "releases", label: "发布包" },
 	];
 	const set = <K extends keyof ProjectSnapshot>(field: K, value: ProjectSnapshot[K]) =>
 		props.onEdit((current) => ({ ...current, [field]: value }));
@@ -300,6 +307,10 @@ export function ManualWorkspace(props: Props) {
 		setPendingCheckerPreset(undefined);
 	}
 
+	function startPublishing(): void {
+		setReleaseName(`v${project.revision}`);
+		setPublishing(true);
+	}
 	return (
 		<main className="page" id="workspace">
 			<section className="page-heading">
@@ -308,6 +319,14 @@ export function ManualWorkspace(props: Props) {
 					<p>{t("上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。")}</p>
 				</div>
 				<div className="heading-actions">
+					<button
+						className="button secondary"
+						type="button"
+						disabled={!!props.busy || props.deleting}
+						onClick={props.onCopy}
+					>
+						{t("复制给用户")}
+					</button>
 					<button
 						className="button secondary danger-button"
 						type="button"
@@ -320,8 +339,7 @@ export function ManualWorkspace(props: Props) {
 						className="button primary"
 						type="button"
 						onClick={() => {
-							setTab("validation");
-							void props.onFinalize();
+							startPublishing();
 						}}
 						disabled={!!props.busy || props.deleting || !project.reference.code.trim()}
 					>
@@ -343,7 +361,7 @@ export function ManualWorkspace(props: Props) {
 				<span className="notice-dot" />
 				{t(props.notice)} · {t(props.saveStatus)}
 			</output>
-			<div className="manual-layout">
+			<div className="manual-layout" inert={props.busy === "restore" || props.busy === "copy"}>
 				<section className="card workspace-card">
 					<div className="tabs" role="tablist" aria-label={t("制题步骤")}>
 						{tabItems.map((item) => (
@@ -381,6 +399,27 @@ export function ManualWorkspace(props: Props) {
 							</button>
 						))}
 					</div>
+					{tab === "releases" && (
+						<div
+							className="tab-body manual-tab-body"
+							role="tabpanel"
+							id="authoring-panel-releases"
+							aria-labelledby="authoring-tab-releases"
+						>
+							<ProjectReleases
+								apiOrigin={props.apiOrigin}
+								projectId={project.id}
+								key={project.latestReleaseId ?? "empty"}
+								busy={!!props.busy || props.deleting}
+								onRestore={async (release) => {
+									await props.onRestore(release);
+									setCasePreview(undefined);
+									setSelectedCases([]);
+								}}
+								onChanged={props.onReleasesChanged}
+							/>
+						</div>
+					)}
 					{tab === "statement" && (
 						<div
 							className="manual-statement"
@@ -1068,7 +1107,7 @@ export function ManualWorkspace(props: Props) {
 													? t("文本比对 Checker")
 													: project.checkerMode === "custom"
 														? t("自定义 Checker")
-														: t("旧草稿尚未选择 Checker")}
+														: t("旧题目尚未选择 Checker")}
 											</p>
 											{project.checkerMode === "custom" && (
 												<CodeEditor
@@ -1117,7 +1156,7 @@ export function ManualWorkspace(props: Props) {
 								<button
 									className="button primary"
 									type="button"
-									onClick={() => void props.onFinalize()}
+									onClick={startPublishing}
 									disabled={!!props.busy || !project.reference.code.trim()}
 								>
 									{props.busy === "finalize" ? t("验证中…") : t("验证并打包")}
@@ -1135,7 +1174,7 @@ export function ManualWorkspace(props: Props) {
 													? report.success
 														? t("本地完整验证通过")
 														: t("本地验证未通过")
-													: t("历史验证报告 · 当前草稿待验证")}
+													: t("历史验证报告 · 当前题目待验证")}
 										</strong>
 										<span>
 											{t("版本 {0} · {1} 个测试点 · 标程已运行", report.revision ?? "—", report.caseCount)}
@@ -1209,7 +1248,7 @@ export function ManualWorkspace(props: Props) {
 								</div>
 							)}
 							{props.release && !currentRelease && (
-								<p className="manual-muted">{t("当前草稿已修改；上方下载的是此前验证通过的版本。")}</p>
+								<p className="manual-muted">{t("当前题目已修改；上方下载的是此前验证通过的版本。")}</p>
 							)}
 							{props.release?.liveVerification && (
 								<div
@@ -1354,7 +1393,7 @@ export function ManualWorkspace(props: Props) {
 					<section className="card manual-side-card">
 						<h2>{t("运行状态")}</h2>
 						<p>{props.sandbox?.message ? t(props.sandbox.message) : t("正在检测 Linux 沙箱…")}</p>
-						<p>{t("草稿版本：{0}", project.revision)}</p>
+						<p>{t("题目版本：{0}", project.revision)}</p>
 						<p>
 							{t(
 								"测试点：{0}（Gen {1}）",
@@ -1365,12 +1404,46 @@ export function ManualWorkspace(props: Props) {
 					</section>
 				</aside>
 			</div>
+			<Dialog open={publishing} onClose={() => setPublishing(false)} labelledBy="publish-title">
+				<form
+					className="account-form"
+					onSubmit={(event) => {
+						event.preventDefault();
+						setPublishing(false);
+						setTab("validation");
+						void props.onFinalize(releaseName.trim());
+					}}
+				>
+					<div className="confirmation-heading">
+						<h2 id="publish-title">{t("验证并发布")}</h2>
+					</div>
+					<p>{t("完整验证通过后保存发布包，之后可下载或回退到此版本。")}</p>
+					<label>
+						{t("发布包名称")}
+						<input
+							value={releaseName}
+							onChange={(event) => setReleaseName(event.target.value)}
+							required
+							maxLength={80}
+							placeholder={t("例如：初版 / 补充边界数据")}
+						/>
+					</label>
+					<div className="confirmation-actions">
+						<button className="button secondary" type="button" onClick={() => setPublishing(false)}>
+							{t("取消")}
+						</button>
+						<button className="button primary" type="submit" disabled={!!props.busy || !releaseName.trim()}>
+							{t("开始验证")}
+						</button>
+					</div>
+				</form>
+			</Dialog>
 			<Dialog open={pendingDelete} onClose={() => setPendingDelete(false)} labelledBy="delete-current-project-title">
 				<div className="confirmation-heading">
 					<span>{t("删除确认")}</span>
 					<h2 id="delete-current-project-title">{t("删除“{0}”？", project.title || t("未命名题目"))}</h2>
 				</div>
-				<p>{t("这会删除草稿、测试数据与该项目的所有发布包，无法撤销；被竞赛草稿引用时须先移出。")}</p>
+				<p>{t("这会删除题目、测试数据与该项目的所有发布包，无法撤销；被竞赛引用时须先移出。")}</p>
 				<code>{project.id}</code>
 				<div className="confirmation-actions">
 					<button className="button secondary" type="button" onClick={() => setPendingDelete(false)}>

@@ -5,10 +5,11 @@ import type { PageRoute } from "./platform.ts";
 export const pageLabels: Record<PageRoute, string> = {
 	workspace: "制题工作台",
 	chat: "AI 对话",
-	records: "制题记录",
+	records: "题目中心",
 	contests: "竞赛",
 	tasks: "任务",
-	settings: "设置",
+	settings: "个人设置",
+	admin: "管理员设置",
 };
 const navigation = [
 	{ page: "workspace", icon: "grid" },

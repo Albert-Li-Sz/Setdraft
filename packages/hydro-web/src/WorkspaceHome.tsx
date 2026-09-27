@@ -4,6 +4,7 @@ import { type UiMessage, useLocale } from "./i18n.tsx";
 import type { ProjectSnapshot, SandboxStatus } from "./platform.ts";
 
 export function WorkspaceHome({
+	administrator,
 	projects,
 	sandbox,
 	message,
@@ -11,6 +12,7 @@ export function WorkspaceHome({
 	onNew,
 	onOpen,
 }: {
+	administrator?: boolean;
 	projects: ProjectSnapshot[];
 	sandbox?: SandboxStatus;
 	message?: UiMessage;
@@ -52,7 +54,7 @@ export function WorkspaceHome({
 			<div className="home-quick-links">
 				<a href="#records">
 					<Icon name="files" />
-					{t("制题记录")}
+					{t("题目中心")}
 				</a>
 				<a href="#chat">
 					<Icon name="chat" />
@@ -66,7 +68,7 @@ export function WorkspaceHome({
 			<section className="home-projects">
 				<div className="home-section-heading">
 					<h2>
-						{t("最近草稿")}
+						{t("最近题目")}
 						<span>{projects.length}</span>
 					</h2>
 					<label className="home-search">
@@ -74,7 +76,7 @@ export function WorkspaceHome({
 						<input
 							value={query}
 							onChange={(event) => setQuery(event.target.value)}
-							aria-label={t("搜索草稿")}
+							aria-label={t("搜索题目")}
 							placeholder={t("搜索题目")}
 						/>
 					</label>
@@ -117,8 +119,8 @@ export function WorkspaceHome({
 				) : (
 					<div className="home-empty">
 						<Icon name={query.trim() ? "search" : "files"} />
-						<h3>{query.trim() ? t("没有匹配的题目") : t("暂无草稿")}</h3>
-						<p>{query.trim() ? t("试试其他关键词。") : t("新建题目后，草稿将显示在这里。")}</p>
+						<h3>{query.trim() ? t("没有匹配的题目") : t("暂无题目")}</h3>
+						<p>{query.trim() ? t("试试其他关键词。") : t("新建题目后，题目将显示在这里。")}</p>
 					</div>
 				)}
 				{projects.length > 8 && (
@@ -129,7 +131,7 @@ export function WorkspaceHome({
 				)}
 			</section>
 			<footer className="home-status">
-				<a href="#settings">
+				<a href={administrator ? "#admin" : undefined}>
 					<Icon name="terminal" />
 					{sandbox?.available ? t("本地沙箱就绪") : sandbox ? t("沙箱尚未就绪") : t("正在连接工作区")}
 				</a>

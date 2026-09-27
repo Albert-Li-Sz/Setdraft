@@ -230,6 +230,7 @@ export class ProjectPipeline {
 	async finalize(
 		id: string,
 		context?: ExecutionContext,
+		name?: string,
 	): Promise<{ release?: ManualRelease; report: ManualVerificationReport }> {
 		const unlock = this.projects.lock(id, context);
 		let stage: string | undefined;
@@ -449,6 +450,7 @@ export class ProjectPipeline {
 				sourceFiles,
 			);
 			const release: ManualRelease = {
+				name: name ?? `v${project.revision}`,
 				id: releaseId,
 				scoringMode: project.scoringMode,
 				projectId: id,

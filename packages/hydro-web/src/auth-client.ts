@@ -1,4 +1,4 @@
-import type { AuthSession, AuthUser } from "@hydro-problem-make/contracts";
+import type { AuthSession, AuthUser, UserPreferences } from "@hydro-problem-make/contracts";
 
 export interface AuthState {
 	status: "loading" | "ready" | "anonymous" | "locked" | "error";
@@ -48,6 +48,8 @@ export class AuthClient {
 					this.refreshVersion++;
 					this.abort();
 					this.publish({ status: "anonymous", user: null, setupRequired: false });
+				} else if (event.data === "profile") {
+					void this.refresh();
 				} else if (event.data === "changed") {
 					this.lock();
 					void this.refresh();
@@ -114,6 +116,20 @@ export class AuthClient {
 	async changePassword(currentPassword: string, password: string): Promise<void> {
 		this.accept(await this.authRequest("password", "PUT", { currentPassword, password }));
 		this.channel?.postMessage("changed");
+	}
+	async updateProfile(input: Omit<UserPreferences, "avatar"> & { avatar?: string | null }): Promise<void> {
+		const generation = this.generation;
+		const response = await this.fetch("/api/auth/profile", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		const value = (await response.json()) as AuthSession & { message?: string };
+		if (generation !== this.generation) throw new DOMException("Session changed", "AbortError");
+		if (!response.ok) throw new Error(value.message ?? "设置保存失败。");
+		this.refreshVersion++;
+		this.accept(value);
+		this.channel?.postMessage("profile");
 	}
 	async logout(): Promise<void> {
 		const snapshot = await this.authRequest("logout", "POST");

@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { AppShell } from "./AppShell.tsx";
 import { RevisionConflict, requestJson } from "./api-client.ts";
 import { authClient, authFetch } from "./auth-client.ts";
+import { CopyProblemDialog } from "./CopyProblemDialog.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
@@ -29,6 +30,9 @@ const ManualWorkspace = lazy(() =>
 );
 const RecordsPage = lazy(() => import("./RecordsPage.tsx").then((module) => ({ default: module.RecordsPage })));
 const SettingsPage = lazy(() => import("./SettingsPage.tsx").then((module) => ({ default: module.SettingsPage })));
+const AdminSettingsPage = lazy(() =>
+	import("./AdminSettingsPage.tsx").then((module) => ({ default: module.AdminSettingsPage })),
+);
 const TasksPage = lazy(() => import("./TasksPage.tsx").then((module) => ({ default: module.TasksPage })));
 
 export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
@@ -44,13 +48,15 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const [releases, setReleases] = useState<ManualRelease[]>([]);
 	const [release, setRelease] = useState<ManualRelease>();
 	const [report, setReport] = useState<ManualReport>();
-	const [busy, setBusy] = useState<"upload" | "generate" | "finalize">();
+	const [busy, setBusy] = useState<"upload" | "generate" | "finalize" | "restore" | "copy">();
+	const contentOperation = useRef(false);
+	const [copyingProject, setCopyingProject] = useState<ProjectSnapshot>();
 	const [deletingProjectId, setDeletingProjectId] = useState<string>();
 	const [activeTask, setActiveTask] = useState<BackgroundTask>();
 	const [recordsLoading, setRecordsLoading] = useState(false);
 	const [recordsMessage, setRecordsMessage] = useState<UiMessage>("");
 	const [recordsTone, setRecordsTone] = useState<"passed" | "failed">("passed");
-	const [notice, setNotice] = useState<UiMessage>("草稿自动保存在本地服务端。请添加标准程序与测试数据。");
+	const [notice, setNotice] = useState<UiMessage>("题目自动保存在本地服务端。请添加标准程序与测试数据。");
 	const [noticeTone, setNoticeTone] = useState<"pending" | "passed" | "failed">("pending");
 
 	const showNotice = useCallback((message: UiMessage, tone: "pending" | "passed" | "failed" = "pending"): void => {
@@ -64,7 +70,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		status: sessionStatus,
 		conflict: conflictSnapshot,
 	} = useProjectSession(apiOrigin, (error) =>
-		showNotice(error instanceof Error ? error.message : "草稿保存失败。", "failed"),
+		showNotice(error instanceof Error ? error.message : "题目保存失败。", "failed"),
 	);
 	const saveStatus = { saved: "已保存", dirty: "待保存", saving: "正在保存", conflict: "版本冲突", error: "保存失败" }[
 		sessionStatus
@@ -161,7 +167,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				setProjects(list.projects);
 			} catch (error) {
 				if (!controller.signal.aborted)
-					showNotice(error instanceof Error ? error.message : "草稿读取失败。", "failed");
+					showNotice(error instanceof Error ? error.message : "题目读取失败。", "failed");
 			}
 		})();
 		return () => controller.abort();
@@ -171,12 +177,14 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		if (!paused && page === "records") void refreshRecords();
 	}, [page, refreshRecords, paused]);
 	function editProject(change: (current: ProjectSnapshot) => ProjectSnapshot): void {
+		if (contentOperation.current) return;
 		session.edit(change);
 		setReport(undefined);
-		showNotice("草稿已修改，发布前需要重新验证。");
+		showNotice("题目已修改，发布前需要重新验证。");
 	}
 
 	async function newProject(scoringMode: "acm" | "oi"): Promise<void> {
+		if (contentOperation.current) return;
 		selection.current?.abort();
 		const controller = new AbortController();
 		selection.current = controller;
@@ -195,15 +203,16 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			openSession(created);
 			setChoosingScoringMode(false);
 
-			showNotice("已创建空白草稿；旧项目保留在制题记录中。", "passed");
+			showNotice("题目已创建，所有题目都保存在题目中心。", "passed");
 			window.location.hash = "workspace";
 		} catch (error) {
 			if (controller.signal.aborted) return;
-			showNotice(error instanceof Error ? error.message : "创建草稿失败。", "failed");
+			showNotice(error instanceof Error ? error.message : "创建题目失败。", "failed");
 		}
 	}
 
 	async function openProject(id: string): Promise<void> {
+		if (contentOperation.current) return;
 		selection.current?.abort();
 		const controller = new AbortController();
 		selection.current = controller;
@@ -218,6 +227,12 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			controller.signal.throwIfAborted();
 			const latest = projectRef.current;
 			openSession(latest?.id === id && latest.revision > selected.revision ? latest : selected);
+			const history = await requestJson<{ releases: ManualRelease[] }>(
+				apiUrl(apiOrigin, `/projects/${id}/releases`),
+				{ signal: controller.signal },
+			);
+			controller.signal.throwIfAborted();
+			setRelease(history.releases.find((item) => item.id === selected.latestReleaseId));
 
 			showNotice(uiMessage("已打开“{0}”。", selected.title || uiMessage("未命名题目")), "passed");
 			window.location.hash = "workspace";
@@ -255,17 +270,73 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		}
 	}
 
-	async function deleteRelease(id: string): Promise<void> {
+	async function restoreRelease(selected: ManualRelease): Promise<void> {
+		const current = projectRef.current;
+		const signal = session.signal;
+		if (!current || current.id !== selected.projectId || contentOperation.current)
+			throw new Error("请重新打开题目后重试。");
+		contentOperation.current = true;
+		setBusy("restore");
 		try {
-			const response = await authFetch(apiUrl(apiOrigin, `/releases/${id}`), { method: "DELETE" });
-			if (!response.ok) throw new Error(responseError(await response.json()));
-			if (release?.id === id) setRelease(undefined);
-			await refreshRecords();
-			setRecordsMessage("发布包已删除；草稿仍保留。");
-			setRecordsTone("passed");
+			await saveNow();
+			signal.throwIfAborted();
+			const restored = await requestJson<ProjectSnapshot>(
+				apiUrl(apiOrigin, `/projects/${current.id}/releases/${selected.id}/restore`),
+				{
+					method: "POST",
+					signal,
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ expectedRevision: projectRef.current?.revision }),
+				},
+			);
+			signal.throwIfAborted();
+			openSession(restored);
+			showNotice(uiMessage("已回退到“{0}”。发布前请重新验证。", selected.name || `v${selected.revision}`), "passed");
+		} finally {
+			contentOperation.current = false;
+			setBusy(undefined);
+		}
+	}
+
+	async function copyToUser(recipientId: string): Promise<void> {
+		if (!copyingProject || contentOperation.current) throw new Error("请重新打开题目后重试。");
+		contentOperation.current = true;
+		setBusy("copy");
+		const signal = session.signal;
+		try {
+			if (projectRef.current?.id === copyingProject.id) await saveNow();
+			signal.throwIfAborted();
+			const current = projectRef.current?.id === copyingProject.id ? projectRef.current : copyingProject;
+			await requestJson(apiUrl(apiOrigin, `/projects/${copyingProject.id}/copy`), {
+				method: "POST",
+				signal,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ recipientId, expectedRevision: current.revision }),
+			});
+			signal.throwIfAborted();
+		} finally {
+			contentOperation.current = false;
+			setBusy(undefined);
+		}
+	}
+
+	async function releaseChanged(): Promise<void> {
+		const current = projectRef.current;
+		const signal = session.signal;
+		await refreshRecords();
+		if (!current || signal.aborted) return;
+		try {
+			const [snapshot, history] = await Promise.all([
+				requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${current.id}`), { signal }),
+				requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, `/projects/${current.id}/releases`), {
+					signal,
+				}),
+			]);
+			signal.throwIfAborted();
+			setCurrentProject(snapshot);
+			setRelease(history.releases.find((item) => item.id === snapshot.latestReleaseId));
 		} catch (error) {
-			setRecordsMessage(error instanceof Error ? error.message : "删除发布包失败。");
-			setRecordsTone("failed");
+			if (!signal.aborted) showNotice(error instanceof Error ? error.message : "发布包读取失败。", "failed");
 		}
 	}
 
@@ -315,7 +386,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	}): Promise<void> {
 		const current = projectRef.current;
 		const signal = session.signal;
-		if (!current) throw new Error("请先创建题目草稿。");
+		if (!current) throw new Error("请先创建题目。");
 		setBusy("upload");
 		try {
 			await saveNow();
@@ -540,7 +611,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		}
 	}
 
-	async function finalize(): Promise<void> {
+	async function finalize(name: string): Promise<void> {
 		const current = projectRef.current;
 		const signal = session.signal;
 		if (!current) return;
@@ -551,7 +622,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			signal.throwIfAborted();
 			const accepted = await requestJson<{ task: BackgroundTask }>(
 				apiUrl(apiOrigin, `/projects/${current.id}/finalize`),
-				{ method: "POST", signal },
+				{ method: "POST", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) },
 			);
 			signal.throwIfAborted();
 			setActiveTask(accepted.task);
@@ -566,7 +637,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			signal.throwIfAborted();
 			if (projectRef.current?.id !== current.id) return;
 			setReport(result.report);
-			if (result.release) setRelease(result.release);
+			if (result.release) {
+				setRelease(result.release);
+				setReleases((items) => [result.release!, ...items]);
+			}
 			const refreshed = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${current.id}`), { signal });
 			signal.throwIfAborted();
 			setCurrentProject(refreshed);
@@ -622,10 +696,14 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								onDeleteFile={deleteFile}
 								onGenerate={generate}
 								onFinalize={finalize}
+								onRestore={restoreRelease}
+								onReleasesChanged={() => void releaseChanged()}
+								onCopy={() => setCopyingProject(project)}
 								onDelete={deleteProject}
 							/>
 						) : (
 							<WorkspaceHome
+								administrator={user.role === "admin"}
 								projects={projects}
 								sandbox={sandbox}
 								message={recordsMessage || undefined}
@@ -639,12 +717,13 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 							paused={paused}
 							apiOrigin={apiOrigin}
 							configured={aiConfigured}
+							administrator={user.role === "admin"}
 							projectSnapshot={project ? projectContextSnapshot(project) : undefined}
 						/>
 					)}
 					{page === "records" && (
 						<RecordsPage
-							apiOrigin={apiOrigin}
+							busy={!!busy || !!deletingProjectId}
 							projects={projects}
 							releases={releases}
 							loading={recordsLoading}
@@ -653,19 +732,25 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 							onRefresh={refreshRecords}
 							onOpen={openProject}
 							onDelete={deleteProject}
-							onDeleteRelease={deleteRelease}
+							onCopy={setCopyingProject}
 						/>
 					)}
 					{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
 					{page === "tasks" && <TasksPage apiOrigin={apiOrigin} paused={paused} />}
-					{page === "settings" && (
-						<SettingsPage
+					{page === "settings" && <SettingsPage user={user} />}
+					{page === "admin" && user.role === "admin" && (
+						<AdminSettingsPage
 							user={user}
 							apiOrigin={apiOrigin}
 							sandbox={sandbox}
 							onRefreshSandbox={() => void checkApiConnection()}
 							onAiConfigurationChanged={() => void checkApiConnection()}
 						/>
+					)}
+					{page === "admin" && user.role !== "admin" && (
+						<main className="page">
+							<p>{t("仅管理员可以访问此页面。")}</p>
+						</main>
 					)}
 				</Suspense>
 			</AppShell>
@@ -705,6 +790,15 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 					</button>
 				</div>
 			</Dialog>
+			{copyingProject && (
+				<CopyProblemDialog
+					key={copyingProject.id}
+					apiOrigin={apiOrigin}
+					title={copyingProject.title}
+					onClose={() => setCopyingProject(undefined)}
+					onCopy={copyToUser}
+				/>
+			)}
 			{conflictSnapshot && (
 				<div className="confirmation-backdrop" role="presentation">
 					<div
@@ -715,7 +809,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 					>
 						<div className="confirmation-heading">
 							<span>{t("版本冲突")}</span>
-							<h2 id="conflict-title">{t("草稿已在其他窗口更新")}</h2>
+							<h2 id="conflict-title">{t("题目已在其他窗口更新")}</h2>
 						</div>
 						<p>
 							{t(

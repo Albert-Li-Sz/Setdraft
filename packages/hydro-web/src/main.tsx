@@ -6,6 +6,7 @@ import { LocaleProvider } from "./i18n.tsx";
 import "./styles.css";
 import "./shell.css";
 import "./auth.css";
+import "./problem-center.css";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("Missing #root element.");

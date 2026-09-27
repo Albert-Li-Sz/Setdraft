@@ -3,12 +3,12 @@
 算法竞赛制题工作台 · Competitive Programming Workspace
 
 Setdraft（题序）是支持个人工作区的小团队自部署制题工作台：编辑题面、管理数据、在 GCC 16 沙箱中验证，
-并下载 Hydro 题目包或 DOMjudge / Hydro 竞赛包。AI 对话独立于制题草稿。
+并下载 Hydro 题目包或 DOMjudge / Hydro 竞赛包。AI 对话独立于题目编辑。
 Web 界面采用黑白配色、可收起侧栏与简洁工具栏，右上角支持中英文切换；窄屏自动切换为抽屉导航。
 
 ## 安装
 
-环境要求：Node.js 22.19+、npm。Docker 用于生成、验证和打包；Docker 未启动时仍可安装并编辑草稿。
+环境要求：Node.js 22.19+、npm。Docker 用于生成、验证和打包；Docker 未启动时仍可安装并编辑题目。
 
 ```bash
 git clone https://github.com/Albert-Li-Sz/setdraft.git
@@ -20,7 +20,7 @@ cd setdraft
 仓库内包含已校验的模型数据快照；数据缺失或损坏时，安装脚本会尝试重新生成。
 安装和升级脚本默认使用 `https://registry.npmmirror.com`；设置 `HYDRO_NPM_REGISTRY` 可覆盖 npm 镜像地址。
 需要 Vite 热更新时使用 `./install.sh --mode dev`，网页在 `http://127.0.0.1:5173/`。
-Docker 不可用时会告警；启动 Docker 后管理员可在设置页检测并构建镜像。
+Docker 不可用时会告警；启动 Docker 后管理员可在管理员设置页检测并构建镜像。
 首次启动在终端显示一次性安装码（24 小时有效）；打开网页，输入安装码并设置首位管理员的用户名与密码。
 升级前的所有内容会固定归属首位管理员，原资源 ID 和下载地址保持不变。
 
@@ -28,7 +28,7 @@ Docker 不可用时会告警；启动 Docker 后管理员可在设置页检测�
 ./upgrade.sh                 # 检查干净的 main 分支后快进更新并重启
 ./upgrade.sh --mode dev      # 可切换模式；不指定则沿用上次模式
 ./uninstall.sh               # 停止服务并删除沙箱镜像，保留数据
-./uninstall.sh --purge-data  # 同时删除草稿、发布包、聊天和 AI 配置
+./uninstall.sh --purge-data  # 同时删除题目、发布包、聊天和 AI 配置
 node scripts/hydro-local.mjs status
 node scripts/hydro-local.mjs doctor
 node scripts/hydro-local.mjs backup ./my-backup
@@ -41,13 +41,15 @@ Windows PowerShell 使用 `./install.ps1`、`./upgrade.ps1` 和 `./uninstall.ps1
 `HYDRO_WORKSPACE_ROOT` 指定其他目录。
 
 Setdraft 沿用原有的 `HYDRO_*` 环境变量、数据目录和内部包名，现有安装可直接升级，
-草稿、聊天记录和语言偏好会继续保留。
+题目、聊天记录和语言偏好会继续保留。
 
 ## 登录与账号
 
-所有业务功能都需要登录。管理员在“设置 → 用户管理”创建账号、启停账号、调整角色或重置密码。
+所有业务功能都需要登录。管理员在“管理员设置 → 用户管理”创建账号、启停账号、调整角色或重置密码。
 创建或重置时临时密码只显示一次，用户登录后必须改密。用户名为 3–32 位字母、数字、点、下划线或短横线，
 忽略大小写；密码为 15–128 个字符。系统始终保留至少一名启用的管理员。
+“个人设置”保存账号语言偏好，登录后自动应用，并支持上传、预览和移除头像（PNG / JPEG / WebP，最大 5 MiB，居中裁剪）。
+团队 AI、沙箱和用户管理集中在独立的“管理员设置”，普通成员无此入口。
 侧栏底部提供修改密码和退出；账号内容彼此独立，管理员也没有跨账号浏览内容的入口。
 
 登录过期会锁定工作台并暂停保存、轮询和订阅；使用同一账号重新登录可恢复当前页面未保存的编辑。
@@ -83,8 +85,16 @@ node scripts/hydro-local.mjs start --mode production
    缺少输出时由标准程序生成，生成数据会排在手动数据之后。
 3. 编写标准程序；可选第二标准程序、testlib Validator 和 C++ testlib Checker。默认
    Checker 是文本比较，支持 C++11/14/17/20/23/26。
-4. 点击“验证并打包”。后台任务记录阶段、测试点和日志；离开页面仍可在“任务”查看、
+4. 点击“验证并打包”，为发布包命名。后台任务记录阶段、测试点和日志；离开页面仍可在“任务”查看、
    取消或重试。完整验证和 Hydro 目录检查通过后，才生成 Hydro ZIP 和制题工程 ZIP。
+
+题目持续自动保存，不需要先发布才能保留。题目中心支持按标题、标识和标签搜索。
+每道题的“发布包”页签集中管理已验证版本：可重命名、下载、导出和回退。回退会恢复所选包的题面、代码、
+附件、PDF、手动及生成测试数据，覆盖当前未发布修改；保留题目 ID 和所有发布历史，增加题目版本号。
+发布前仍需重新验证；过期页面、损坏或不完整的源文件会阻止回退。
+
+“复制给用户”将当前题目、代码、附件和测试数据复制到另一位启用用户的题目中心。接收方拥有独立题目 ID，
+不继承历史发布包、报告、聊天或任务；双方后续修改互不影响。接收者不会获得原题目的访问权限。
 
 已通过验证的题目可以组成竞赛草稿。Hydro 竞赛包按题序包含多题；DOMjudge 竞赛包
 只接受 ACM 题，包含 `problems.yaml`、气球颜色和逐题 ZIP，不包含题面。为 DOMjudge
@@ -92,7 +102,7 @@ node scripts/hydro-local.mjs start --mode production
 
 ## AI 对话
 
-管理员在设置页统一提供团队 AI，普通成员只选择和使用模型，API Key 不会返回浏览器。支持三种协议：OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。
+管理员在管理员设置页统一提供团队 AI，普通成员只选择和使用模型，API Key 不会返回浏览器。支持三种协议：OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。
 每套配置可保存模型名、API Key、Base URL、上下文长度和最大输出长度。对话支持 SSE
 流式 Markdown、GFM、LaTeX、图片粘贴和上传；Enter 发送，Shift+Enter 换行。聊天记录
 只保存在本地。图片通过 multipart 上传；模型请求和 SSE 订阅分离，断线可续接且不会重复发送。
@@ -108,15 +118,15 @@ node scripts/hydro-local.mjs start --mode production
 若存在直接启动的服务则拒绝继续。完成后需运行 `node scripts/hydro-local.mjs start` 重启。
 不要只复制单个 SQLite 文件；备份也含团队 AI 密钥，需按敏感数据保管。应用内隔离不是磁盘加密，
 具有服务器文件权限的运维人员仍可访问数据。
-`prune` 只清理超过指定天数、未被竞赛引用且不是草稿最新版的发布包。
+`prune` 只清理超过指定天数、未被竞赛引用且不是题目最新版的发布包。
 
 ## 项目结构
 
 | 目录 | 用途 |
 | --- | --- |
 | `packages/hydro-authoring` | Hydro 题面、目录和 ZIP 的验证与生成 |
-| `packages/hydro-server` | 草稿、Docker 沙箱、发布包、竞赛包和 AI API |
-| `packages/hydro-web` | 制题工作台、题面预览、记录页和 AI 对话 |
+| `packages/hydro-server` | 题目、Docker 沙箱、发布包、竞赛包和 AI API |
+| `packages/hydro-web` | 制题工作台、题面预览、题目中心和 AI 对话 |
 | `packages/ai`、`packages/telemetry` | AI 协议、流式事件和遥测类型 |
 
 代码检查使用 `npm run check`。更多 API 和环境变量见各包 README。

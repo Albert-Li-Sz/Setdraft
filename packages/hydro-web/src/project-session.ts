@@ -86,7 +86,7 @@ export class ProjectSession {
 			...this.state,
 			status: "conflict",
 			conflict: project,
-			error: "草稿版本已变化，请加载服务器版本后继续。",
+			error: "题目版本已变化，请加载服务器版本后继续。",
 		});
 	}
 	dismissConflict(): void {
@@ -136,7 +136,7 @@ export class ProjectSession {
 						const saved = readProjectSnapshot(await this.save(project, signal));
 						if (generation !== this.generation) return;
 						if (saved.id !== project.id || saved.revision <= project.revision)
-							throw new Error("服务端返回的草稿版本无效。");
+							throw new Error("服务端返回的题目版本无效。");
 						if (this.blocked) throw new Error(this.state.error);
 						this.savedVersion = sentVersion;
 						this.accept(saved);
@@ -147,7 +147,7 @@ export class ProjectSession {
 							this.publish({
 								...this.state,
 								status: "error",
-								error: error instanceof Error ? error.message : "草稿保存失败。",
+								error: error instanceof Error ? error.message : "题目保存失败。",
 							});
 						throw error;
 					}

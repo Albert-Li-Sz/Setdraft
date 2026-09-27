@@ -162,7 +162,11 @@ function AuthScreen({ state }: { state: AuthState }) {
 }
 
 export function AuthRoot() {
+	const { setLocale } = useLocale();
 	const state = useSyncExternalStore(authClient.subscribe, authClient.getSnapshot);
+	useEffect(() => {
+		if (state.user?.id) setLocale(state.user?.locale ?? "zh-CN");
+	}, [state.user?.id, state.user?.locale, setLocale]);
 	useEffect(() => {
 		authClient.start();
 	}, []);

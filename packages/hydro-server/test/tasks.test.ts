@@ -28,6 +28,22 @@ async function waitFor(queue: TaskQueue, id: string, state: "running" | "queued"
 }
 
 describe("persistent task queue", () => {
+	it("persists release names across restarts and retries", async () => {
+		const projects = new ManualProjectStore({ root });
+		const project = await projects.create("acm");
+		const initial = new TaskQueue(projects, new ContestStore(projects));
+		queues.push(initial);
+		initial.close();
+		const submitted = await initial.submit("finalize", project.id, undefined, "初版");
+		expect(initial.get(submitted.id).releaseName).toBe("初版");
+		await initial.cancel(submitted.id);
+		const next = new TaskQueue(projects, new ContestStore(projects));
+		queues.push(next);
+		next.close();
+		const retried = await next.retry(submitted.id);
+		expect(next.get(retried.id).releaseName).toBe("初版");
+		projects.database.db.close();
+	});
 	it("rolls back a terminal state if its event cannot be persisted", async () => {
 		const projects = new ManualProjectStore({ root });
 		const queue = new TaskQueue(projects, new ContestStore(projects));

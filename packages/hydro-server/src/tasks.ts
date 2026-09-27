@@ -95,7 +95,7 @@ export class TaskQueue {
 		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 	}
 
-	async submit(kind: TaskKind, resourceId: string, format?: ContestFormat): Promise<TaskRecord> {
+	async submit(kind: TaskKind, resourceId: string, format?: ContestFormat, releaseName?: string): Promise<TaskRecord> {
 		this.assertWritable();
 		if (kind === "contest-export") await this.contests.get(resourceId);
 		else if (kind !== "image-build") await this.projects.get(resourceId);
@@ -106,6 +106,7 @@ export class TaskQueue {
 			resource:
 				kind === "image-build" ? "image" : `${kind === "contest-export" ? "contest" : "project"}:${resourceId}`,
 			format,
+			releaseName,
 			state: "queued",
 			fingerprint: this.fingerprint(kind, resourceId),
 			createdAt: now,
@@ -119,6 +120,7 @@ export class TaskQueue {
 						"INSERT INTO tasks (id,kind,resource,format,state,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
 					)
 					.run(task.id, task.kind, task.resource, task.format ?? null, task.state, task.fingerprint, now, now);
+				if (releaseName) this.database.put("task-options", task.id, { releaseName });
 				this.emit(task.id, "queued", "任务已排队。", { kind, resourceId });
 			});
 		} catch (error) {
@@ -137,6 +139,7 @@ export class TaskQueue {
 		if (!row) throw new ManualProjectError("任务不存在。", 404);
 		return {
 			id: String(row.id),
+			releaseName: this.database.get<{ releaseName: string }>("task-options", id)?.releaseName,
 			kind: row.kind as TaskKind,
 			resource: String(row.resource),
 			format: row.format as ContestFormat | undefined,
@@ -239,7 +242,7 @@ export class TaskQueue {
 		const task = this.get(id);
 		if (!["failed", "cancelled", "stale", "interrupted"].includes(task.state))
 			throw new ManualProjectError("当前任务不可重试。", 409);
-		return this.submit(task.kind, task.resource.split(":").at(-1) ?? "", task.format);
+		return this.submit(task.kind, task.resource.split(":").at(-1) ?? "", task.format, task.releaseName);
 	}
 
 	isRunning(resource: string): boolean {
@@ -307,7 +310,7 @@ export class TaskQueue {
 			return;
 		}
 		if (task.fingerprint !== this.fingerprint(task.kind, resourceId)) {
-			this.finish(task.id, "stale", undefined, "排队期间草稿发生变化，请重试。 ");
+			this.finish(task.id, "stale", undefined, "排队期间内容发生变化，请重试。 ");
 			this.releaseSlot(task.id);
 			queueMicrotask(() => this.pump());
 			return;
@@ -330,7 +333,8 @@ export class TaskQueue {
 			try {
 				let result: unknown;
 				if (task.kind === "generate") result = await this.projects.pipeline.generate(resourceId, context);
-				else if (task.kind === "finalize") result = await this.projects.pipeline.finalize(resourceId, context);
+				else if (task.kind === "finalize")
+					result = await this.projects.pipeline.finalize(resourceId, context, task.releaseName);
 				else if (task.kind === "contest-export")
 					result = await this.contests.export(resourceId, task.format ?? "hydro", context);
 				else result = await this.buildImage(context);

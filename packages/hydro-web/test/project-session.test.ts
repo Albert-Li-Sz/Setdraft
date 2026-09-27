@@ -64,7 +64,7 @@ describe("project editing session", () => {
 		session.dismissConflict();
 		session.edit((project) => ({ ...project, title: "still local" }));
 		await vi.advanceTimersByTimeAsync(2000);
-		await expect(session.flush()).rejects.toThrow("草稿版本已变化");
+		await expect(session.flush()).rejects.toThrow("题目版本已变化");
 		expect(save).toHaveBeenCalledTimes(1);
 		expect(session.getSnapshot()).toMatchObject({
 			status: "conflict",
@@ -110,7 +110,7 @@ describe("project editing session", () => {
 		const session = new ProjectSession(async (project) => project);
 		session.open(projectFixture());
 		session.edit((project) => ({ ...project, title: "local" }));
-		await expect(session.flush()).rejects.toThrow("草稿版本无效");
+		await expect(session.flush()).rejects.toThrow("题目版本无效");
 		expect(session.getSnapshot()).toMatchObject({ status: "error", project: { title: "local", revision: 1 } });
 		session.dispose();
 	});

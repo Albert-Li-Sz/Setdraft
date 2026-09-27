@@ -3,6 +3,7 @@ import { useState } from "react";
 import { authClient } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
 import { useLocale } from "./i18n.tsx";
+import { UserAvatar } from "./UserAvatar.tsx";
 
 export function AccountControls({ user, onLogout }: { user: AuthUser; onLogout(): Promise<void> }) {
 	const { t } = useLocale();
@@ -26,7 +27,7 @@ export function AccountControls({ user, onLogout }: { user: AuthUser; onLogout()
 		<>
 			<details className="account-menu">
 				<summary className="sidebar-workspace account-trigger">
-					<span className="workspace-avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+					<UserAvatar user={user} />
 					<span className="account-identity">
 						<strong>{user.username}</strong>
 						<small>{t(user.role === "admin" ? "管理员" : "成员")}</small>
@@ -128,7 +129,7 @@ export function AccountControls({ user, onLogout }: { user: AuthUser; onLogout()
 			</Dialog>
 			<Dialog open={Boolean(logoutError)} onClose={() => setLogoutError("")} labelledBy="logout-title">
 				<div className="confirmation-heading">
-					<h2 id="logout-title">{t("草稿尚未保存")}</h2>
+					<h2 id="logout-title">{t("题目尚未保存")}</h2>
 				</div>
 				<p>{t(logoutError)}</p>
 				<p>{t("可以返回继续编辑，或放弃未保存的修改并退出。")}</p>

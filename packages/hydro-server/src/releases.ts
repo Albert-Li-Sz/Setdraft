@@ -7,6 +7,12 @@ import { writeLegacyProblemExport } from "./legacy-exports.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import { ManualProjectError } from "./project-error.ts";
 
+export function releaseName(value: unknown): string {
+	if (typeof value !== "string" || !value.trim() || [...value.trim()].length > 80)
+		throw new ManualProjectError("发布包名称须为 1–80 个字符。", 422);
+	return value.trim();
+}
+
 /** Reads immutable releases and derives exports from their saved source, never the live draft. */
 export class ReleaseStore {
 	private readonly projects: ManualProjectStore;
@@ -24,6 +30,13 @@ export class ReleaseStore {
 		return this.projects.database
 			.list<ManualRelease>("release")
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+	}
+
+	async rename(id: string, value: unknown): Promise<ManualRelease> {
+		const release = await this.release(id);
+		release.name = releaseName(value);
+		this.projects.database.put("release", id, release);
+		return release;
 	}
 
 	async releaseReference(id: string): Promise<ManualProgram> {

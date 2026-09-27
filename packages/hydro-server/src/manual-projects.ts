@@ -205,7 +205,7 @@ export class ManualProjectStore {
 			});
 		} catch (error) {
 			if (String(error).includes("VERSION_CONFLICT")) {
-				throw new ManualProjectError("草稿版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
+				throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
 			}
 			throw error;
 		}
@@ -214,10 +214,10 @@ export class ManualProjectStore {
 
 	private async assertExpectedRevision(project: ManualProject, expectedRevision?: number): Promise<void> {
 		if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) {
-			throw new ManualProjectError("草稿版本无效。", 422);
+			throw new ManualProjectError("题目版本无效。", 422);
 		}
 		if (expectedRevision !== undefined && expectedRevision !== project.revision) {
-			throw new ManualProjectError("草稿版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
+			throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
 		}
 	}
 
@@ -274,9 +274,9 @@ export class ManualProjectStore {
 	async update(id: string, value: unknown): Promise<ManualProjectSnapshot> {
 		this.assertNotBusy(id);
 		const project = await this.load(id);
-		const input = record(value, "项目草稿");
+		const input = record(value, "题目");
 		if (input.expectedRevision !== undefined && input.expectedRevision !== project.revision) {
-			throw new ManualProjectError("草稿版本已变化，请检查最新内容后重试。", 409, await this.get(id));
+			throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, await this.get(id));
 		}
 		if (input.scoringMode !== undefined && input.scoringMode !== project.scoringMode) {
 			throw new ManualProjectError("题目赛制在创建后不可更改；请新建题目。", 422);

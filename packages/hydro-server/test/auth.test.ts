@@ -325,6 +325,100 @@ describe("authenticated personal workspaces", () => {
 		expect((await admin.request(`/projects/${project.id}`)).status).toBe(404);
 		expect(await (await client.request("/ai/config")).text()).toContain("Team");
 	});
+	it("persists personal preferences without changing another user or revoking the current session", async () => {
+		const admin = new BrowserClient();
+		await admin.authenticate("setup");
+		const { client, user } = await admin.createMember("alice");
+		const avatar =
+			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==";
+		const saved = await client.request("/auth/profile", "PUT", { locale: "en", avatar });
+		expect(saved.status).toBe(200);
+		expect(await saved.json()).toMatchObject({ user: { id: user.id, locale: "en", avatar }, csrfToken: client.csrf });
+		expect((await client.request("/projects")).status).toBe(200);
+		const reopened = new IdentityStore(root);
+		try {
+			expect(reopened.getUser(user.id)).toMatchObject({ locale: "en", avatar });
+		} finally {
+			reopened.close();
+		}
+		expect(((await (await admin.request("/auth/session")).json()) as AuthSession).user?.avatar).toBeUndefined();
+		for (const input of [
+			{ locale: "fr" },
+			{ avatar: "data:image/svg+xml;base64,PHN2Zz4=" },
+			{ avatar: "data:image/png;base64,bm90LXBuZw==" },
+		])
+			expect((await client.request("/auth/profile", "PUT", input)).status).toBe(422);
+		client.csrf = "wrong";
+		expect((await client.request("/auth/profile", "PUT", { locale: "zh-CN" })).status).toBe(403);
+		await client.authenticate("login", "alice");
+		expect(
+			((await (await client.request("/auth/profile", "PUT", { avatar: null })).json()) as AuthSession).user?.avatar,
+		).toBeUndefined();
+	});
+	it("copies only an owned problem into another enabled user's independent workspace", async () => {
+		const admin = new BrowserClient();
+		await admin.authenticate("setup");
+		const { client: a, user: alice } = await admin.createMember("alice");
+		const { client: b, user: bob } = await admin.createMember("bob");
+		const project = (await (await a.request("/projects", "POST", { scoringMode: "acm" })).json()) as {
+			id: string;
+			revision: number;
+		};
+		await a.request(`/projects/${project.id}`, "PUT", {
+			title: "Copy me",
+			reference: { language: "cpp17", code: "private source" },
+			expectedRevision: 0,
+		});
+		await a.request(`/projects/${project.id}/cases`, "POST", { input: "private data", output: "answer" });
+		const current = (await (await a.request(`/projects/${project.id}`)).json()) as { revision: number };
+		for (const intruder of [admin, b]) {
+			expect(
+				(
+					await intruder.request(`/projects/${project.id}/copy`, "POST", {
+						recipientId: alice.id,
+						expectedRevision: current.revision,
+					})
+				).status,
+			).toBe(404);
+			expect((await intruder.request(`/projects/${project.id}/releases`)).status).toBe(404);
+			expect(
+				(
+					await intruder.request(`/projects/${project.id}/releases/${randomUUID()}/restore`, "POST", {
+						expectedRevision: current.revision,
+					})
+				).status,
+			).toBe(404);
+		}
+		const people = (await (await a.request("/people")).json()) as { users: Array<{ id: string; username: string }> };
+		expect(people.users).toContainEqual({ id: bob.id, username: "bob" });
+		expect(people.users.some((user) => user.id === alice.id)).toBe(false);
+		const result = await a.request(`/projects/${project.id}/copy`, "POST", {
+			recipientId: bob.id,
+			expectedRevision: current.revision,
+		});
+		expect(result.status).toBe(201);
+		const copied = (await result.json()) as { id: string };
+		expect(copied.id).not.toBe(project.id);
+		expect(await (await b.request(`/projects/${copied.id}`)).json()).toMatchObject({
+			title: "Copy me",
+			reference: { code: "private source" },
+			revision: 0,
+		});
+		expect(await (await b.request(`/projects/${copied.id}/files/1.in`)).text()).toBe("private data");
+		expect((await a.request(`/projects/${copied.id}`)).status).toBe(404);
+		await b.request(`/projects/${copied.id}`, "PUT", { title: "Bob's copy", expectedRevision: 0 });
+		expect(await (await a.request(`/projects/${project.id}`)).json()).toMatchObject({ title: "Copy me" });
+		await admin.request(`/admin/users/${bob.id}`, "PATCH", { enabled: false });
+		expect(
+			(
+				await a.request(`/projects/${project.id}/copy`, "POST", {
+					recipientId: bob.id,
+					expectedRevision: current.revision,
+				})
+			).status,
+		).toBe(404);
+	}, 15000);
+
 	it("uses Secure host cookies behind the configured HTTPS origin", async () => {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

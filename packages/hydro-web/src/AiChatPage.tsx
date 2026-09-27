@@ -28,6 +28,7 @@ interface Props {
 	paused: boolean;
 	apiOrigin: string;
 	configured: boolean;
+	administrator?: boolean;
 	projectSnapshot?: string;
 }
 
@@ -771,7 +772,13 @@ export function AiChatPage(props: Props) {
 						</div>
 						{(!props.configured || messageTone === "failed") && (
 							<output className="chat-status" aria-live="polite">
-								{props.configured ? t(message) : <a href="#settings">{t("请先在设置中配置 AI API。")}</a>}
+								{props.configured ? (
+									t(message)
+								) : props.administrator ? (
+									<a href="#admin">{t("请先在管理员设置中配置 AI API。")}</a>
+								) : (
+									t("团队 AI 尚未配置，请联系管理员。")
+								)}
 							</output>
 						)}
 						<output className="visually-hidden" aria-live="polite">
