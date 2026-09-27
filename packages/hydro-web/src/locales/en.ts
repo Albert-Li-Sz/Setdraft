@@ -693,4 +693,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	选择模型: "Select a model",
 	消息内容: "Message",
 	"Enter 发送 · Shift+Enter 换行": "Enter to send \u00b7 Shift+Enter for a new line",
+	"Tab 缩进 · Ctrl+Space 补全 · Esc 后按 Tab 离开编辑器":
+		"Tab to indent · Ctrl+Space for suggestions · Esc, then Tab to leave the editor",
 };

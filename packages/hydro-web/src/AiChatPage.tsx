@@ -135,7 +135,8 @@ export function AiChatPage(props: Props) {
 					!chat.messages.some((item) => item.role === "assistant" && item.requestId === latest.id)
 				) {
 					setFailedRequest({ chatId, requestId: latest.id });
-				}
+					setStreamFailed(latest.state === "failed");
+				} else setFailedRequest(undefined);
 			})
 			.catch(() => {});
 		return () => controller.abort();
@@ -192,6 +193,7 @@ export function AiChatPage(props: Props) {
 	async function create(preserveProfileSelection = false): Promise<ChatConversation> {
 		const created = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, "/chats"), { method: "POST" });
 		setChat(created);
+		setFailedRequest(undefined);
 		if (configuration && !preserveProfileSelection) setSelectedProfileId(profileForChat(configuration, created));
 		setStreaming("");
 		setStreamFailed(false);
@@ -206,6 +208,7 @@ export function AiChatPage(props: Props) {
 		try {
 			const selected = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${id}`));
 			setChat(selected);
+			setFailedRequest(undefined);
 			if (configuration) setSelectedProfileId(profileForChat(configuration, selected));
 			setStreaming("");
 			setStreamFailed(false);
@@ -227,6 +230,9 @@ export function AiChatPage(props: Props) {
 					? await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${remaining[0].id}`))
 					: undefined;
 				setChat(selected);
+				setFailedRequest(undefined);
+				setStreaming("");
+				setStreamFailed(false);
 				if (configuration) setSelectedProfileId(profileForChat(configuration, selected));
 			}
 			showMessage("对话已删除。", "passed");
@@ -388,8 +394,10 @@ export function AiChatPage(props: Props) {
 	}
 
 	async function resumeFailed(): Promise<void> {
-		if (!failedRequest || busy) return;
+		if (!failedRequest || failedRequest.chatId !== chat?.id || busy || props.paused) return;
 		setBusy(true);
+		followOutputRef.current = true;
+		showMessage("模型正在回复…");
 		setStreaming("");
 		setStreamFailed(false);
 		const controller = new AbortController();
@@ -727,11 +735,6 @@ export function AiChatPage(props: Props) {
 										<Icon name="stop" />
 									</button>
 								)}
-								{!busy && failedRequest && (
-									<button className="button secondary" type="button" onClick={() => void resumeFailed()}>
-										{streamFailed ? t("重试并续接") : t("续接回复")}
-									</button>
-								)}
 								<button
 									className="icon-button chat-send"
 									hidden={busy}
@@ -751,6 +754,21 @@ export function AiChatPage(props: Props) {
 								</button>
 							</div>
 						</div>
+						<div className="composer-footer">
+							{!busy && failedRequest?.chatId === chat?.id && failedRequest && (
+								<button
+									className="icon-button chat-resume"
+									type="button"
+									aria-label={streamFailed ? t("重试并续接") : t("续接回复")}
+									title={streamFailed ? t("重试并续接") : t("续接回复")}
+									disabled={props.paused}
+									onClick={() => void resumeFailed()}
+								>
+									<Icon name="resume" />
+								</button>
+							)}
+							<p className="manual-chat-context-note">{t("Enter 发送 · Shift+Enter 换行")}</p>
+						</div>
 						{(!props.configured || messageTone === "failed") && (
 							<output className="chat-status" aria-live="polite">
 								{props.configured ? t(message) : <a href="#settings">{t("请先在设置中配置 AI API。")}</a>}
@@ -759,7 +777,6 @@ export function AiChatPage(props: Props) {
 						<output className="visually-hidden" aria-live="polite">
 							{t(message)}
 						</output>
-						<p className="manual-chat-context-note">{t("Enter 发送 · Shift+Enter 换行")}</p>
 					</div>
 				</section>
 			</div>

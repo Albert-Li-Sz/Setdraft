@@ -1,5 +1,6 @@
 const paths = {
 	arrow: "M4 12h16m-6-6 6 6-6 6",
+	resume: "M4 10a8 8 0 1 1 1.6 7M4 4v6h6",
 	plus: "M12 5v14M5 12h14",
 	file: "M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5Zm0 0v5h5M9 13h6m-6 4h6",
 	check: "m5 12 4 4L19 6",

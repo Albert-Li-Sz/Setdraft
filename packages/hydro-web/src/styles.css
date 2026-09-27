@@ -1645,70 +1645,126 @@ a svg {
 	position: relative;
 }
 .manual-code-editor .cm-editor {
-	min-height: 280px;
 	background: var(--panel);
 	color: var(--ink);
 	font:
-		12px / 19.2px ui-monospace,
+		13px / 22px ui-monospace,
 		SFMono-Regular,
 		Menlo,
 		Consolas,
 		monospace;
 }
 .manual-code-editor .cm-scroller {
-	max-height: 570px;
+	min-height: min(var(--editor-min-height), 65dvh);
+	max-height: 65dvh;
 	overflow: auto;
 }
 .manual-code-editor .cm-content {
-	filter: grayscale(1);
-	padding: 13px 0;
+	padding: 12px 0;
 	caret-color: var(--accent);
 }
 .manual-code-editor .cm-line {
 	padding: 0 16px;
 }
 .manual-code-editor .cm-gutters {
-	border-right: 1px solid var(--surface-subtle);
-	background: var(--surface-subtle);
-	color: var(--accent);
+	border-right: 1px solid #f0f0f0;
+	background: #fafafa;
+	color: #8a8a8a;
 }
 .manual-code-editor .cm-editor .cm-content,
 .manual-code-editor .cm-editor .cm-gutters {
 	font-family: inherit;
 	font-size: 13px;
-	line-height: 19.2px;
+	line-height: 22px;
 }
 .manual-code-editor .cm-lineNumbers .cm-gutterElement {
-	min-width: 27px;
-}
-.manual-code-phantom-lines {
-	position: absolute;
-	z-index: 1;
-	left: 0;
-	width: 27px;
-	pointer-events: none;
-	user-select: none;
-	color: var(--faint);
-	font:
-		12px / 19.2px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		Consolas,
-		monospace;
-}
-.manual-code-phantom-lines span {
-	display: block;
-	height: 19.2px;
-	padding: 0 3px 0 5px;
-	text-align: right;
+	min-width: 36px;
+	padding-inline: 8px;
 }
 .manual-code-editor .cm-activeLine,
 .manual-code-editor .cm-activeLineGutter {
-	background: var(--surface-subtle);
+	background: #f4f5f7;
 }
 .manual-code-editor .cm-editor.cm-focused {
 	outline: 0;
-	box-shadow: inset 3px 0 0 var(--accent);
+}
+.manual-code-block:focus-within {
+	border-color: #aaa;
+}
+.manual-code-editor .cm-matchingBracket {
+	background: #e1e7ef;
+	outline: 1px solid #b4bfcd;
+	border-radius: 2px;
+	color: inherit;
+}
+.manual-code-editor .cm-nonmatchingBracket {
+	background: #ffebe9;
+	outline: 1px solid #cf222e;
+}
+.manual-code-editor .cm-selectionBackground,
+.manual-code-editor .cm-focused .cm-selectionBackground {
+	background: #dce5f1;
+}
+.manual-code-editor .cm-tooltip {
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--panel);
+	color: var(--ink);
+	box-shadow: 0 4px 20px rgb(0 0 0 / 8%);
+	overflow: hidden;
+}
+.manual-code-editor .cm-tooltip-autocomplete > ul > li {
+	padding: 4px 8px;
+}
+.manual-code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
+	background: #ededed;
+	color: var(--ink);
+}
+.manual-code-editor .cm-completionDetail {
+	margin-left: 12px;
+	color: var(--muted);
+	font-size: 11px;
+}
+.code-editor-help {
+	margin: 0;
+	padding: 8px 14px;
+	border-top: 1px solid var(--line);
+	background: #fafafa;
+	color: var(--muted);
+	font-size: 10px;
+	line-height: 1.6;
+}
+.code-keyword {
+	color: #cf222e;
+}
+.code-name {
+	color: #24292f;
+}
+.code-function {
+	color: #8250df;
+}
+.code-type {
+	color: #953800;
+}
+.code-string {
+	color: #0a3069;
+}
+.code-literal {
+	color: #0550ae;
+}
+.code-punctuation {
+	color: #57606a;
+}
+.code-meta {
+	color: #0550ae;
+}
+.code-comment {
+	color: #6e7781;
+	font-style: italic;
+}
+.code-invalid {
+	color: #cf222e;
+	text-decoration: underline wavy;
 }
 .manual-generator-layout {
 	display: grid;
@@ -1718,9 +1774,6 @@ a svg {
 }
 .manual-generator-layout .manual-code-block {
 	margin: 0;
-}
-.manual-generator-layout .manual-code-editor .cm-editor {
-	min-height: 340px;
 }
 .manual-generate-actions {
 	display: flex;
@@ -1788,9 +1841,6 @@ a svg {
 }
 .manual-program-panel .manual-code-block {
 	margin: 0;
-}
-.manual-program-panel .manual-code-editor .cm-editor {
-	min-height: 430px;
 }
 .manual-checker-presets {
 	margin-bottom: 14px;
@@ -2038,11 +2088,18 @@ a svg {
 }
 .manual-chat-markdown pre {
 	overflow: auto;
-	padding: 12px;
+	max-width: 100%;
+	padding: 16px 18px;
 	border: 1px solid var(--line);
 	border-radius: 14px;
-	background: var(--surface-subtle);
-	line-height: 1.5;
+	background: #f8f9fb;
+	font:
+		13px / 1.75 ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+	tab-size: 4;
 }
 .manual-chat-markdown pre code {
 	white-space: pre;
@@ -2754,10 +2811,6 @@ body:has(.motion-dialog[open]) {
 }
 .manual-checker-preset-list button {
 	border-radius: 12px;
-}
-.manual-code-editor .cm-tooltip,
-.manual-code-editor .cm-panels {
-	filter: grayscale(1);
 }
 @keyframes page-in {
 	from {

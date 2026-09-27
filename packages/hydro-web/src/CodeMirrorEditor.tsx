@@ -1,36 +1,12 @@
-import { cpp } from "@codemirror/lang-cpp";
-import { java } from "@codemirror/lang-java";
-import { python } from "@codemirror/lang-python";
-import { StreamLanguage } from "@codemirror/language";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { acceptCompletion } from "@codemirror/autocomplete";
+import { indentWithTab } from "@codemirror/commands";
+import { indentUnit, syntaxHighlighting } from "@codemirror/language";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { useEffect, useRef } from "react";
-import type { ProgramLanguage } from "./platform.ts";
-
-type EditorLanguage = ProgramLanguage | "gen-script";
-
-const genScriptLanguage = StreamLanguage.define<void>({
-	token(stream) {
-		if (stream.eatSpace()) return null;
-		if (stream.peek() === "#") {
-			stream.skipToEnd();
-			return "comment";
-		}
-		if (stream.match(/^(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?)/)) return "string";
-		if (stream.match(/^gen\b/)) return "keyword";
-		if (stream.match(/^[+-]?\d+(?:\.\d+)?\b/)) return "number";
-		stream.next();
-		return null;
-	},
-});
-
-function languageSupport(language: EditorLanguage): Extension {
-	if (language === "gen-script") return genScriptLanguage;
-	if (language === "python3") return python();
-	if (language === "java") return java();
-	return cpp();
-}
+import { type CSSProperties, useEffect, useId, useRef } from "react";
+import { codeHighlightStyle, codeLanguageSupport, type EditorLanguage } from "./code-language.ts";
+import { useLocale } from "./i18n.tsx";
 
 interface Props {
 	value: string;
@@ -41,6 +17,8 @@ interface Props {
 }
 
 export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16, onChange }: Props) {
+	const { t } = useLocale();
+	const hintId = useId();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const languageRef = useRef(new Compartment());
@@ -57,9 +35,13 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 			doc: initialPropsRef.current.value,
 			extensions: [
 				basicSetup,
+				syntaxHighlighting(codeHighlightStyle),
 				EditorState.tabSize.of(4),
+				indentUnit.of("    "),
+				keymap.of([{ key: "Tab", run: acceptCompletion }, indentWithTab]),
+				EditorView.contentAttributes.of({ "aria-describedby": hintId }),
 				labelRef.current.of(EditorView.contentAttributes.of({ "aria-label": initialPropsRef.current.ariaLabel })),
-				languageRef.current.of(languageSupport(initialPropsRef.current.language)),
+				languageRef.current.of(codeLanguageSupport(initialPropsRef.current.language)),
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged && !applyingExternalRef.current) {
 						onChangeRef.current(update.state.doc.toString());
@@ -73,7 +55,7 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 			viewRef.current = null;
 			view.destroy();
 		};
-	}, []);
+	}, [hintId]);
 
 	useEffect(() => {
 		const view = viewRef.current;
@@ -87,7 +69,7 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 	}, [value]);
 
 	useEffect(() => {
-		viewRef.current?.dispatch({ effects: languageRef.current.reconfigure(languageSupport(language)) });
+		viewRef.current?.dispatch({ effects: languageRef.current.reconfigure(codeLanguageSupport(language)) });
 	}, [language]);
 
 	useEffect(() => {
@@ -96,24 +78,15 @@ export function CodeMirrorEditor({ value, language, ariaLabel, previewLines = 16
 		});
 	}, [ariaLabel]);
 
-	let lineCount = 1;
-	for (let index = 0; index < value.length && lineCount < previewLines; index++) {
-		if (value.charCodeAt(index) === 10) lineCount++;
-	}
-	const phantomLines = Array.from(
-		{ length: Math.max(0, previewLines - lineCount) },
-		(_, index) => lineCount + index + 1,
-	);
+	const sizing: CSSProperties & { "--editor-min-height": string } = {
+		"--editor-min-height": `${previewLines * 22 + 24}px`,
+	};
 	return (
-		<div className="manual-code-editor">
+		<div className="manual-code-editor" style={sizing}>
 			<div ref={containerRef} />
-			{phantomLines.length > 0 && (
-				<div className="manual-code-phantom-lines" aria-hidden="true" style={{ top: 13 + lineCount * 19.2 }}>
-					{phantomLines.map((line) => (
-						<span key={line}>{line}</span>
-					))}
-				</div>
-			)}
+			<p className="code-editor-help" id={hintId}>
+				{t("Tab 缩进 · Ctrl+Space 补全 · Esc 后按 Tab 离开编辑器")}
+			</p>
 		</div>
 	);
 }

@@ -128,14 +128,14 @@ export function WorkspaceHome({
 					</a>
 				)}
 			</section>
-			<div className="home-status">
+			<footer className="home-status">
 				<a href="#settings">
 					<Icon name="terminal" />
 					{sandbox?.available ? t("本地沙箱就绪") : sandbox ? t("沙箱尚未就绪") : t("正在连接工作区")}
 				</a>
 				<span>·</span>
 				<span>{t("数据按账号独立保存")}</span>
-			</div>
+			</footer>
 		</main>
 	);
 }

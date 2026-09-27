@@ -310,8 +310,16 @@ body:has(.sidebar-drawer[open]) {
 
 /* Workspace: a compact entry point, followed by the user's drafts. */
 .workspace-home {
+	display: flex;
+	flex-direction: column;
 	width: min(860px, 100%);
-	padding: clamp(36px, 7dvh, 76px) 40px 32px;
+	padding: clamp(36px, 7dvh, 76px) 40px max(20px, env(safe-area-inset-bottom));
+}
+.workspace-home > * {
+	flex-shrink: 0;
+}
+.home-projects {
+	margin-bottom: 32px;
 }
 .home-heading {
 	display: flex;
@@ -544,7 +552,7 @@ body:has(.sidebar-drawer[open]) {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 10px;
-	margin-top: 28px;
+	margin-top: auto;
 	padding-top: 16px;
 	border-top: 1px solid var(--line);
 	color: var(--muted);
@@ -803,10 +811,30 @@ body:has(.sidebar-drawer[open]) {
 	text-underline-offset: 3px;
 }
 .manual-chat-context-note {
-	margin: 10px 0 0;
+	margin: 0;
 	color: var(--muted);
 	font-size: 10px;
 	text-align: center;
+}
+.composer-footer {
+	display: grid;
+	grid-template-columns: 34px minmax(0, 1fr) 34px;
+	align-items: center;
+	min-height: 34px;
+	margin-top: 4px;
+}
+.composer-footer .manual-chat-context-note {
+	grid-column: 2;
+	grid-row: 1;
+}
+.chat-resume {
+	grid-column: 1;
+	grid-row: 1;
+	border-radius: 50%;
+}
+.chat-resume svg {
+	width: 17px;
+	height: 17px;
 }
 .manual-chat-main.is-empty {
 	justify-content: center;
@@ -864,7 +892,8 @@ body:has(.sidebar-drawer[open]) {
 	.editor-grid,
 	.manual-program-layout,
 	.manual-generator-layout,
-	.manual-case-form-text {
+	.manual-case-form-text,
+	.ai-form-grid {
 		grid-template-columns: minmax(0, 1fr);
 	}
 	.manual-program-menu {
@@ -888,6 +917,14 @@ body:has(.sidebar-drawer[open]) {
 	}
 	.workspace-home {
 		padding-top: 40px;
+		padding-bottom: max(20px, env(safe-area-inset-bottom));
+	}
+	.settings-card-heading,
+	.ai-profile-toolbar {
+		flex-wrap: wrap;
+	}
+	.settings-card {
+		padding: 20px;
 	}
 }
 @media (max-width: 760px) {
