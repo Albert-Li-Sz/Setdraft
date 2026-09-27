@@ -62,14 +62,20 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 		}
 	}
 	return (
-		<section className="card settings-card">
+		<section className="card settings-card search-settings-card">
 			<h2>{t("联网搜索")}</h2>
 			<p className="settings-help">
 				{t("默认使用随部署启动的 SearXNG，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。")}
 			</p>
 			{config && (
-				<>
-					<label className="manual-context-toggle">
+				<form
+					className="search-settings-form"
+					onSubmit={(event) => {
+						event.preventDefault();
+						void save();
+					}}
+				>
+					<label className="search-settings-toggle">
 						<input
 							type="checkbox"
 							checked={config.enabled}
@@ -77,8 +83,8 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						/>
 						{t("启用联网搜索")}
 					</label>
-					<label>
-						{t("搜索服务")}
+					<label className="field settings-field">
+						<span>{t("搜索服务")}</span>
 						<select
 							value={config.provider}
 							onChange={(event) =>
@@ -90,8 +96,8 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						</select>
 					</label>
 					{config.provider === "tavily" && (
-						<label>
-							API Key
+						<label className="field settings-field">
+							<span>API Key</span>
 							<input
 								type="password"
 								autoComplete="new-password"
@@ -101,18 +107,19 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 							/>
 						</label>
 					)}
-					<label>
-						{t("每人每日搜索次数")}
+					<label className="field settings-field">
+						<span>{t("每人每日搜索次数")}</span>
 						<input
 							type="number"
+							required
 							min="1"
 							max="10000"
 							value={config.dailyLimit}
 							onChange={(event) => setConfig({ ...config, dailyLimit: Number(event.target.value) })}
 						/>
 					</label>
-					<div className="heading-actions">
-						<button className="button primary" type="button" disabled={busy} onClick={() => void save()}>
+					<div className="settings-actions">
+						<button className="button primary" type="submit" disabled={busy}>
 							{t("保存")}
 						</button>
 						<button
@@ -124,7 +131,7 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 							{t("测试连接")}
 						</button>
 					</div>
-				</>
+				</form>
 			)}
 			{message && (
 				<output className="notice pending" aria-live="polite">

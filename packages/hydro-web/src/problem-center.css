@@ -1,24 +1,27 @@
 .problem-center {
-	max-width: 1180px;
+	max-width: var(--content-width);
 }
 .problem-center-toolbar {
-	display: flex;
+	display: grid;
 	align-items: center;
 	justify-content: space-between;
-	gap: 20px;
-	padding: 8px 0 22px;
+	gap: 12px;
+	padding: 0 0 20px;
 	font-size: 13px;
 	color: var(--muted);
 	border-bottom: 1px solid var(--line);
+	grid-template-columns: 1fr auto minmax(180px, 340px);
 }
 .problem-search {
 	display: flex;
 	align-items: center;
 	gap: 9px;
-	width: min(340px, 65%);
-	padding: 10px 13px;
-	border-radius: 12px;
-	background: #f5f5f5;
+	width: 100%;
+	padding: 8px 12px;
+	border-radius: var(--radius-control);
+	background: var(--panel);
+	min-height: var(--control-height);
+	border: 1px solid var(--line);
 }
 .problem-search input {
 	min-width: 0;
@@ -30,27 +33,27 @@
 	font: inherit;
 }
 .problem-search:focus-within {
-	outline: 2px solid #b8b8b8;
+	outline: 2px solid var(--focus-ring);
 	outline-offset: 2px;
 }
 .problem-row {
 	display: flex;
 	align-items: center;
 	gap: 20px;
-	padding: 22px 8px;
+	padding: 18px 0;
 	border-bottom: 1px solid var(--line);
 }
 .problem-row-main {
 	display: flex;
 	align-items: center;
-	gap: 17px;
+	gap: 14px;
 	min-width: 0;
 	flex: 1;
 	text-align: left;
 	background: none;
 	border: 0;
-	border-radius: 12px;
-	padding: 6px;
+	border-radius: var(--radius-control);
+	padding: 8px;
 	color: inherit;
 	font: inherit;
 	cursor: pointer;
@@ -63,15 +66,15 @@
 	display: grid;
 	place-items: center;
 	flex-shrink: 0;
-	width: 44px;
-	height: 44px;
+	width: 40px;
+	height: 40px;
 	border: 1px solid var(--line);
-	border-radius: 14px;
+	border-radius: var(--radius-control);
 	color: #666;
 }
 .problem-row-content {
 	display: grid;
-	gap: 7px;
+	gap: 5px;
 	min-width: 0;
 }
 .problem-row-content strong {
@@ -96,7 +99,7 @@
 }
 .problem-row-end {
 	display: grid;
-	gap: 12px;
+	gap: 6px;
 	justify-items: end;
 }
 .problem-row-end time {
@@ -109,8 +112,8 @@
 }
 .release-card {
 	border: 1px solid var(--line);
-	border-radius: 16px;
-	padding: 22px;
+	border-radius: var(--radius);
+	padding: 20px;
 }
 .release-card-heading {
 	display: flex;
@@ -133,9 +136,9 @@
 .release-verified {
 	flex-shrink: 0;
 	padding: 5px 9px;
-	border-radius: 7px;
+	border-radius: 6px;
 	background: #f4f4f4;
-	font-size: 11px;
+	font-size: 12px;
 	color: #5d5d5d;
 }
 .release-card-actions {
@@ -154,12 +157,13 @@
 .preference-row select {
 	min-width: 0;
 	width: 100%;
-	padding: 11px 13px;
+	padding: 9px 12px;
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: var(--radius-control);
 	background: #fff;
 	color: var(--ink);
 	font: inherit;
+	min-height: var(--control-height);
 }
 .dialog-subtitle {
 	overflow-wrap: anywhere;
@@ -244,7 +248,14 @@
 	clip-path: inset(50%);
 	white-space: nowrap;
 }
-@media (max-width: 680px) {
+@container (max-width: 680px) {
+	.problem-center-toolbar {
+		grid-template-columns: 1fr auto;
+	}
+	.problem-search {
+		grid-column: 1 / -1;
+	}
+
 	.problem-row {
 		align-items: stretch;
 		flex-direction: column;
@@ -255,7 +266,8 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding-left: 67px;
+		padding-left: 0;
+		flex-wrap: wrap;
 		gap: 8px;
 	}
 	.problem-row-content > span {

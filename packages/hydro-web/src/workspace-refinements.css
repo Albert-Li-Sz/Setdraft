@@ -118,9 +118,11 @@
 .problem-center-toolbar select {
 	padding: 8px 12px;
 	border: 1px solid var(--line);
-	border-radius: 8px;
+	border-radius: var(--radius-control);
 	background: var(--panel);
 	color: var(--ink);
+	min-height: var(--control-height);
+	max-width: 100%;
 }
 .manual-attachment > span {
 	flex: 1;
@@ -138,19 +140,23 @@
 
 .task-groups {
 	display: grid;
-	gap: 24px;
+	gap: 20px;
 }
 .task-group {
-	padding: 20px 24px;
+	padding: 8px;
 }
 .task-group-heading {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	justify-content: space-between;
 	gap: 16px;
+	padding: 12px 12px 16px;
 }
 .task-group-heading h2 {
-	font-size: 16px;
+	font-size: 15px;
+	font-weight: 600;
+	margin: 0;
+	overflow-wrap: anywhere;
 }
 .task-group-heading > span,
 .task-row small {
@@ -163,17 +169,21 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 16px;
-	padding: 16px 0;
+	padding: 16px 12px;
 	border: 0;
 	border-top: 1px solid var(--line);
 	background: transparent;
 	color: var(--ink);
 	text-align: left;
 	cursor: pointer;
+	border-radius: var(--radius-control);
+	transition: background-color var(--motion) ease;
 }
 .task-row > span:first-child {
 	display: grid;
 	gap: 6px;
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 .task-row:hover {
 	background: var(--surface-subtle);
@@ -215,6 +225,7 @@
 }
 .contest-details-form .field {
 	flex: 1 1 180px;
+	margin: 0;
 }
 
 .chat-search-query {
@@ -267,5 +278,54 @@
 	}
 	.chat-search-query input {
 		width: 100%;
+	}
+}
+
+.search-settings-form {
+	display: grid;
+	gap: 18px;
+	margin-top: 20px;
+}
+.search-settings-form .settings-field,
+.search-settings-form .settings-actions {
+	margin: 0;
+}
+.search-settings-toggle {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 13px;
+	min-height: 32px;
+	cursor: pointer;
+}
+.search-settings-toggle input {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+}
+.search-settings-card .notice {
+	margin: 18px 0 0;
+}
+@container (max-width: 600px) {
+	.task-group-heading {
+		align-items: start;
+	}
+	.task-group-heading > span {
+		flex: none;
+	}
+	.task-row {
+		align-items: start;
+		flex-wrap: wrap;
+		gap: 10px;
+	}
+	.task-row > span:first-child {
+		flex: 1 1 180px;
+	}
+	.contest-add-row,
+	.contest-bundle {
+		flex-wrap: wrap;
+	}
+	.contest-add-row select {
+		flex-basis: 100%;
 	}
 }

@@ -8,12 +8,14 @@ export function Dialog({
 	labelledBy,
 	children,
 	className = "",
+	role = "dialog",
 }: {
 	open: boolean;
 	onClose(): void;
 	labelledBy: string;
 	children: ReactNode;
 	className?: string;
+	role?: "dialog" | "alertdialog";
 }) {
 	const paused = useContext(WorkspacePausedContext);
 	const open = requestedOpen && !paused;
@@ -55,6 +57,7 @@ export function Dialog({
 	return (
 		<dialog
 			ref={ref}
+			role={role}
 			className={`card confirmation-dialog motion-dialog ${className}`}
 			aria-labelledby={labelledBy}
 			data-closing={!open}

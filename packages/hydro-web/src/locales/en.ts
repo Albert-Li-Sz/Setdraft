@@ -893,7 +893,7 @@ export const englishMessages: Readonly<Record<string, string>> = {
 
 	系统任务: "System tasks",
 
-	"{0} 次任务": "{0} runs",
+	"{0} 次任务": "Runs: {0}",
 
 	文件处理失败: "File processing failed",
 

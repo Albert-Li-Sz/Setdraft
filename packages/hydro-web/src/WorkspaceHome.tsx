@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { EmptyState } from "./EmptyState.tsx";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import type { ProjectSnapshot, SandboxStatus } from "./platform.ts";
@@ -117,11 +118,11 @@ export function WorkspaceHome({
 						))}
 					</div>
 				) : (
-					<div className="home-empty">
-						<Icon name={query.trim() ? "search" : "files"} />
-						<h3>{query.trim() ? t("没有匹配的题目") : t("暂无题目")}</h3>
-						<p>{query.trim() ? t("试试其他关键词。") : t("新建题目后，题目将显示在这里。")}</p>
-					</div>
+					<EmptyState
+						icon={query.trim() ? "search" : "files"}
+						title={query.trim() ? t("没有匹配的题目") : t("暂无题目")}
+						description={query.trim() ? t("试试其他关键词。") : t("新建题目后，题目将显示在这里。")}
+					/>
 				)}
 				{projects.length > 8 && (
 					<a className="home-all" href="#records">

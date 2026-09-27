@@ -1,6 +1,6 @@
 .auth-page {
 	min-height: 100dvh;
-	background: var(--surface, #fff);
+	background: var(--canvas);
 	display: flex;
 	flex-direction: column;
 }
@@ -11,10 +11,10 @@
 	justify-content: space-between;
 }
 .auth-card {
-	width: min(100% - 40px, 360px);
+	width: min(100% - 40px, 380px);
 	margin: auto;
 	padding: 40px 0;
-	animation: auth-enter 240ms ease-out;
+	animation: auth-enter var(--motion-enter) var(--ease-out);
 }
 .auth-mark {
 	width: 40px;
@@ -61,21 +61,22 @@
 	width: 100%;
 	min-width: 0;
 	border: 1px solid var(--line);
-	border-radius: 10px;
-	padding: 11px 13px;
+	border-radius: var(--radius-control);
+	padding: 9px 12px;
 	background: #fff;
 	color: var(--ink);
 	font: inherit;
+	min-height: var(--control-height);
 }
 .auth-card input:focus,
 .account-form input:focus {
-	outline: 2px solid #1f1f1f;
+	outline: 2px solid var(--focus-ring);
 	outline-offset: 2px;
 }
 .auth-card .button {
 	width: 100%;
-	min-height: 43px;
-	border-radius: 11px;
+	min-height: 44px;
+	border-radius: var(--radius-control);
 }
 .auth-card small,
 .account-form small {
@@ -89,7 +90,7 @@
 }
 .auth-footer {
 	color: var(--muted);
-	font-size: 11px;
+	font-size: 12px;
 	text-align: center;
 	padding: 24px;
 }
@@ -106,7 +107,7 @@
 	display: none;
 }
 .account-trigger:hover {
-	background: var(--surface-hover, #ededed);
+	background: var(--surface-hover);
 }
 .account-identity {
 	display: grid;
@@ -157,7 +158,7 @@
 	flex: 1;
 }
 .user-create-form .button {
-	min-height: 42px;
+	min-height: var(--control-height);
 }
 .users-card .history-table {
 	min-width: 620px;
@@ -175,7 +176,7 @@
 	overflow-wrap: anywhere;
 	padding: 16px;
 	background: #f4f4f4;
-	border-radius: 10px;
+	border-radius: var(--radius-control);
 }
 @keyframes auth-enter {
 	from {

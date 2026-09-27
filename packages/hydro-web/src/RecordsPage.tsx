@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Dialog } from "./Dialog.tsx";
+import { EmptyState } from "./EmptyState.tsx";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import type { ManualRelease, ProjectSnapshot } from "./platform.ts";
@@ -117,19 +118,15 @@ export function RecordsPage(props: Props) {
 					</article>
 				))}
 				{!projects.length && (
-					<div className="home-empty">
-						<Icon name="files" />
-						<h3>
-							{t(
-								search || scoringMode !== "all"
-									? "没有匹配的题目"
-									: props.loading
-										? "正在读取题目…"
-										: "暂无题目",
-							)}
-						</h3>
-						<p>{t(search ? "试试其他标题、标识或标签。" : "新建题目后，会显示在这里。")}</p>
-					</div>
+					<EmptyState
+						icon={search || scoringMode !== "all" ? "search" : "files"}
+						title={t(
+							search || scoringMode !== "all" ? "没有匹配的题目" : props.loading ? "正在读取题目…" : "暂无题目",
+						)}
+						description={t(
+							search || scoringMode !== "all" ? "试试其他标题、标识或标签。" : "新建题目后，会显示在这里。",
+						)}
+					/>
 				)}
 			</div>
 			<Dialog open={!!pendingDelete} onClose={() => setPendingDelete(undefined)} labelledBy="delete-project-title">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authFetch } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
+import { EmptyState } from "./EmptyState.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import {
 	apiUrl,
@@ -539,7 +540,11 @@ export function ContestsPage({ apiOrigin }: Props) {
 							)}
 						</>
 					) : (
-						<p className="manual-muted">{t("创建竞赛后，按题序加入已验证的题目。")}</p>
+						<EmptyState
+							icon="layers"
+							title={t("暂无竞赛。")}
+							description={t("创建竞赛后，按题序加入已验证的题目。")}
+						/>
 					)}
 				</section>
 			</div>
@@ -575,120 +580,110 @@ export function ContestsPage({ apiOrigin }: Props) {
 					</div>
 				</form>
 			</Dialog>
-			{createOpen && (
-				<div className="confirmation-backdrop" role="presentation">
-					<form
-						className="card confirmation-dialog contest-create-dialog"
-						role="dialog"
-						aria-modal="true"
-						aria-labelledby="contest-create-title"
-						onSubmit={(event) => {
-							event.preventDefault();
-							void create();
-						}}
-					>
-						<div className="confirmation-heading">
-							<span>{t("竞赛")}</span>
-							<h2 id="contest-create-title">{t("新建竞赛")}</h2>
-						</div>
-						<label className="field">
-							<span>{t("竞赛名称")}</span>
-							<input
-								value={title}
-								onChange={(event) => setTitle(event.target.value)}
-								placeholder={t("例如 校内练习赛")}
-								required
-							/>
-						</label>
-						<label className="field">
-							<span>{t("目录标识")}</span>
-							<input
-								value={slug}
-								onChange={(event) => setSlug(event.target.value)}
-								placeholder={t("例如 practice-2026")}
-								required
-							/>
-						</label>
-						<p>{t("目录标识只使用字母、数字、点、下划线和连字符。")}</p>
-						<div className="confirmation-actions">
-							<button className="button secondary" type="button" onClick={() => setCreateOpen(false)}>
-								{t("取消")}
-							</button>
-							<button className="button primary" type="submit" disabled={busy}>
-								{busy ? t("创建中…") : t("创建竞赛")}
-							</button>
-						</div>
-					</form>
+			<Dialog
+				open={createOpen}
+				onClose={() => setCreateOpen(false)}
+				labelledBy="contest-create-title"
+				className="contest-create-dialog"
+			>
+				<form
+					onSubmit={(event) => {
+						event.preventDefault();
+						void create();
+					}}
+				>
+					<div className="confirmation-heading">
+						<span>{t("竞赛")}</span>
+						<h2 id="contest-create-title">{t("新建竞赛")}</h2>
+					</div>
+					<label className="field">
+						<span>{t("竞赛名称")}</span>
+						<input
+							value={title}
+							onChange={(event) => setTitle(event.target.value)}
+							placeholder={t("例如 校内练习赛")}
+							required
+						/>
+					</label>
+					<label className="field">
+						<span>{t("目录标识")}</span>
+						<input
+							value={slug}
+							onChange={(event) => setSlug(event.target.value)}
+							placeholder={t("例如 practice-2026")}
+							required
+						/>
+					</label>
+					<p>{t("目录标识只使用字母、数字、点、下划线和连字符。")}</p>
+					<div className="confirmation-actions">
+						<button className="button secondary" type="button" onClick={() => setCreateOpen(false)}>
+							{t("取消")}
+						</button>
+						<button className="button primary" type="submit" disabled={busy}>
+							{busy ? t("创建中…") : t("创建竞赛")}
+						</button>
+					</div>
+				</form>
+			</Dialog>
+			<Dialog
+				open={!!historyOpen}
+				onClose={() => setHistoryOpen(undefined)}
+				labelledBy="contest-history-title"
+				className="contest-history-dialog"
+			>
+				<div className="confirmation-heading">
+					<span>{t("竞赛打包")}</span>
+					<h2 id="contest-history-title">{t("历史竞赛包")}</h2>
 				</div>
-			)}
-			{historyOpen && (
-				<div className="confirmation-backdrop" role="presentation">
-					<div
-						className="card confirmation-dialog contest-history-dialog"
-						role="dialog"
-						aria-modal="true"
-						aria-labelledby="contest-history-title"
-					>
-						<div className="confirmation-heading">
-							<span>{t("竞赛打包")}</span>
-							<h2 id="contest-history-title">{t("历史竞赛包")}</h2>
-						</div>
-						<p>{t("与题目发布版本绑定；删除竞赛后仍可下载。")}</p>
-						{history.length === 0 ? (
-							<p className="manual-muted">{t("尚无历史竞赛包。")}</p>
-						) : (
-							<div className="contest-history-list">
-								{history.map((item) => (
-									<div className="contest-bundle" key={item.id}>
-										<span>
-											<strong>{item.name || item.title}</strong> ·{" "}
-											{item.format === "hydro" ? "Hydro" : "DOMjudge"} ·{" "}
-											{t("题目数量：{0}", item.problems.length)} ·
-											{new Date(item.createdAt).toLocaleString(locale)}
-										</span>
-										<a
-											className="button secondary button-link"
-											href={apiUrl(apiOrigin, `/contest-releases/${item.id}/download`)}
-											download={`${item.slug}.${item.format}.contest.zip`}
-										>
-											{t("下载")}
-										</a>
-									</div>
-								))}
+				<p>{t("与题目发布版本绑定；删除竞赛后仍可下载。")}</p>
+				{history.length === 0 ? (
+					<p className="manual-muted">{t("尚无历史竞赛包。")}</p>
+				) : (
+					<div className="contest-history-list">
+						{history.map((item) => (
+							<div className="contest-bundle" key={item.id}>
+								<span>
+									<strong>{item.name || item.title}</strong> · {item.format === "hydro" ? "Hydro" : "DOMjudge"}{" "}
+									· {t("题目数量：{0}", item.problems.length)} ·
+									{new Date(item.createdAt).toLocaleString(locale)}
+								</span>
+								<a
+									className="button secondary button-link"
+									href={apiUrl(apiOrigin, `/contest-releases/${item.id}/download`)}
+									download={`${item.slug}.${item.format}.contest.zip`}
+								>
+									{t("下载")}
+								</a>
 							</div>
-						)}
-						<div className="confirmation-actions">
-							<button className="button secondary" type="button" onClick={() => setHistoryOpen(undefined)}>
-								{t("关闭")}
-							</button>
-						</div>
+						))}
 					</div>
+				)}
+				<div className="confirmation-actions">
+					<button className="button secondary" type="button" onClick={() => setHistoryOpen(undefined)}>
+						{t("关闭")}
+					</button>
 				</div>
-			)}
-			{deleteOpen && draft && (
-				<div className="confirmation-backdrop" role="presentation">
-					<div
-						className="card confirmation-dialog"
-						role="alertdialog"
-						aria-modal="true"
-						aria-labelledby="contest-delete-title"
-					>
-						<div className="confirmation-heading">
-							<span>{t("删除确认")}</span>
-							<h2 id="contest-delete-title">{t("删除“{0}”？", draft.title)}</h2>
-						</div>
-						<p>{t("将删除竞赛。历史上已导出的竞赛包仍可下载。")}</p>
-						<div className="confirmation-actions">
-							<button className="button secondary" type="button" onClick={() => setDeleteOpen(false)}>
-								{t("取消")}
-							</button>
-							<button className="button primary" type="button" disabled={busy} onClick={() => void remove()}>
-								{t("确认删除")}
-							</button>
-						</div>
-					</div>
+			</Dialog>
+			<Dialog
+				open={deleteOpen && !!draft}
+				onClose={() => setDeleteOpen(false)}
+				labelledBy="contest-delete-title"
+				role="alertdialog"
+			>
+				<div className="confirmation-heading">
+					<span>{t("删除确认")}</span>
+					<h2 id="contest-delete-title">{t("删除“{0}”？", draft?.title ?? "")}</h2>
 				</div>
-			)}
+				<p>{t("将删除竞赛。历史上已导出的竞赛包仍可下载。")}</p>
+				<div className="confirmation-actions">
+					<button className="button secondary" type="button" onClick={() => setDeleteOpen(false)}>
+						{t("取消")}
+					</button>
+					<button className="button primary" type="button" disabled={busy} onClick={() => void remove()}>
+						{t("确认删除")}
+					</button>
+				</div>
+			</Dialog>
 		</main>
 	);
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
-import { Icon } from "./Icon.tsx";
+import { EmptyState } from "./EmptyState.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import { apiUrl, isContestReadyRelease, type ManualRelease, requestJson } from "./platform.ts";
 
@@ -117,11 +117,11 @@ export function ProjectReleases({
 			</div>
 			{message && <output className="notice pending">{t(message)}</output>}
 			{!releases.length && (
-				<div className="home-empty">
-					<Icon name="layers" />
-					<h3>{t(loading ? "正在读取发布包…" : "暂无发布包")}</h3>
-					<p>{t("完整验证通过后，发布包会保存在这里。")}</p>
-				</div>
+				<EmptyState
+					icon="layers"
+					title={t(loading ? "正在读取发布包…" : "暂无发布包")}
+					description={t("完整验证通过后，发布包会保存在这里。")}
+				/>
 			)}
 			<div className="release-list">
 				{releases.map((release) => (

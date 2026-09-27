@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authClient } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
+import { EmptyState } from "./EmptyState.tsx";
+import { Icon } from "./Icon.tsx";
 import { useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type TaskEvent } from "./platform.ts";
 
@@ -29,6 +31,20 @@ const stateNames: Record<BackgroundTask["state"], string> = {
 	stale: "题目已变化",
 	interrupted: "服务中断",
 };
+
+function TaskState({ state }: { state: BackgroundTask["state"] }) {
+	const { t } = useLocale();
+	const active = state === "running" || state === "queued";
+	return (
+		<span className={`status-badge ${active ? "is-active" : state === "succeeded" ? "online" : "offline"}`}>
+			<Icon
+				name={active ? "loader" : state === "succeeded" ? "check" : "close"}
+				className={active ? "loading-icon" : undefined}
+			/>
+			{t(stateNames[state])}
+		</span>
+	);
+}
 
 export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: boolean }) {
 	const { t, locale } = useLocale();
@@ -130,7 +146,13 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 				</output>
 			)}
 			<section className="task-groups" aria-label={t("任务列表")}>
-				{!tasks.length && <div className="tasks-empty">{t("暂无任务。运行 Gen 或验证打包后会显示在这里。")}</div>}
+				{!tasks.length && (
+					<EmptyState
+						icon="activity"
+						title={t("任务状态")}
+						description={t("暂无任务。运行 Gen 或验证打包后会显示在这里。")}
+					/>
+				)}
 				{[...groups].map(([resource, items]) => (
 					<section className="card task-group" key={resource}>
 						<div className="task-group-heading">
@@ -148,11 +170,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 										{new Date(item.createdAt).toLocaleString(locale)} · {item.id.slice(0, 8)}
 									</small>
 								</span>
-								<span
-									className={`status-badge ${item.state === "succeeded" ? "online" : item.state === "failed" ? "offline" : ""}`}
-								>
-									{t(stateNames[item.state])}
-								</span>
+								<TaskState state={item.state} />
 							</button>
 						))}
 					</section>
@@ -174,11 +192,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									<p>
 										{task.resourceTitle} · {new Date(task.createdAt).toLocaleString(locale)}
 									</p>
-									<span
-										className={`status-badge ${task.state === "succeeded" ? "online" : task.state === "failed" ? "offline" : ""}`}
-									>
-										{t(stateNames[task.state])}
-									</span>
+									<TaskState state={task.state} />
 								</div>
 								<div className="heading-actions">
 									<button className="button secondary" type="button" onClick={() => setSelected(undefined)}>
