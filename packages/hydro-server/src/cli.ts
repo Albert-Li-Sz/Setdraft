@@ -2,14 +2,14 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_HYDRO_JUDGE_LIMITS, type HydroJudgeLimits } from "@setdraft/authoring";
 import { ChatService } from "./chat.ts";
-import { migrateEnvironment, workspaceRoot as resolveWorkspaceRoot } from "./environment.ts";
+import { workspaceRoot as resolveWorkspaceRoot } from "./environment.ts";
 import { IdentityStore } from "./identity.ts";
 import { ManualProjectStore } from "./manual-projects.ts";
+import { acquireApplicationLease, closeDatabasePools } from "./postgres.ts";
 import { createHydroServer } from "./server.ts";
 import { acquireServerLock } from "./server-lock.ts";
 import { WorkspaceDatabase } from "./workspace-db.ts";
 
-migrateEnvironment();
 const portValue = Number.parseInt(process.env.PORT ?? "4321", 10);
 if (!Number.isSafeInteger(portValue) || portValue < 1 || portValue > 65535) throw new Error("PORT must be 1-65535.");
 const host = process.env.SETDRAFT_HOST || "0.0.0.0";
@@ -27,8 +27,10 @@ const projectRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)))
 const workspaceRoot = resolveWorkspaceRoot(projectRoot);
 const releaseLock = process.env.SETDRAFT_CONTAINER_LOCKED === "1" ? () => {} : acquireServerLock(workspaceRoot);
 process.once("exit", releaseLock);
+const releaseDatabaseLease = await acquireApplicationLease(workspaceRoot);
 const identity = new IdentityStore(workspaceRoot);
-if (!identity.initialized) console.log(`Setdraft 一次性安装码（24 小时有效）：${identity.rotateSetupToken()}`);
+if (!(await identity.isInitialized()))
+	console.log(`Setdraft 一次性安装码（24 小时有效）：${await identity.rotateSetupToken()}`);
 const database = new WorkspaceDatabase(workspaceRoot);
 const projects = new ManualProjectStore({
 	root: workspaceRoot,
@@ -47,7 +49,7 @@ const chat = new ChatService({
 });
 await chat.loadConfiguration();
 
-const server = createHydroServer({
+const server = await createHydroServer({
 	identity,
 	publicOrigin: process.env.SETDRAFT_PUBLIC_ORIGIN,
 	staticRoot: process.env.SETDRAFT_WEB_ROOT === undefined ? undefined : resolve(process.env.SETDRAFT_WEB_ROOT),
@@ -62,8 +64,9 @@ server.listen(portValue, host, () => {
 for (const signal of ["SIGTERM", "SIGINT"] as const)
 	process.once(signal, () => {
 		server.close(() => {
-			void server.closeWorkspaces().finally(() => {
-				database.db.close();
+			void server.closeWorkspaces().finally(async () => {
+				await releaseDatabaseLease();
+				await closeDatabasePools();
 				identity.close();
 				process.exit(0);
 			});

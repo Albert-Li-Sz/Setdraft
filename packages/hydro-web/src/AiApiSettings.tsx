@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
 import { type AiConfiguration, type AiProfile, apiUrl, readAiConfiguration } from "./platform.ts";
+import { WorkspacePausedContext } from "./workspace-paused.ts";
 
 type ConfigurationStatus = "loading" | "ready" | "saving" | "error";
 
@@ -31,6 +32,8 @@ function parseTokenLength(value: string, minimum: number, maximum: number): numb
 
 export function AiApiSettings(props: AiApiSettingsProps) {
 	const { t } = useLocale();
+	const paused = useContext(WorkspacePausedContext);
+	const loaded = useRef(false);
 	const [configuration, setConfiguration] = useState<AiConfiguration>();
 	const [status, setStatus] = useState<ConfigurationStatus>("loading");
 	const [selectedId, setSelectedId] = useState("");
@@ -56,6 +59,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 	}, []);
 
 	useEffect(() => {
+		if (paused) return;
 		const controller = new AbortController();
 		setStatus("loading");
 		setMessage("正在读取 AI 对话配置……");
@@ -67,10 +71,13 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 				const parsed = readAiConfiguration(body);
 				if (parsed === undefined) throw new Error("服务端返回了无法识别的 AI 配置。");
 				setConfiguration(parsed);
-				selectProfile(
-					parsed,
-					parsed.profiles.find((item) => item.id === parsed.defaultProfileId) ?? parsed.profiles[0],
-				);
+				if (!loaded.current) {
+					selectProfile(
+						parsed,
+						parsed.profiles.find((item) => item.id === parsed.defaultProfileId) ?? parsed.profiles[0],
+					);
+					loaded.current = true;
+				}
 				setStatus("ready");
 				setMessage(
 					parsed.error ??
@@ -85,7 +92,7 @@ export function AiApiSettings(props: AiApiSettingsProps) {
 			}
 		})();
 		return () => controller.abort();
-	}, [props.apiOrigin, selectProfile]);
+	}, [props.apiOrigin, selectProfile, paused]);
 
 	const selectedProfile = configuration?.profiles.find((item) => item.id === selectedId);
 

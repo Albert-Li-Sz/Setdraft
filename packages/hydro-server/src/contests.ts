@@ -65,16 +65,16 @@ export class ContestStore {
 
 	private async save(draft: ContestDraft): Promise<void> {
 		const knownVersion = this.documentVersions.get(draft);
-		const expectedVersion = knownVersion ?? this.projects.database.version("contest", draft.id) ?? -1;
+		const expectedVersion = knownVersion ?? (await this.projects.database.version("contest", draft.id)) ?? -1;
 		try {
-			this.projects.database.transaction(() => {
+			await this.projects.database.transaction(async () => {
 				if (
-					this.projects.database.db
-						.prepare("SELECT 1 FROM tasks WHERE resource=? AND state='running'")
-						.get(`contest:${draft.id}`)
+					await this.projects.database.sql.one("SELECT 1 FROM tasks WHERE resource=$1 AND state='running'", [
+						`contest:${draft.id}`,
+					])
 				)
 					throw new ManualProjectError("竞赛正在导出，请稍后修改。", 409);
-				this.projects.database.put("contest", draft.id, draft, expectedVersion);
+				await this.projects.database.put("contest", draft.id, draft, expectedVersion);
 			});
 		} catch (error) {
 			if (String(error).includes("VERSION_CONFLICT")) {
@@ -86,7 +86,6 @@ export class ContestStore {
 	}
 
 	async create(value: unknown): Promise<ContestDraft> {
-		if (this.projects.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		if (typeof value !== "object" || value === null || Array.isArray(value))
 			throw new ManualProjectError("竞赛资料无效。");
 		const input = value as Record<string, unknown>;
@@ -113,7 +112,7 @@ export class ContestStore {
 	}
 
 	async get(id: string): Promise<ContestDraft> {
-		const document = this.projects.database.getVersioned<ContestDraft>("contest", id);
+		const document = await this.projects.database.getVersioned<ContestDraft>("contest", id);
 		if (!document) throw new ManualProjectError("竞赛不存在。", 404);
 		const { value: draft, version } = document;
 		const snapshot = { ...draft, revision: draft.revision ?? 0, colorNames: draft.colorNames ?? {} };
@@ -123,7 +122,7 @@ export class ContestStore {
 
 	async list(): Promise<ContestDraft[]> {
 		const drafts = await Promise.all(
-			this.projects.database.list<ContestDraft>("contest").map((item) => this.get(item.id)),
+			(await this.projects.database.list<ContestDraft>("contest")).map(async (item) => await this.get(item.id)),
 		);
 		return drafts.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	}
@@ -132,7 +131,7 @@ export class ContestStore {
 		if (releaseIds.length > 100 || new Set(releaseIds).size !== releaseIds.length) {
 			throw new ManualProjectError("竞赛最多 100 题，且发布版本不能重复。", 422);
 		}
-		const releases = await Promise.all(releaseIds.map((id) => this.projects.releases.release(id)));
+		const releases = await Promise.all(releaseIds.map(async (id) => await this.projects.releases.release(id)));
 		if (releases.some((release) => !isContestReadyRelease(release))) {
 			throw new ManualProjectError(
 				"竞赛只能使用已选择赛制、通过完整 Checker 验证的新发布版本；旧题请重新验证并发布。",
@@ -146,11 +145,11 @@ export class ContestStore {
 	}
 
 	async update(id: string, value: unknown): Promise<ContestDraft> {
-		if (this.projects.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		if (this.busy.has(id)) throw new ManualProjectError("竞赛正在导出，请稍后修改。", 409);
-		const running = this.projects.database.db
-			.prepare("SELECT id FROM tasks WHERE resource=? AND state='running'")
-			.get(`contest:${id}`) as { id: string } | undefined;
+		const running = (await this.projects.database.sql.one(
+			"SELECT id FROM tasks WHERE resource=$1 AND state='running'",
+			[`contest:${id}`],
+		)) as { id: string } | undefined;
 		if (running) throw new ManualProjectError("竞赛正在导出，请稍后修改。", 409);
 		if (typeof value !== "object" || value === null || Array.isArray(value))
 			throw new ManualProjectError("竞赛资料无效。");
@@ -220,7 +219,6 @@ export class ContestStore {
 	}
 
 	async export(id: string, format: ContestFormat, context?: ExecutionContext, name?: string): Promise<ContestRelease> {
-		if (this.projects.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		if (this.busy.has(id)) throw new ManualProjectError("竞赛正在导出。", 409);
 		this.busy.add(id);
 		let stage: string | undefined;
@@ -302,11 +300,11 @@ export class ContestStore {
 						source: { path: join(releaseRoot, "bundle.zip") },
 					},
 				],
-				() => {
+				async () => {
 					context?.signal.throwIfAborted();
-					if (this.projects.database.version("contest", id) !== this.documentVersions.get(draft))
+					if ((await this.projects.database.version("contest", id)) !== this.documentVersions.get(draft))
 						throw new ManualProjectError("竞赛版本已变化，请重试导出。", 409);
-					this.projects.database.put("contest-release", contestRelease.id, contestRelease);
+					await this.projects.database.put("contest-release", contestRelease.id, contestRelease);
 				},
 			);
 			releaseRoot = undefined;
@@ -316,8 +314,8 @@ export class ContestStore {
 			if (stage) await rm(stage, { recursive: true, force: true });
 			if (releaseRoot) {
 				if (archiveId) {
-					this.projects.database.delete("contest-release", archiveId);
-					this.projects.database.removeOwnerFiles("contest-bundle", archiveId);
+					await this.projects.database.delete("contest-release", archiveId);
+					await this.projects.database.removeOwnerFiles("contest-bundle", archiveId);
 				}
 				await rm(releaseRoot, { recursive: true, force: true });
 			}
@@ -325,33 +323,33 @@ export class ContestStore {
 	}
 
 	async release(id: string): Promise<ContestRelease> {
-		const stored = this.projects.database.get<ContestRelease>("contest-release", id);
+		const stored = await this.projects.database.get<ContestRelease>("contest-release", id);
 		if (!stored) throw new ManualProjectError("竞赛发布记录不存在。", 404);
 		return stored;
 	}
 
 	async listReleases(): Promise<ContestRelease[]> {
-		const releases = this.projects.database.list<ContestRelease>("contest-release");
+		const releases = await this.projects.database.list<ContestRelease>("contest-release");
 		return releases.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 	}
 
 	async releaseFile(id: string): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
 		const path =
-			this.projects.database.filePath("contest-bundle", id, "bundle.zip") ??
+			(await this.projects.database.filePath("contest-bundle", id, "bundle.zip")) ??
 			join(this.releaseDirectory(id), "bundle.zip");
 		return { path, size: (await stat(path)).size, name: `${release.slug}.${release.format}.contest.zip` };
 	}
 
 	async delete(id: string): Promise<void> {
-		if (this.projects.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		if (this.busy.has(id)) throw new ManualProjectError("竞赛正在导出。", 409);
-		const running = this.projects.database.db
-			.prepare("SELECT id FROM tasks WHERE resource=? AND state='running'")
-			.get(`contest:${id}`);
+		const running = await this.projects.database.sql.one(
+			"SELECT id FROM tasks WHERE resource=$1 AND state='running'",
+			[`contest:${id}`],
+		);
 		if (running) throw new ManualProjectError("竞赛正在导出。", 409);
 		await this.get(id);
-		this.projects.database.delete("contest", id);
+		await this.projects.database.delete("contest", id);
 		await rm(this.draftDirectory(id), { recursive: true, force: true });
 	}
 

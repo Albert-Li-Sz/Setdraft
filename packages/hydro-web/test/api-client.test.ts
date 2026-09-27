@@ -21,7 +21,7 @@ describe("shared API client", () => {
 			projectFixture(),
 		);
 		await expect(requestJson("/api/projects/project", undefined, readProjectSnapshot)).rejects.toThrow(
-			"草稿格式无效",
+			"题目格式无效",
 		);
 		await expect(requestJson("/api/projects/project")).rejects.toBeInstanceOf(RevisionConflict);
 		try {

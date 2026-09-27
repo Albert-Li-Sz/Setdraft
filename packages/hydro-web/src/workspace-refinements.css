@@ -216,3 +216,56 @@
 .contest-details-form .field {
 	flex: 1 1 180px;
 }
+
+.chat-search-query {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 0 12px 8px;
+	color: #737373;
+	font-size: 12px;
+}
+.chat-search-query input {
+	flex: 1;
+	min-width: 0;
+	border: 0;
+	background: transparent;
+	padding: 8px 0;
+	font-size: 12px;
+}
+.chat-search-sources {
+	border-top: 1px solid #e6e6e6;
+	margin-top: 18px;
+	padding-top: 12px;
+	font-size: 13px;
+}
+.chat-search-sources summary {
+	cursor: pointer;
+	color: #555;
+}
+.chat-search-sources ol {
+	padding-left: 20px;
+}
+.chat-search-sources li {
+	padding: 8px 0;
+}
+.chat-search-sources li p {
+	color: #777;
+	font-size: 12px;
+	line-height: 1.6;
+}
+.chat-search-warning {
+	display: block;
+	padding: 10px 0;
+	color: #777;
+}
+@media (max-width: 640px) {
+	.chat-search-query {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 0;
+	}
+	.chat-search-query input {
+		width: 100%;
+	}
+}

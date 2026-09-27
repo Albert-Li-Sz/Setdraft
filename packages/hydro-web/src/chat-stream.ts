@@ -4,7 +4,7 @@ import type { ChatConversation } from "./platform.ts";
 export type { ChatStreamEvent } from "@setdraft/contracts";
 
 function decodeEvent(name: string, data: string): ChatStreamEvent | undefined {
-	if (!(["start", "delta", "done", "error"] as string[]).includes(name)) return undefined;
+	if (!(["start", "delta", "done", "error", "search"] as string[]).includes(name)) return undefined;
 	let payload: unknown;
 	try {
 		payload = JSON.parse(data) as unknown;
@@ -15,6 +15,17 @@ function decodeEvent(name: string, data: string): ChatStreamEvent | undefined {
 		throw new Error("服务端返回的流式事件格式无效。");
 	}
 	const record = payload as Record<string, unknown>;
+	if (
+		name === "search" &&
+		["searching", "complete", "failed"].includes(String(record.phase)) &&
+		typeof record.query === "string"
+	)
+		return {
+			type: "search",
+			phase: record.phase as "searching" | "complete" | "failed",
+			query: record.query,
+			message: typeof record.message === "string" ? record.message : undefined,
+		};
 	if (name === "delta" && typeof record.delta === "string") return { type: "delta", delta: record.delta };
 	if (name === "error" && typeof record.message === "string") return { type: "error", message: record.message };
 	if (name === "start" || name === "done") {

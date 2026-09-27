@@ -38,8 +38,8 @@ it("rejects a racing upload with the committed file view and preserves the winne
 		await first.database.pruneBlobs();
 		expect(await first.database.readBuffer("manual", project.id, "1.in")).toEqual(Buffer.from("old"));
 	} finally {
-		first.database.db.close();
-		second.database.db.close();
+		first.database.sql.close();
+		second.database.sql.close();
 		await rm(root, { recursive: true, force: true });
 	}
 });

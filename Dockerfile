@@ -1,5 +1,6 @@
 ARG NODE_IMAGE=node:24.18.0-bookworm-slim
 ARG DOCKER_CLI_IMAGE=docker:29-cli
+ARG POSTGRES_IMAGE=postgres:18-bookworm@sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
@@ -14,7 +15,7 @@ RUN npm ci --registry="$NPM_REGISTRY" --ignore-scripts --no-audit --no-fund --fe
     && npm run build --workspace=@setdraft/server \
     && npm run build --workspace=@setdraft/web \
     && npm prune --omit=dev --ignore-scripts --no-audit --no-fund
-FROM ${NODE_IMAGE}
+FROM ${NODE_IMAGE} AS web
 WORKDIR /app
 ENV NODE_ENV=production SETDRAFT_HOST=0.0.0.0 SETDRAFT_WEB_ROOT=/app/packages/hydro-web/dist
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
@@ -27,3 +28,9 @@ RUN command -v flock && chmod +x /usr/local/bin/setdraft-entrypoint
 EXPOSE 4321
 ENTRYPOINT ["setdraft-entrypoint"]
 CMD ["node", "packages/hydro-server/dist/cli.js"]
+
+FROM ${POSTGRES_IMAGE} AS maintenance
+WORKDIR /app
+COPY --from=web /usr/local/bin/node /usr/local/bin/node
+COPY --from=web /app /app
+ENTRYPOINT ["node", "scripts/compose-maintenance.mjs"]

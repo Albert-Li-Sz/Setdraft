@@ -1,6 +1,6 @@
 # Setdraft server
 
-The local API stores problems, tasks, chats, contests and releases in `workspace.sqlite`. Large files live in SHA-256 blobs under the workspace root. Existing file-based records are migrated on first startup; their original directories remain available as rollback copies and for historical downloads. The server can start without Docker. `GET /api/health` is an anonymous liveness probe returning only `{ "status": "ok" }`. Authenticated `GET /api/system/status` includes sandbox readiness.
+The API stores identity, sessions, problems, tasks, chats, contests and releases in PostgreSQL 18. Files live in immutable SHA-256 blobs under `users/<userId>/`. SQLite is no longer supported or imported. `GET /api/health` checks the database and returns only `{ "status": "ok" }`; authenticated `/api/system/status` adds sandbox readiness.
 
 The default Docker Compose launcher builds the frontend and serves it on `0.0.0.0:4321` by default (`SETDRAFT_HOST=127.0.0.1` restricts it to loopback); `--native --mode dev` runs Vite on port 5173. See the repository README for install, upgrade, doctor, backup, restore and cleanup commands.
 
@@ -8,7 +8,7 @@ The default Docker Compose launcher builds the frontend and serves it on `0.0.0.
 
 | Module | Responsibility |
 | --- | --- |
-| `workspace-schema.ts` | Versioned SQLite schema migrations, run before serving requests |
+| `database-schema.ts`, `postgres.ts` | Versioned PostgreSQL schema, restricted connection pool and forced row-level security, run before serving requests |
 | `workspace-db.ts` | Documents, optimistic versions, immutable blobs and garbage collection |
 | `manual-projects.ts` | Problem edits, test files, subtask assignments and revision checks |
 | `project-pipeline.ts` | Generation, verification and publication of a frozen problem |
@@ -18,13 +18,13 @@ The default Docker Compose launcher builds the frontend and serves it on `0.0.0.
 | `execution-context.ts`, `event-stream.ts` | Explicit execution context and paginated SSE replay |
 | `hydro-contracts` | Shared wire types and snapshot validation, without server dependencies |
 
-`identity.ts` owns the independent identity database; `auth-http.ts` validates origins, cookies, CSRF and account roles. `workspace-registry.ts` selects services using the verified session user. Client-supplied user IDs never select the source workspace. The copy endpoint accepts a recipient ID only to create a new independent problem in that recipient’s workspace; it never returns their content. The first administrator is permanently bound to the legacy root; other users have `users/<id>/workspace.sqlite` and files. `ai-configuration.ts` is shared through identity storage, while chat content remains private. The native CLI uses a process lock; the container entrypoint uses a kernel file lock that survives PID namespace changes.
+`identity.ts` owns the independent identity database; `auth-http.ts` validates origins, cookies, CSRF and account roles. `workspace-registry.ts` selects services using the verified session user. Client-supplied user IDs never select the source workspace. The copy endpoint accepts a recipient ID only to create a new independent problem in that recipient’s workspace; it never returns their content. Every account has its own UUID-scoped rows and `users/<id>/` files. Team AI and web-search settings live in the identity schema. Web receives only the restricted `setdraft_app` role; migrations and offline maintenance use a separate administrator connection. PostgreSQL advisory locks and the filesystem lock enforce one active API process per deployment.
 
 `execution-scheduler.ts` admits at most two sandbox tasks and four AI calls globally, one of each per user. Connectivity probes share the AI scheduler; image builds run exclusively against sandbox work. Logout leaves durable work running, while disabling an account cancels its unfinished work. Restart recovers queued work across all users and marks interrupted executions for explicit retry.
 
-Each workspace injects one `WorkspaceDatabase` into its project and chat services. Blob writes prepare complete files in `.blob-staging` before taking a short SQLite write lock. `commitFiles` publishes immutable blobs, file references and document changes together; a failed commit leaves at most unreferenced blobs. Garbage collection rechecks references under that same lock. Transaction callbacks are synchronous: never perform asynchronous work inside them.
+Each workspace injects one `WorkspaceDatabase` into its project and chat services. Blob writes prepare complete files in `.blob-staging` before taking a short PostgreSQL advisory transaction lock. `commitFiles` publishes immutable blobs, file references and document changes together; a failed commit leaves at most unreferenced blobs. Garbage collection rechecks references under that same lock. Transaction callbacks are asynchronous and retain the same client and user context through AsyncLocalStorage. Stage slow filesystem work before the transaction.
 
-New problem files are read from the blob index. Legacy directories are migration input, not a second live database; release listings do not rediscover deleted records from remaining directories. Release source trees remain immutable inputs for format exporters and must still be included in workspace backups. A process crash can leave temporary staging directories; current blob garbage collection does not remove those directories automatically.
+New problem files are read from the blob index. Fresh deployments do not import legacy directories; release listings do not rediscover deleted records from remaining directories. Release source trees remain immutable inputs for format exporters and must still be included in workspace backups. A process crash can leave temporary staging directories; current blob garbage collection does not remove those directories automatically.
 
 Task transitions and their persisted events commit together. SSE drains all pages after the supplied cursor before closing a completed stream, and respects socket backpressure. Sandbox code receives an `ExecutionContext` explicitly and has no dependency on the task queue.
 
@@ -86,3 +86,10 @@ Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sa
 ## AI API
 
 Administrators use `PUT/DELETE /api/ai/config` to manage named profiles for OpenAI Completions, OpenAI Responses and Anthropic Messages. `GET /api/ai/config` supplies model choices to members, omitting credentials and private upstream addresses. Administrator-only `POST /api/ai/config/:id/test` makes an explicit short connectivity test; it never runs automatically. `POST /api/chats/:id/messages` accepts multipart fields `requestId`, `message`, `profileId`, optional `contextSnapshot` and up to four `images` files. It returns `202` with a durable request record. `GET /api/chats/:id/requests/:requestId/events` streams `start`, `delta`, `done` and `error` events. Reconnect using `Last-Event-ID` or `?after=`; replay does not invoke the model again. Failed requests can be retried through `POST /retry` with the same request ID. Model inactivity is aborted after 45 seconds. Assistant messages include token usage when the provider reports it.
+
+
+## Web search and database tests
+
+`GET /api/ai/search` returns availability (administrator responses include provider/quota settings); `PUT /api/ai/search` and `POST /api/ai/search` are administrator-only configuration and connectivity checks. Chat submissions accept `webSearch` and `searchQuery`. Persisted `search` events report searching, completion or failure. Search results belong to the requesting user and request; retries reuse them. SearXNG is the default, Tavily is optional. Credentials never enter client snapshots.
+
+`npm test --workspace=@setdraft/server` starts a disposable PostgreSQL Docker container, creates a restricted application role and isolates each test in separate schemas, then removes the container. Docker is required. To use an existing dedicated test database, set `SETDRAFT_TEST_DATABASE_URL` (maintenance role) and `SETDRAFT_TEST_APP_PASSWORD` (for a pre-created `setdraft_app` role). Never point these variables at production. Model and search provider tests use mocks; sandbox integration tests require `setdraft/sandbox:local`.

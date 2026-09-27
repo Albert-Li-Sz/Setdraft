@@ -11,8 +11,8 @@ export function streamEvents<T extends SequencedEvent>(
 	response: ServerResponse,
 	options: {
 		after: number;
-		read(after: number): T[];
-		isTerminal(): boolean;
+		read(after: number): T[] | Promise<T[]>;
+		isTerminal(): boolean | Promise<boolean>;
 		data(event: T): unknown;
 		pollMs?: number;
 	},
@@ -34,8 +34,8 @@ export function streamEvents<T extends SequencedEvent>(
 		try {
 			while (!closed) {
 				// Read terminal state first, so an event committed concurrently cannot be skipped.
-				const terminal = options.isTerminal();
-				const events = options.read(after);
+				const terminal = await options.isTerminal();
+				const events = await options.read(after);
 				if (events.length === 0) {
 					if (terminal) response.end();
 					else timer = setTimeout(() => void push(), options.pollMs ?? 250);

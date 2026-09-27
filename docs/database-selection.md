@@ -1,42 +1,17 @@
-# 数据库基础选型
+# PostgreSQL 数据存储
 
-状态：完成选型与迁移设计；当前版本仍运行 SQLite WAL，尚未实施 PostgreSQL 迁移。
+已实施 PostgreSQL 18，作为唯一关系数据库。此版本按全新部署处理，不导入或保留旧 SQLite 业务数据；安装器本身不会擅自删除已有目录。
 
-面向后续多人高并发、独立 worker 和多实例部署，选择 **PostgreSQL 18** 作为目标关系数据库。当前 Docker Compose 保留已在运行的 SQLite 数据，避免只增加一个无人使用的 PostgreSQL 容器，或把同步 SQLite 调用伪装成支持 PostgreSQL 的抽象。
+`identity` schema 保存账号、会话摘要、安装状态、审计、登录限流、团队配置和搜索额度。`workspace` schema 保存 JSONB 文档、文件引用、任务和聊天请求及其事件；所有业务表的主键包含 `account_id`，事件外键也包含同一用户 ID。JSONB 赛制索引为后续服务器端筛选提供基础。
 
-## 依据与取舍
+Web 使用无超级用户权限、无 BYPASSRLS 的 `setdraft_app` 角色；启动时校验角色。业务表启用并强制 RLS，用户上下文仅在事务内通过 `set_config(..., true)` 设置，连接归还前完成提交或回滚。服务器验证会话后选择工作区，浏览器不能改变源工作区身份。迁移及备份容器单独持有维护凭据。
 
-SQLite 适合同机应用服务器、嵌入式存储；单数据库文件同时只能有一个写入者。现有每用户工作区分库降低了争用，适合目前单进程小团队部署。扩大到多个应用实例或大量并发写入时，客户端/服务器数据库更合适。[SQLite 官方适用范围](https://www.sqlite.org/whentouse.html)
+`PostgresScope` 提供真正异步的连接池和事务，嵌套事务使用保存点。文档更新通过版本比较实现 CAS；数据库冲突沿用 HTTP 409。文件先复制到临时目录并计算哈希，再在短事务中原子发布不可变文件和引用；回滚时未引用文件可由 GC 清理。GC 和文件发布共享用户级事务锁。
 
-PostgreSQL 的事务、约束及行级安全适合将用户工作区整合到共享数据库。启用 RLS 后可以对行设置读写策略，但表所有者和 BYPASSRLS 等特权角色可以绕过；运行应用必须使用受限角色，迁移角色单独保存。[PostgreSQL 行级安全](https://www.postgresql.org/docs/18/ddl-rowsecurity.html)
+部署保持单 Web 进程和本地文件存储。PostgreSQL 会话 advisory lock 阻止其他 Web 或维护进程同时接管同一数据库；失去数据库租约时停止服务。内存调度限制全站 2 个沙箱、4 个 AI、每用户各 1 个。重启恢复排队任务，已中断执行标为可重试。更换数据库不代表已支持多 Web 实例或独立 worker；这些需要额外的分布式调度及共享对象存储。
 
-这些是基于当前代码和扩展方向的选择，不代表仅更换数据库就能支持多实例；任务抢占、文件存储和全站调度也需要同步改造。
+Compose 初始化顺序是 PostgreSQL 健康检查 → 一次性 schema 迁移 → Web。数据库和搜索服务不发布宿主机端口。PostgreSQL 使用持久卷，所有用户文件在单独的宿主机目录。
 
-| 方案 | 本项目结论 |
-| --- | --- |
-| SQLite WAL + 独立个人库 | 当前默认，迁移前保留；本地磁盘、单 API 进程 |
-| PostgreSQL 18 | 后续团队部署目标，支持统一事务、查询与行级隔离 |
-| MySQL / MariaDB | 可行，但无须为同一产品维护第二套服务器数据库实现 |
-| MongoDB / Redis | 不作为题目、身份与发布历史的主数据库；当前业务依赖事务和关系约束 |
+备份维护先停止 Web 并取得相同服务锁，使用 PostgreSQL 18 的 `pg_dump` / `pg_restore`，同时复制用户文件并验证 SHA-256 清单。恢复前先保存当前完整备份；失败时恢复该备份，成功后撤销旧会话。数据库转储不包含外部文件，不能仅备份数据库卷。
 
-## 模块与模型
-
-不把 `DatabaseSync.prepare()` 原样套一层接口。按完整业务事务设计异步存储入口：IdentityRepository、ProjectRepository、ReleaseRepository、ContestRepository、JobRepository、ChatRepository；例如 `saveProject(expectedRevision, changes)` 在一次事务中比较版本、保存文档及文件引用，冲突返回原有 409 语义。
-
-身份和业务表分别放入 identity/workspace schema。业务表包含不可空 owner_id；项目、版本、竞赛、任务与聊天的外键包含 owner_id，防止跨用户关联。用结构化列保存赛制、标题、状态、创建时间和 revision，可变题面配置放 JSONB；列表检索由索引支持，避免逐个反序列化整个文档。团队管理员权限仅管理身份和配置，不赋予跨用户读取内容的数据库策略。
-
-用户身份来自已验证会话，在事务内使用 `SET LOCAL` 设置上下文；连接归还池前事务结束，不能依赖长连接残留的用户变量。启用并强制 RLS，应用角色无所有权、无 BYPASSRLS。文件继续使用内容哈希，先写临时文件，事务提交引用，再完成原子落盘；失败残留由回收器处理。多机部署另迁移到对象存储，不能将 SQLite 或本地 blobs 直接放 NFS 作为扩展方案。
-
-任务使用数据库事务抢占和有期限的租约，明确 heartbeat、超时、幂等结果提交。全站 2 个沙箱/4 个 AI、每用户 1 个的限制必须移到跨实例协调层；不能继续依赖 Node 内存队列。SSE 仍从持久化事件序号续接，通知只用于唤醒。
-
-## 迁移与验收
-
-1. 先建立异步事务边界，保留当前 SQLite 实现的契约测试；不同时改 UI 协议。
-2. 新建 PostgreSQL schema、索引、RLS、版本迁移与测试专用实例；A/B 身份隔离、同名文件、下载和聊天全部验证。
-3. 停止写入，完整备份身份库、所有个人库和 blobs；离线导入固定用户绑定、原 ID、revision、时间与文件哈希。迁移工具记录版本和检查点，允许重复运行；导入后清空会话和一次性安装码。
-4. 比较每用户各实体数量、引用关系、发布包 SHA-256，抽查历史包下载/恢复；做并发冲突、进程中断和队列恢复试验。通过后切换配置，原目录只读保留。
-5. 初次切换失败时回到原 SQLite 快照；PostgreSQL 已产生新写入后不能直接切回旧快照，须维护窗口导出增量或恢复经确认的备份。
-
-PostgreSQL 使用 pg_dump/pg_restore 做逻辑备份，同时备份文件对象和部署配置；数据库备份自身不包含题目 ZIP/PDF 等外部文件。[官方备份说明](https://www.postgresql.org/docs/18/backup-dump.html)
-
-实际迁移的完成标准：跨用户隔离、CAS、任务租约、断电恢复、旧包哈希和恢复演练全部通过，再启用 PostgreSQL Compose 服务。当前 Compose 使用文件锁确保一个数据目录只有一个容器服务，维护工具离线验证全部 SQLite 和文件哈希，作为迁移前可交付的部署基础。
+参考：[PostgreSQL RLS](https://www.postgresql.org/docs/18/ddl-rowsecurity.html)、[事务客户端](https://node-postgres.com/features/transactions)、[逻辑备份](https://www.postgresql.org/docs/18/backup-dump.html)。

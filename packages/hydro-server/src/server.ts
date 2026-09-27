@@ -117,6 +117,8 @@ async function readChatSubmission(
 		contextSnapshot: field("contextSnapshot"),
 		profileId: field("profileId"),
 		images,
+		webSearch: field("webSearch") === "true",
+		searchQuery: field("searchQuery"),
 	};
 }
 
@@ -171,6 +173,8 @@ function readChatMessage(value: unknown): {
 	contextSnapshot?: string;
 	profileId?: string;
 	images?: ChatImageUpload[];
+	webSearch?: boolean;
+	searchQuery?: string;
 } {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ChatError("消息格式无效。");
 	const record = value as Record<string, unknown>;
@@ -182,6 +186,10 @@ function readChatMessage(value: unknown): {
 		throw new ChatError("AI 配置 ID 无效。");
 	}
 	if (record.images !== undefined && !Array.isArray(record.images)) throw new ChatError("图片列表格式无效。");
+	if (record.webSearch !== undefined && typeof record.webSearch !== "boolean")
+		throw new ChatError("搜索开关无效。", 422);
+	if (record.searchQuery !== undefined && (typeof record.searchQuery !== "string" || record.searchQuery.length > 500))
+		throw new ChatError("搜索关键词最多 500 个字符。", 422);
 	const images = record.images as unknown[] | undefined;
 	if (
 		images?.some((image) => {
@@ -200,13 +208,17 @@ function readChatMessage(value: unknown): {
 		contextSnapshot: record.contextSnapshot as string | undefined,
 		profileId: record.profileId as string | undefined,
 		images: images as ChatImageUpload[] | undefined,
+		webSearch: record.webSearch as boolean | undefined,
+		searchQuery: record.searchQuery as string | undefined,
 	};
 }
 
-export function createHydroServer(options: HydroServerOptions): Server & { closeWorkspaces(): Promise<void> } {
+export async function createHydroServer(
+	options: HydroServerOptions,
+): Promise<Server & { closeWorkspaces(): Promise<void> }> {
 	const maxRequestBytes = options.maxRequestBytes ?? 32 * 1024 * 1024;
 	const registry = new WorkspaceRegistry(options.identity, options.projects, options.chat);
-	const ready = registry.start();
+	await registry.start();
 	const auth = new AuthHttp(options.identity, registry, options.publicOrigin);
 	const server = createServer(async (request, response) => {
 		try {
@@ -214,7 +226,6 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 			response.setHeader("x-content-type-options", "nosniff");
 			response.setHeader("referrer-policy", "same-origin");
 			response.setHeader("x-frame-options", "DENY");
-			await ready;
 			if (!url.pathname.startsWith("/api/")) {
 				if (request.method === "GET" && options.staticRoot) {
 					if (await serveStatic(response, options.staticRoot, url.pathname)) return;
@@ -230,18 +241,19 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 				return;
 			}
 			if (request.method === "GET" && url.pathname === "/api/health") {
+				await options.identity.sql.one("SELECT 1");
 				sendJson(response, 200, { status: "ok" });
 				return;
 			}
 			if (await auth.handle(request, response, url.pathname)) return;
-			const access = auth.require(request);
+			const access = await auth.require(request);
 			response.setHeader("x-setdraft-user", access.user.id);
-			const { projects, chat, contests, tasks, chatRequests } = registry.get(access.user);
+			const { projects, chat, contests, tasks, chatRequests } = await registry.get(access.user);
 			if (
 				(url.pathname.startsWith("/api/ai/config") && request.method !== "GET") ||
 				url.pathname === "/api/sandbox/build"
 			)
-				options.identity.requireAdmin(access.user.id);
+				await options.identity.requireAdmin(access.user.id);
 			auth.watch(access, response);
 			if (request.method === "GET" && url.pathname === "/api/system/status") {
 				let sandbox: { available: boolean; image: string; message: string; state: string };
@@ -289,33 +301,55 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 				return;
 			}
 			if (url.pathname === "/api/tasks" && request.method === "GET") {
-				sendJson(response, 200, { tasks: tasks.list() });
+				sendJson(response, 200, { tasks: await tasks.list() });
 				return;
 			}
 			const taskRoute = /^\/api\/tasks\/([^/]+)(?:\/(events|cancel|retry))?$/u.exec(url.pathname);
 			if (taskRoute) {
 				const id = taskRoute[1];
 				const action = taskRoute[2];
-				if (request.method === "GET" && !action) sendJson(response, 200, tasks.get(id));
+				if (request.method === "GET" && !action) sendJson(response, 200, await tasks.get(id));
 				else if (request.method === "POST" && action === "cancel") sendJson(response, 200, await tasks.cancel(id));
 				else if (request.method === "POST" && action === "retry") {
-					if (tasks.get(id).kind === "image-build") options.identity.requireAdmin(access.user.id);
+					if ((await tasks.get(id)).kind === "image-build") await options.identity.requireAdmin(access.user.id);
 					sendJson(response, 202, { task: await tasks.retry(id) });
 				} else if (request.method === "GET" && action === "events") {
 					const after = Number(request.headers["last-event-id"] ?? url.searchParams.get("after") ?? 0);
 					if (!Number.isSafeInteger(after) || after < 0) throw new ManualProjectError("事件序号无效。", 422);
-					tasks.get(id);
+					await tasks.get(id);
 					streamEvents(response, {
 						after,
-						read: (cursor) => tasks.events(id, cursor),
-						isTerminal: () =>
-							["succeeded", "failed", "cancelled", "stale", "interrupted"].includes(tasks.get(id).state),
+						read: async (cursor) => await tasks.events(id, cursor),
+						isTerminal: async () =>
+							["succeeded", "failed", "cancelled", "stale", "interrupted"].includes((await tasks.get(id)).state),
 						data: (event) => event,
 					});
 					return;
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
+			if (url.pathname === "/api/ai/search") {
+				if (request.method === "GET") {
+					const config = await registry.search.status();
+					sendJson(
+						response,
+						200,
+						access.user.role === "admin" ? config : { available: config.available, enabled: config.enabled },
+					);
+				} else if (request.method === "PUT") {
+					await options.identity.requireAdmin(access.user.id);
+					const input = await readJson(request, 4096);
+					if (!input || typeof input !== "object" || Array.isArray(input))
+						throw new ChatError("搜索配置无效。", 422);
+					await options.identity.requireAdmin(access.user.id);
+					sendJson(response, 200, await registry.search.configure(input as Record<string, unknown>));
+				} else if (request.method === "POST") {
+					await options.identity.requireAdmin(access.user.id);
+					sendJson(response, 200, await registry.testSearch(access.user));
+				} else sendJson(response, 405, { message: "不支持该方法。" });
+				return;
+			}
+
 			if (url.pathname === "/api/ai/config") {
 				if (request.method === "GET") {
 					const configuration = chat.getConfiguration();
@@ -331,7 +365,7 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 					);
 				} else if (request.method === "PUT") {
 					const input = await readJson(request, maxRequestBytes);
-					options.identity.requireAdmin(access.user.id);
+					await options.identity.requireAdmin(access.user.id);
 					sendJson(response, 200, await chat.configure(input));
 				} else if (request.method === "DELETE") sendJson(response, 200, await chat.clearConfiguration());
 				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
@@ -339,7 +373,7 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 			}
 			if (url.pathname === "/api/ai/config/default" && request.method === "PUT") {
 				const value = await readJson(request, maxRequestBytes);
-				options.identity.requireAdmin(access.user.id);
+				await options.identity.requireAdmin(access.user.id);
 				if (typeof value !== "object" || value === null || Array.isArray(value))
 					throw new ChatError("默认配置无效。");
 				const id = (value as Record<string, unknown>).profileId;
@@ -531,8 +565,7 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 			}
 			if (url.pathname === "/api/people" && request.method === "GET") {
 				sendJson(response, 200, {
-					users: options.identity
-						.listUsers()
+					users: (await options.identity.listUsers())
 						.filter((user) => user.enabled && user.id !== access.user.id)
 						.map(({ id, username }) => ({ id, username })),
 				});
@@ -555,18 +588,18 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 					} | null;
 					if (!input || typeof input !== "object" || Array.isArray(input))
 						throw new ManualProjectError("请求格式无效。", 422);
-					const assertAccess = () => {
-						auth.require(request);
+					const assertAccess = async () => {
+						await auth.require(request);
 					};
 					if (action === "copy" && !releaseId) {
 						if (typeof input.recipientId !== "string" || input.recipientId === access.user.id)
 							throw new ManualProjectError("请选择其他用户。", 422);
-						const recipient = options.identity.getUser(input.recipientId);
+						const recipient = await options.identity.getUser(input.recipientId);
 						if (!recipient.enabled) throw new ManualProjectError("接收用户不存在。", 404);
-						const target = registry.get(recipient).projects;
-						const copied = await copyProject(projects, id, target, input.expectedRevision, () => {
-							assertAccess();
-							registry.get(recipient);
+						const target = (await registry.get(recipient)).projects;
+						const copied = await copyProject(projects, id, target, input.expectedRevision, async () => {
+							await assertAccess();
+							await registry.get(recipient);
 						});
 						sendJson(response, 201, { id: copied.id, title: copied.title, username: recipient.username });
 					} else if (action === "releases" && releaseId) {
@@ -682,7 +715,7 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 			const chatRequestsRoute = /^\/api\/chats\/([^/]+)\/requests$/u.exec(url.pathname);
 			if (chatRequestsRoute && request.method === "GET") {
 				await chat.get(chatRequestsRoute[1]);
-				sendJson(response, 200, { requests: chatRequests.list(chatRequestsRoute[1]) });
+				sendJson(response, 200, { requests: await chatRequests.list(chatRequestsRoute[1]) });
 				return;
 			}
 			const chatRequestRoute = /^\/api\/chats\/([^/]+)\/requests\/([^/]+)(?:\/(events|retry|cancel))?$/u.exec(
@@ -690,7 +723,7 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 			);
 			if (chatRequestRoute) {
 				const [, chatId, requestId, action] = chatRequestRoute;
-				if (request.method === "GET" && !action) sendJson(response, 200, chatRequests.get(requestId, chatId));
+				if (request.method === "GET" && !action) sendJson(response, 200, await chatRequests.get(requestId, chatId));
 				else if (request.method === "POST" && action === "retry")
 					sendJson(response, 202, await chatRequests.retry(chatId, requestId));
 				else if (request.method === "POST" && action === "cancel")
@@ -698,11 +731,12 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 				else if (request.method === "GET" && action === "events") {
 					const after = Number(request.headers["last-event-id"] ?? url.searchParams.get("after") ?? 0);
 					if (!Number.isSafeInteger(after) || after < 0) throw new ChatError("事件序号无效。", 422);
-					chatRequests.get(requestId, chatId);
+					await chatRequests.get(requestId, chatId);
 					streamEvents(response, {
 						after,
-						read: (cursor) => chatRequests.events(requestId, chatId, cursor),
-						isTerminal: () => ["done", "failed"].includes(chatRequests.get(requestId, chatId).state),
+						read: async (cursor) => await chatRequests.events(requestId, chatId, cursor),
+						isTerminal: async () =>
+							["done", "failed"].includes((await chatRequests.get(requestId, chatId)).state),
 						data: (event) => event.data,
 					});
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
@@ -716,14 +750,21 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 					response.writeHead(204, { "cache-control": "no-store" });
 					response.end();
 				} else if (request.method === "POST" && chatRoute[2] === "messages") {
-					const { requestId, message, contextSnapshot, profileId, images } = await readChatSubmission(
-						request,
-						maxRequestBytes,
-					);
+					const { requestId, message, contextSnapshot, profileId, images, webSearch, searchQuery } =
+						await readChatSubmission(request, maxRequestBytes);
 					sendJson(
 						response,
 						202,
-						await chatRequests.submit(id, requestId, message, contextSnapshot, profileId, images),
+						await chatRequests.submit(
+							id,
+							requestId,
+							message,
+							contextSnapshot,
+							profileId,
+							images,
+							webSearch,
+							searchQuery,
+						),
 					);
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
@@ -752,7 +793,7 @@ export function createHydroServer(options: HydroServerOptions): Server & { close
 	});
 	let closing: Promise<void> | undefined;
 	const closeWorkspaces = () => {
-		closing ??= ready.then(() => registry.close());
+		closing ??= registry.close();
 		return closing;
 	};
 	server.once("close", () => {

@@ -6,6 +6,7 @@ describe("AI chat event stream", () => {
 		const source =
 			'event: start\r\ndata: {"chat":{"id":"chat","messages":[{"content":"你好"}]}}\r\n\r\n' +
 			": ping\r\n\r\n" +
+			'event: search\ndata: {"phase":"searching","query":"public query"}\n\n' +
 			'event: delta\r\ndata: {"delta":\r\ndata: "你"}\r\n\r\n' +
 			'event: done\ndata: {"chat":{"id":"chat","messages":[]}}';
 		const bytes = new TextEncoder().encode(source);
@@ -23,9 +24,10 @@ describe("AI chat event stream", () => {
 		});
 		const events: ChatStreamEvent[] = [];
 		await readChatStream(body, (event) => events.push(event));
-		expect(events.map((event) => event.type)).toEqual(["start", "delta", "done"]);
+		expect(events.map((event) => event.type)).toEqual(["start", "search", "delta", "done"]);
 		expect(events[0]).toMatchObject({ chat: { messages: [{ content: "你好" }] } });
-		expect(events[1]).toEqual({ type: "delta", delta: "你" });
+		expect(events[1]).toEqual({ type: "search", phase: "searching", query: "public query", message: undefined });
+		expect(events[2]).toEqual({ type: "delta", delta: "你" });
 	});
 
 	it("rejects a malformed known event instead of treating it as success", async () => {

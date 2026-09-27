@@ -16,7 +16,7 @@ let root: string;
 let origin: string;
 let identity: IdentityStore;
 let projects: ManualProjectStore;
-let server: ReturnType<typeof createHydroServer>;
+let server: Awaited<ReturnType<typeof createHydroServer>>;
 let setupCode: string;
 const password = "correct horse battery staple";
 class BrowserClient {
@@ -63,7 +63,7 @@ class BrowserClient {
 beforeEach(async () => {
 	root = await mkdtemp(join(tmpdir(), "setdraft-auth-api-"));
 	identity = new IdentityStore(root);
-	setupCode = identity.rotateSetupToken();
+	setupCode = await identity.rotateSetupToken();
 	projects = new ManualProjectStore({ root });
 	const chat = new ChatService({
 		root,
@@ -76,7 +76,7 @@ beforeEach(async () => {
 			return "private answer";
 		},
 	});
-	server = createHydroServer({ projects, chat, identity });
+	server = await createHydroServer({ projects, chat, identity });
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -85,7 +85,7 @@ afterEach(async () => {
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 	await server.closeWorkspaces();
 	identity.close();
-	projects.database.db.close();
+	projects.database.sql.close();
 	await rm(root, { recursive: true, force: true });
 });
 
@@ -119,10 +119,12 @@ describe("authenticated personal workspaces", () => {
 		client.cookie = oldCookie;
 		expect((await client.request("/projects")).status).toBe(401);
 	});
-	it("keeps legacy content with the first admin and isolates IDs, files, downloads, and task actions", async () => {
-		const legacy = await projects.create("acm");
+	it("isolates IDs, files, downloads, and task actions in fresh personal workspaces", async () => {
 		const admin = new BrowserClient();
 		await admin.authenticate("setup");
+		const legacy = (await (await admin.request("/projects", "POST", { scoringMode: "acm" })).json()) as {
+			id: string;
+		};
 		const { client: a } = await admin.createMember("alice");
 		const { client: b, user: bob } = await admin.createMember("bob");
 		expect(((await (await admin.request("/projects")).json()) as { projects: { id: string }[] }).projects[0].id).toBe(
@@ -162,14 +164,14 @@ describe("authenticated personal workspaces", () => {
 						source: { bytes: Buffer.from("private contest") },
 					},
 				],
-				() => {
-					privateDatabase.put("release", releaseId, {
+				async () => {
+					await privateDatabase.put("release", releaseId, {
 						id: releaseId,
 						projectId: project.id,
 						slug: "private",
 						createdAt: new Date().toISOString(),
 					});
-					privateDatabase.put("contest-release", bundleId, {
+					await privateDatabase.put("contest-release", bundleId, {
 						id: bundleId,
 						slug: "private",
 						format: "hydro",
@@ -178,7 +180,7 @@ describe("authenticated personal workspaces", () => {
 				},
 			);
 		} finally {
-			privateDatabase.db.close();
+			privateDatabase.sql.close();
 		}
 		expect(await (await b.request(`/releases/${releaseId}/hydro`)).text()).toBe("private release");
 		expect(await (await b.request(`/contest-releases/${bundleId}/download`)).text()).toBe("private contest");
@@ -307,10 +309,10 @@ describe("authenticated personal workspaces", () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await server.closeWorkspaces();
 		identity.close();
-		projects.database.db.close();
+		projects.database.sql.close();
 		identity = new IdentityStore(root);
 		projects = new ManualProjectStore({ root });
-		server = createHydroServer({
+		server = await createHydroServer({
 			identity,
 			projects,
 			chat: new ChatService({
@@ -338,7 +340,7 @@ describe("authenticated personal workspaces", () => {
 		expect((await client.request("/projects")).status).toBe(200);
 		const reopened = new IdentityStore(root);
 		try {
-			expect(reopened.getUser(user.id)).toMatchObject({ locale: "en", avatar });
+			expect(await reopened.getUser(user.id)).toMatchObject({ locale: "en", avatar });
 		} finally {
 			reopened.close();
 		}
@@ -433,7 +435,7 @@ describe("authenticated personal workspaces", () => {
 			server.closeAllConnections();
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 			await server.closeWorkspaces();
-			server = createHydroServer({
+			server = await createHydroServer({
 				identity,
 				projects,
 				publicOrigin,

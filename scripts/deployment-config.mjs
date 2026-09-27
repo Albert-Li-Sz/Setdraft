@@ -1,10 +1,9 @@
-import { existsSync } from "node:fs";
 import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseEnv } from "node:util";
 
 const fields = [
-	"SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
+	"SETDRAFT_DATABASE_URL", "SETDRAFT_SEARCH_URL", "SETDRAFT_SEARCH_IMAGE", "SETDRAFT_POSTGRES_IMAGE", "SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
 	"SETDRAFT_NETWORK", "SETDRAFT_NPM_REGISTRY", "SETDRAFT_DOWNLOAD_PROXY",
 	"SETDRAFT_DOCKER_REGISTRY", "SETDRAFT_DEBIAN_MIRROR",
 	"SETDRAFT_SANDBOX_IMAGE", "SETDRAFT_TESTCASES_MAX", "SETDRAFT_TOTAL_TIME_LIMIT_MS",
@@ -84,7 +83,7 @@ export async function loadDeployment(root, environment = process.env, overrides 
 	for (const [key, value] of Object.entries(values)) {
 		if (/[\r\n\0]/u.test(value) || (value.includes('"') && value.includes("'"))) throw new Error(`${key} 含不支持的字符。`);
 	}
-	const dataRoot = resolve(root, values.SETDRAFT_WORKSPACE_ROOT || (existsSync(join(root, ".setdraft")) || !existsSync(join(root, ".hydro-problem-make")) ? ".setdraft" : ".hydro-problem-make"));
+	const dataRoot = resolve(root, values.SETDRAFT_WORKSPACE_ROOT || ".setdraft");
 	const toRoot = relative(dataRoot, root);
 	if (!toRoot || (!toRoot.startsWith("..") && !isAbsolute(toRoot))) throw new Error("工作区不能是仓库根目录或其父目录。");
 	for (const directory of ["packages", "scripts", "deploy", "node_modules", ".git"]) {

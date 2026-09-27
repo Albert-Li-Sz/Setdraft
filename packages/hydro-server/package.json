@@ -23,7 +23,8 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json",
 		"dev": "tsx src/cli.ts",
-		"test": "vitest --run",
+		"db:migrate": "tsx src/migrate-cli.ts",
+		"test": "node ../../scripts/test-server.mjs",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"engines": {
@@ -33,9 +34,11 @@
 	"dependencies": {
 		"@earendil-works/pi-ai": "^0.87.0",
 		"@setdraft/authoring": "0.1.0",
-		"@setdraft/contracts": "0.1.0"
+		"@setdraft/contracts": "0.1.0",
+		"pg": "8.23.0"
 	},
 	"devDependencies": {
+		"@types/pg": "8.23.1",
 		"shx": "0.4.0",
 		"tsx": "4.22.1",
 		"vitest": "4.1.9"

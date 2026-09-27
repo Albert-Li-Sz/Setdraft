@@ -115,8 +115,8 @@ export class AuthHttp {
 		}
 		return remote;
 	}
-	require(request: IncomingMessage, allowPasswordChange = false): SessionAccess {
-		const access = this.identity.session(this.token(request));
+	async require(request: IncomingMessage, allowPasswordChange = false): Promise<SessionAccess> {
+		const access = await this.identity.session(this.token(request));
 		if (!access) throw new AuthError("登录已过期，请重新登录。", 401, "AUTH_REQUIRED");
 		if (
 			!["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET") &&
@@ -129,7 +129,12 @@ export class AuthHttp {
 	}
 	watch(access: SessionAccess, response: ServerResponse): void {
 		const check = () => {
-			if (!this.identity.session(access.tokenHash, false, true)) response.destroy();
+			void this.identity
+				.session(access.tokenHash, false, true)
+				.then((session) => {
+					if (!session) response.destroy();
+				})
+				.catch(() => response.destroy());
 		};
 		const unsubscribe = this.identity.onChange(check);
 		const timer = setInterval(check, 1000);
@@ -142,53 +147,52 @@ export class AuthHttp {
 	async handle(request: IncomingMessage, response: ServerResponse, path: string): Promise<boolean> {
 		if (!path.startsWith("/api/auth/") && !path.startsWith("/api/admin/")) return false;
 		if (path === "/api/auth/session" && request.method === "GET") {
-			json(response, 200, this.identity.snapshot(this.identity.session(this.token(request))));
+			json(response, 200, await this.identity.snapshot(await this.identity.session(this.token(request))));
 			return true;
 		}
 		if (["/api/auth/login", "/api/auth/setup"].includes(path) && request.method === "POST") {
 			const input = await body(request);
-			const user = path.endsWith("/setup")
-				? await this.identity.setup(input, this.ip(request))
-				: await this.identity.login(input, this.ip(request));
-			const previous = this.identity.session(this.token(request), false);
-			if (previous) this.identity.logout(previous);
-			const session = this.identity.createSession(user.id);
+			const session = path.endsWith("/setup")
+				? await this.identity.createSession((await this.identity.setup(input, this.ip(request))).id)
+				: await this.identity.loginSession(input, this.ip(request));
+			const previous = await this.identity.session(this.token(request), false);
+			if (previous) await this.identity.logout(previous);
 			this.cookie(response, session.token);
-			json(response, 200, this.identity.snapshot(session.access));
+			json(response, 200, await this.identity.snapshot(session.access));
 			return true;
 		}
-		const access = this.require(request, true);
+		const access = await this.require(request, true);
 		if (path === "/api/auth/logout" && request.method === "POST") {
-			this.identity.logout(access);
+			await this.identity.logout(access);
 			this.cookie(response, "", 0);
-			json(response, 200, this.identity.snapshot());
+			json(response, 200, await this.identity.snapshot());
 			return true;
 		}
 		if (path === "/api/auth/password" && request.method === "PUT") {
-			await this.identity.changePassword(access.user.id, await body(request));
-			const session = this.identity.createSession(access.user.id);
+			const verifiedPasswordHash = await this.identity.changePassword(access.user.id, await body(request));
+			const session = await this.identity.createSession(access.user.id, verifiedPasswordHash);
 			this.cookie(response, session.token);
-			json(response, 200, this.identity.snapshot(session.access));
+			json(response, 200, await this.identity.snapshot(session.access));
 			return true;
 		}
 		if (path === "/api/auth/profile" && request.method === "PUT") {
-			this.require(request);
+			await this.require(request);
 			const input = await body(request, 192 * 1024);
-			this.require(request);
-			const user = this.identity.updateProfile(access.user.id, input);
-			json(response, 200, this.identity.snapshot({ ...access, user }));
+			await this.require(request);
+			const user = await this.identity.updateProfile(access.user.id, input);
+			json(response, 200, await this.identity.snapshot({ ...access, user }));
 			return true;
 		}
 		if (path.startsWith("/api/admin/")) {
-			this.identity.requireAdmin(access.user.id);
+			await this.identity.requireAdmin(access.user.id);
 			if (path === "/api/admin/users" && request.method === "GET")
-				json(response, 200, { users: this.identity.listUsers() });
+				json(response, 200, { users: await this.identity.listUsers() });
 			else if (path === "/api/admin/users" && request.method === "POST")
 				json(response, 201, await this.identity.createUser(access.user.id, await body(request)));
 			else {
 				const match = /^\/api\/admin\/users\/([^/]+)(?:\/(reset-password))?$/u.exec(path);
 				if (match && !match[2] && request.method === "PATCH") {
-					const user = this.identity.updateUser(access.user.id, match[1], await body(request));
+					const user = await this.identity.updateUser(access.user.id, match[1], await body(request));
 					if (!user.enabled) await this.registry.disable(user);
 					json(response, 200, { user });
 				} else if (match?.[2] === "reset-password" && request.method === "POST")

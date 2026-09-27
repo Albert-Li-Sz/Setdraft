@@ -16,7 +16,7 @@ cd setdraft
 ./install.sh
 ```
 
-安装器生成 `.env` 与 `.env.compose`，构建 `setdraft/web:local` 和 `setdraft/sandbox:local`，然后启动一个 Web/API 容器。默认通过 `http://服务器IP:4321/` 访问，监听 `0.0.0.0:4321`，不安装反向代理、不配置 HTTPS。服务有健康检查和自动重启策略。首次安装码显示在终端及服务日志中，24 小时有效。
+安装器生成 `.env` 与 `.env.compose`，构建 Web、沙箱和备份维护镜像，启动 Web/API、PostgreSQL 18 和 SearXNG；迁移容器负责初始化数据库表和权限。数据库及搜索端口不对宿主机开放。默认通过 `http://服务器IP:4321/` 访问，监听 `0.0.0.0:4321`，不安装反向代理、不配置 HTTPS。服务有健康检查和自动重启策略。首次安装码显示在终端及服务日志中，24 小时有效。
 
 默认国内网络配置使用 npmmirror 和清华 Debian 源；支持 `--network global`、`--registry`、`--docker-registry`、`--download-proxy`。构建保留锁文件校验和重试，不关闭 TLS。仓库自带模型数据，构建先 telemetry 后 AI，完全使用离线模型快照。镜像构建失败会停止安装并报告错误。
 
@@ -34,11 +34,13 @@ cd setdraft
 
 配置优先级：命令行 > 环境变量 > `.env` > 默认值，见 [`.env.example`](.env.example)。配置只按允许的键解析，不作为 Shell 执行。修改 `.env` 后重新执行 `./install.sh`，或使用 `node scripts/compose-config.mjs` 生成配置后执行 `docker compose --env-file .env.compose up -d --wait web`。可以用 `SETDRAFT_PORT=8080 ./install.sh` 改宿主机端口。
 
-数据默认放在 `.setdraft/`，也可设置 `SETDRAFT_WORKSPACE_ROOT`。旧安装的原始数据目录和旧环境变量自动兼容，新配置与 npm 包统一采用 Setdraft 命名；原始文件不会因改名删除。**从原生安装迁移前**先运行 `node scripts/hydro-local.mjs backup ../setdraft-before-docker`（会停旧服务），然后运行 `./install.sh`。不要同时运行原生服务和容器服务；检测到原生进程锁时容器会拒绝启动。
+数据库保存在 Compose 的 `postgres-data` 卷，文件默认放在 `.setdraft/users/<userId>/`，也可设置 `SETDRAFT_WORKSPACE_ROOT`。此版本采用全新的 PostgreSQL 部署，不导入旧 SQLite 数据。首次进入网页需要重新创建管理员，其他账号及团队 AI 配置重新设置。旧数据目录不会被安装脚本自动删除；确认无需保留后可自行清理。不要同时启动原生和容器 Web 服务。
 
-容器通过 Docker socket 启动独立沙箱任务，数据目录以相同绝对路径映射到容器，确保兄弟沙箱容器能读取任务文件。Docker daemon 必须位于同一宿主机；不要连接远端 Docker context。Docker socket 权限很高，仅在受信任的自部署服务器使用该部署模式。工作区应在本地磁盘上，不放网络共享盘。默认只运行一个 Web 实例，文件锁阻止第二个容器同时使用同一目录。[Docker 挂载路径说明](https://docs.docker.com/engine/storage/bind-mounts/)
+`.env.compose` 自动生成独立的数据库管理员密码、应用密码及搜索服务密钥，重新安装时保留已有值；不要在数据库卷保留的情况下更换这些密码。Web 只获得受限应用账号，数据库管理员凭据仅交给初始化和维护容器。
 
-需要原生开发时，安装 Node.js 22.19+ 后运行 `./install.sh --native --mode dev`；Vite 在 `127.0.0.1:5173`。原生维护工具仍为 `node scripts/hydro-local.mjs`；PowerShell 原生入口须显式使用 `-Native`。容器镜像也可通过 `docker save` / `docker load` 搬运到离线服务器；准备 `.env.compose` 后运行 `./scripts/setdraft-compose.sh start`，不会重新拉取构建依赖。
+容器通过 Docker socket 启动独立沙箱任务，数据目录以相同绝对路径映射到容器，确保兄弟沙箱容器能读取任务文件。Docker daemon 必须位于同一宿主机；不要连接远端 Docker context。Docker socket 权限很高，仅在受信任的自部署服务器使用该部署模式。工作区应在本地磁盘上，不放网络共享盘。默认只运行一个 Web 实例，文件锁和 PostgreSQL 会话锁阻止第二个服务同时操作同一数据集。[Docker 挂载路径说明](https://docs.docker.com/engine/storage/bind-mounts/)
+
+需要原生开发时，先准备 PostgreSQL 并在 `.env` 设置受限账号的 `SETDRAFT_DATABASE_URL`（表结构由 `migrate-cli` 使用维护账号初始化），安装 Node.js 24+ 后运行 `./install.sh --native --mode dev`；Vite 在 `127.0.0.1:5173`。原生维护工具仍为 `node scripts/hydro-local.mjs`；PowerShell 原生入口须显式使用 `-Native`。容器镜像也可通过 `docker save` / `docker load` 搬运到离线服务器；准备 `.env.compose` 后运行 `./scripts/setdraft-compose.sh start`，不会重新拉取构建依赖。
 
 ## 登录与账号
 
@@ -85,7 +87,7 @@ SETDRAFT_PUBLIC_ORIGIN="https://setdraft.example.com"
 同机代理可参考 [`deploy/Caddyfile.example`](deploy/Caddyfile.example)。转发 IP 仅在设置公开来源且请求来自回环地址时受信任；
 远端代理默认按代理连接 IP 限流。安装脚本不占用 80/443，不修改系统代理配置，也不管理证书。
 
-旧版原生安装器托管的 Caddy 会在迁移前执行原生备份/停止命令时停止，原有 `deployment/` 文件仍保留；旧代理专用环境变量会从 `.env` 中移除。
+旧版原生安装器托管的 Caddy 会在执行原生停止命令时停止，原有 `deployment/` 文件仍保留；旧代理专用环境变量会从 `.env` 中移除。
 `SETDRAFT_PUBLIC_ORIGIN` 会继续保留，迁移到 IP 直连时请清空它；迁移到自建代理时请核对其值。
 `--domain`、`--https`、`--ssl-cert`、`--ssl-key`、`--proxy-mode`、`--caddy-archive` 等旧参数已移除。
 
@@ -119,7 +121,7 @@ GitHub 首次克隆发生在安装脚本运行之前；如需要代理，可使�
 `git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/Albert-Li-Sz/setdraft.git`。
 不要在命令行填带密码的代理地址；将这类地址写入 `.env`，避免 Shell 历史记录。Unix 上脚本保存的 `.env` 权限为 `0600`。
 
-Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓库，脚本会同时处理 Node、Docker CLI、Python、GCC 基础镜像，
+Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓库，脚本会同时处理 Node、Docker CLI、Python、GCC、PostgreSQL 和 SearXNG 镜像，
 保留 GCC 固定摘要；管理员页面重建沙箱使用同一配置。没有适合所有网络的公共 Docker 镜像，脚本不会预置未知第三方站点。
 `SETDRAFT_DOWNLOAD_PROXY` 不会自动配置 Docker 守护进程；需要代理拉取镜像时按
 [Docker 守护进程代理文档](https://docs.docker.com/engine/daemon/proxy/) 单独配置，或提前 `docker load` 导入基础镜像。
@@ -154,19 +156,15 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 流式 Markdown、GFM、LaTeX、图片粘贴和上传；等待时显示动画，支持减少动态效果偏好；代码块可单独复制，保留缩进与换行。Enter 发送，Shift+Enter 换行。聊天记录
 保存在服务器个人工作区。图片通过 multipart 上传；模型请求和 SSE 订阅分离，断线可续接且不会重复发送。
 
+联网搜索默认开启，随对话保存开关。可填写独立搜索关键词；留空时只使用本条消息前 500 字，不发送题目快照、历史对话或附件。输入涉及私密内容时可关闭联网或指定公开关键词。默认使用 Compose 内置的 SearXNG，无需搜索 API Key；管理员也可选择 Tavily、配置密钥、测试连接和设置每日额度。搜索失败会明确提示，模型仍可继续回答；答案附可展开的真实来源列表。SearXNG 依赖上游引擎，服务器网络受限时可自行配置搜索出站代理或使用可达的 Tavily 服务。
+
 ## 数据与维护
 
-身份、会话摘要、账号操作日志及团队 AI 配置保存在 `.setdraft/identity.sqlite`。
-首位管理员沿用根目录的 `workspace.sqlite` 和原文件；新增用户各自使用 `users/<userId>/workspace.sqlite` 与独立文件目录。
-调整管理员角色不会转移旧内容。旧 AI 配置只导入一次；迁移可重复执行，不删除原数据。
-测试文件、图片和 ZIP 按 SHA-256 存入 `blobs/`，原目录保留供回退与历史下载。
-首次启动会校验并迁移旧记录，原文件暂不删除。维护前可运行 `backup`；`restore` 会保留
-恢复前的数据副本，并撤销备份中的全部旧会话。Compose 备份覆盖身份库、所有用户工作区和历史文件，并验证完整性及文件哈希；请另外备份 `.env` 和 `.env.compose`。恢复保留当前部署配置，迁移时需核对绝对路径、监听地址和公开来源。维护工具先停止 Web 容器并获取独占锁，完成后运行 `./scripts/setdraft-compose.sh start`。原生备份另外包含 `deployment.env`。
-不要只复制单个 SQLite 文件；备份也含团队 AI 密钥，需按敏感数据保管。应用内隔离不是磁盘加密，
-具有服务器文件权限的运维人员仍可访问数据。
-`prune` 只清理超过指定天数、未被竞赛引用且不是题目最新版的发布包。
+账号、会话摘要、团队配置、题目、任务、竞赛和聊天均存入 PostgreSQL 18，业务表按用户 UUID 强制行级隔离。所有用户都使用独立的 `users/<userId>/` 文件目录，角色变更不转移内容。数据库不再依赖本地 SQLite 文件。
 
-网络搜索和数据库升级当前处于方案阶段，尚未开启联网检索或迁移生产数据。详见 [AI 搜索方案](docs/ai-web-search.md) 与 [数据库选型：PostgreSQL 18](docs/database-selection.md)。
+`backup` 先停止 Web，获取数据库独占服务锁，导出 PostgreSQL 并复制全部用户文件，生成 SHA-256 校验清单。`restore` 先验证完整性，再保存恢复前备份，恢复数据库和文件并撤销旧会话；完成后运行 `./scripts/setdraft-compose.sh start`。另外备份 `.env` 和 `.env.compose`，移动服务器时核对绝对文件路径及站点来源。备份含团队 AI 密钥，应按敏感数据保存。应用内隔离不等于磁盘加密，拥有服务器权限的运维人员仍能访问数据。发布包在题目内部管理，旧 SQLite 离线 `prune` 命令已取消。
+
+实现细节见 [AI 联网搜索](docs/ai-web-search.md) 与 [PostgreSQL 数据存储](docs/database-selection.md)。
 
 ## 项目结构
 

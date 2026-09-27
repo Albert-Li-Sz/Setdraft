@@ -169,7 +169,21 @@ export interface ChatImageUpload {
 	data: string;
 }
 
+export interface SearchResult {
+	id: number;
+	title: string;
+	url: string;
+	snippet: string;
+}
+export interface SearchSnapshot {
+	query: string;
+	provider: "searxng" | "tavily";
+	searchedAt: string;
+	results: SearchResult[];
+}
 export interface ChatMessage {
+	search?: SearchSnapshot;
+	searchError?: string;
 	id: string;
 	role: "user" | "assistant";
 	content: string;
@@ -184,6 +198,7 @@ export interface ChatMessage {
 }
 
 export interface ChatConversation {
+	webSearch?: boolean;
 	id: string;
 	title: string;
 	createdAt: string;
@@ -203,7 +218,7 @@ export interface ChatRequest {
 
 export interface ChatRequestEvent {
 	sequence: number;
-	type: "start" | "delta" | "done" | "error";
+	type: "start" | "delta" | "done" | "error" | "search";
 	data: unknown;
 }
 
@@ -263,6 +278,7 @@ export interface ApiErrorBody {
 	current?: unknown;
 }
 export type ChatStreamEvent =
+	| { type: "search"; phase: "searching" | "complete" | "failed"; query: string; message?: string }
 	| { type: "start"; chat: ChatConversation }
 	| { type: "delta"; delta: string }
 	| { type: "done"; chat: ChatConversation }

@@ -1,15 +1,17 @@
 import type { AuthUser, UserRole } from "@setdraft/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { copyText } from "./browser-capabilities.ts";
 import { Dialog } from "./Dialog.tsx";
 import { useLocale } from "./i18n.tsx";
+import { WorkspacePausedContext } from "./workspace-paused.ts";
 
 type Pending = { user: AuthUser; action: "reset" | "toggle" | "role"; role?: UserRole };
 type Credentials = { username: string; password: string };
 type TemporaryCredentials = Credentials & { copyStatus: "pending" | "copying" | "copied" | "failed" };
 export function AdminUsers() {
 	const { t } = useLocale();
+	const paused = useContext(WorkspacePausedContext);
 	const [users, setUsers] = useState<AuthUser[]>([]);
 	const [username, setUsername] = useState("");
 	const [role, setRole] = useState<UserRole>("user");
@@ -17,12 +19,18 @@ export function AdminUsers() {
 	const [error, setError] = useState("");
 	const [temporary, setTemporary] = useState<TemporaryCredentials>();
 	const [pending, setPending] = useState<Pending>();
-	const refresh = useCallback(async () => {
-		setUsers((await requestJson<{ users: AuthUser[] }>("/api/admin/users")).users);
+	const refresh = useCallback(async (signal?: AbortSignal) => {
+		setUsers((await requestJson<{ users: AuthUser[] }>("/api/admin/users", { signal })).users);
 	}, []);
 	useEffect(() => {
-		void refresh().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "账号读取失败。"));
-	}, [refresh]);
+		if (paused) return;
+		const controller = new AbortController();
+		setError("");
+		void refresh(controller.signal).catch((cause: unknown) => {
+			if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "账号读取失败。");
+		});
+		return () => controller.abort();
+	}, [refresh, paused]);
 	const copyCredentials = useCallback(
 		async (credentials: Credentials) => {
 			setTemporary({ ...credentials, copyStatus: "copying" });

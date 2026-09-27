@@ -21,13 +21,13 @@ export async function copyProject(
 	id: string,
 	target: ManualProjectStore,
 	expectedRevision: unknown,
-	assertAccess: () => void = () => {},
+	assertAccess: () => void | Promise<void> = () => {},
 ): Promise<ManualProjectSnapshot> {
-	const unlock = source.lock(id);
+	const unlock = await source.lock(id);
 	try {
-		const snapshot = source.snapshot(id);
+		const snapshot = await source.snapshot(id);
 		checkRevision(snapshot, expectedRevision);
-		const version = source.database.version("project", id);
+		const version = await source.database.version("project", id);
 		const { cases: _cases, orphanOutputs: _orphans, ...content } = snapshot;
 		const newId = randomUUID();
 		const now = new Date().toISOString();
@@ -42,17 +42,17 @@ export async function copyProject(
 		};
 		const files: WorkspaceFile[] = [];
 		for (const kind of ["manual", "generated"] as const) {
-			for (const file of source.database.fileEntries(kind, id)) {
+			for (const file of await source.database.fileEntries(kind, id)) {
 				if (file.size > target.maxFileBytes) throw new ManualProjectError("测试数据超过接收工作区限制。", 413);
 				files.push({
 					ownerKind: kind,
 					ownerId: newId,
 					name: file.name,
-					source: { path: source.dataFile(id, kind, file.name) },
+					source: { path: await source.dataFile(id, kind, file.name) },
 				});
 			}
 		}
-		if (source.projectDataBytes(id) > target.maxProjectBytes)
+		if ((await source.projectDataBytes(id)) > target.maxProjectBytes)
 			throw new ManualProjectError("测试数据超过接收工作区限制。", 413);
 		if (project.domjudgePdf)
 			files.push({
@@ -62,14 +62,14 @@ export async function copyProject(
 				source: { path: (await source.domjudgePdfFile(id)).path },
 			});
 		await mkdir(join(target.projectDirectory(newId), "manual"), { recursive: true });
-		await target.database.commitFiles(files, () => {
-			assertAccess();
-			target.assertNotBusy(newId);
-			if (version !== source.database.version("project", id))
+		await target.database.commitFiles(files, async () => {
+			await assertAccess();
+			await target.assertNotBusy(newId);
+			if (version !== (await source.database.version("project", id)))
 				throw new ManualProjectError("题目版本已变化，请重试复制。", 409);
-			target.database.put("project", newId, project, -1);
+			await target.database.put("project", newId, project, -1);
 		});
-		return target.snapshot(newId);
+		return await target.snapshot(newId);
 	} finally {
 		unlock();
 	}
@@ -81,14 +81,14 @@ export async function restoreProject(
 	id: string,
 	releaseId: string,
 	expectedRevision: unknown,
-	assertAccess: () => void = () => {},
+	assertAccess: () => void | Promise<void> = () => {},
 ): Promise<ManualProjectSnapshot> {
 	const release = await projects.releases.release(releaseId);
 	if (release.projectId !== id) throw new ManualProjectError("发布包不存在。", 404);
-	const unlock = projects.lock(id);
+	const unlock = await projects.lock(id);
 	try {
-		checkRevision(projects.snapshot(id), expectedRevision);
-		const current = projects.load(id);
+		checkRevision(await projects.snapshot(id), expectedRevision);
+		const current = await projects.load(id);
 		const root = join(projects.releaseDirectory(releaseId), "source");
 		const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as {
 			projectId?: unknown;
@@ -172,13 +172,13 @@ export async function restoreProject(
 		});
 		await projects.database.commitFiles(
 			files,
-			() => {
-				assertAccess();
-				projects.save(current);
+			async () => {
+				await assertAccess();
+				await projects.save(current);
 			},
 			["manual", "generated", "pdf"].map((kind) => ({ ownerKind: kind, ownerId: id })),
 		);
-		return projects.snapshot(id);
+		return await projects.snapshot(id);
 	} catch (error) {
 		if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT")
 			throw new ManualProjectError("发布包源文件不完整，无法回退。", 422);

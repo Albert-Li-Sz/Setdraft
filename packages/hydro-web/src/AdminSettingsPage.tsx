@@ -5,6 +5,7 @@ import { AiApiSettings } from "./AiApiSettings.tsx";
 import { authFetch } from "./auth-client.ts";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type SandboxStatus, waitForTask } from "./platform.ts";
+import { WebSearchSettings } from "./WebSearchSettings.tsx";
 
 interface AdminSettingsPageProps {
 	user: AuthUser;
@@ -52,6 +53,7 @@ export function AdminSettingsPage(props: AdminSettingsPageProps) {
 					</section>
 				)}
 				<aside className="settings-side">
+					{props.user.role === "admin" && <WebSearchSettings apiOrigin={props.apiOrigin} />}
 					<section className="card settings-card">
 						<h2>{t("Linux 沙箱")}</h2>
 						<p className="settings-help">

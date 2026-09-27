@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
 import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
+import { EventWriter } from "./event-writer.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import type { ExecutionScheduler } from "./execution-scheduler.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
@@ -22,7 +23,7 @@ export class TaskQueue {
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly timer: NodeJS.Timeout;
 	private closed = false;
-	private readonly scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): boolean };
+	private readonly scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): Promise<boolean> };
 	private readonly waiting = new Map<string, AbortController>();
 	private readonly slots = new Map<string, () => void>();
 	private readonly running = new Set<Promise<void>>();
@@ -30,34 +31,39 @@ export class TaskQueue {
 	constructor(
 		projects: ManualProjectStore,
 		contests: ContestStore,
-		scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): boolean },
+		scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): Promise<boolean> },
 	) {
 		this.scheduling = scheduling;
 		this.projects = projects;
 		this.contests = contests;
 		this.database = projects.database;
 
-		for (const task of this.list().filter((item) => item.state === "running")) {
-			let alive = false;
-			try {
-				if (task.ownerPid && process.env.SETDRAFT_CONTAINER_LOCKED !== "1") {
-					process.kill(task.ownerPid, 0);
-					alive = true;
-				}
-			} catch {
-				alive = false;
-			}
-			if (!alive) {
-				this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
-				const child = spawn("docker", ["rm", "-f", `setdraft-task-${task.id}`, `hydro-task-${task.id}`], {
-					stdio: "ignore",
-				});
-				child.on("error", () => {});
-			}
-		}
-		this.timer = setInterval(() => this.pump(), 500);
+		this.ready = this.recover();
+		this.timer = setInterval(() => this.wake(), 500);
 		this.timer.unref();
-		queueMicrotask(() => this.pump());
+		this.wake();
+	}
+	readonly ready: Promise<void>;
+	private pumping = false;
+	private wake(): void {
+		void this.ready
+			.then(async () => {
+				if (this.pumping || this.closed) return;
+				this.pumping = true;
+				try {
+					await this.pump();
+				} finally {
+					this.pumping = false;
+				}
+			})
+			.catch(() => console.error("Task queue unavailable."));
+	}
+	private async recover(): Promise<void> {
+		for (const task of (await this.list()).filter((item) => item.state === "running")) {
+			await this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
+			const child = spawn("docker", ["rm", "-f", `setdraft-task-${task.id}`], { stdio: "ignore" });
+			child.on("error", () => {});
+		}
 	}
 
 	close(): void {
@@ -73,7 +79,10 @@ export class TaskQueue {
 		while (this.running.size) await Promise.all([...this.running]);
 	}
 	async cancelAll(): Promise<void> {
-		const rows = this.database.db.prepare("SELECT id FROM tasks WHERE state IN ('queued','running')").all() as Array<{
+		const rows = (await this.database.sql.all(
+			"SELECT id FROM tasks WHERE state IN ('queued','running')",
+			[],
+		)) as Array<{
 			id: string;
 		}>;
 		for (const row of rows) await this.cancel(row.id).catch(() => undefined);
@@ -83,23 +92,25 @@ export class TaskQueue {
 		this.slots.delete(id);
 	}
 
-	private fingerprint(kind: TaskKind, resource: string): string {
+	private async fingerprint(kind: TaskKind, resource: string): Promise<string> {
 		if (kind === "image-build") return digest({ image: this.projects.image });
-		if (kind === "contest-export") return digest(this.database.get("contest", resource));
+		if (kind === "contest-export") return digest(await this.database.get("contest", resource));
 		return digest({
-			project: this.database.get("project", resource),
-			files: [...this.database.fileEntries("manual", resource), ...this.database.fileEntries("generated", resource)],
+			project: await this.database.get("project", resource),
+			files: [
+				...(await this.database.fileEntries("manual", resource)),
+				...(await this.database.fileEntries("generated", resource)),
+			],
 		});
 	}
 
-	private assertWritable(): void {
-		if (this.scheduling && (this.closed || !this.scheduling.enabled()))
+	private async assertWritable(): Promise<void> {
+		if (this.scheduling && (this.closed || !(await this.scheduling.enabled())))
 			throw new ManualProjectError("任务服务不可用。", 403);
-		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 	}
 
 	async submit(kind: TaskKind, resourceId: string, format?: ContestFormat, releaseName?: string): Promise<TaskRecord> {
-		this.assertWritable();
+		await this.assertWritable();
 		const resourceTitle =
 			kind === "image-build"
 				? undefined
@@ -116,40 +127,39 @@ export class TaskQueue {
 			releaseName,
 			resourceTitle,
 			state: "queued",
-			fingerprint: this.fingerprint(kind, resourceId),
+			fingerprint: await this.fingerprint(kind, resourceId),
 			createdAt: now,
 			updatedAt: now,
 		};
 		try {
-			this.database.transaction(() => {
-				this.assertWritable();
-				this.database.db
-					.prepare(
-						"INSERT INTO tasks (id,kind,resource,format,state,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-					)
-					.run(task.id, task.kind, task.resource, task.format ?? null, task.state, task.fingerprint, now, now);
-				this.database.put("task-options", task.id, { releaseName, resourceTitle });
-				this.emit(task.id, "queued", "任务已排队。", { kind, resourceId });
+			await this.database.transaction(async () => {
+				await this.assertWritable();
+				await this.database.sql.execute(
+					"INSERT INTO tasks (id,kind,resource,format,state,fingerprint,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+					[task.id, task.kind, task.resource, task.format ?? null, task.state, task.fingerprint, now, now],
+				);
+				await this.database.put("task-options", task.id, { releaseName, resourceTitle });
+				await this.emit(task.id, "queued", "任务已排队。", { kind, resourceId });
 			});
 		} catch (error) {
-			if (String(error).includes("UNIQUE constraint"))
+			if ((error as { code?: string }).code === "23505")
 				throw new ManualProjectError("该题目或竞赛已有排队或运行中的任务。", 409);
 			throw error;
 		}
-		this.pump();
+		this.wake();
 		return task;
 	}
 
-	get(id: string, includeResult = true): TaskRecord {
-		const row = this.database.db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as
+	async get(id: string, includeResult = true): Promise<TaskRecord> {
+		const row = (await this.database.sql.one("SELECT * FROM tasks WHERE id=$1", [id])) as
 			| Record<string, unknown>
 			| undefined;
 		if (!row) throw new ManualProjectError("任务不存在。", 404);
-		const options = this.database.get<{ releaseName?: string; resourceTitle?: string }>("task-options", id);
+		const options = await this.database.get<{ releaseName?: string; resourceTitle?: string }>("task-options", id);
 		const [kind, resourceId] = String(row.resource).split(":");
 		const title =
 			kind === "project" || kind === "contest"
-				? this.database.get<{ title: string }>(kind, resourceId)?.title
+				? (await this.database.get<{ title: string }>(kind, resourceId))?.title
 				: undefined;
 		return {
 			id: String(row.id),
@@ -168,19 +178,20 @@ export class TaskQueue {
 		};
 	}
 
-	list(): TaskRecord[] {
-		const rows = this.database.db.prepare("SELECT id FROM tasks ORDER BY created_at DESC").all() as Array<{
+	async list(): Promise<TaskRecord[]> {
+		const rows = (await this.database.sql.all("SELECT id FROM tasks ORDER BY created_at DESC", [])) as Array<{
 			id: string;
 		}>;
-		return rows.map((row) => this.get(row.id, false));
+		return Promise.all(rows.map(async (row) => await this.get(row.id, false)));
 	}
 
-	events(id: string, after = 0): TaskEvent[] {
-		this.get(id);
+	async events(id: string, after = 0): Promise<TaskEvent[]> {
+		await this.get(id);
 		return (
-			this.database.db
-				.prepare("SELECT * FROM task_events WHERE task_id=? AND sequence>? ORDER BY sequence LIMIT 500")
-				.all(id, after) as Array<Record<string, unknown>>
+			(await this.database.sql.all(
+				"SELECT * FROM task_events WHERE task_id=$1 AND sequence>$2 ORDER BY sequence LIMIT 500",
+				[id, after],
+			)) as Array<Record<string, unknown>>
 		).map((row) => ({
 			sequence: Number(row.sequence),
 			taskId: String(row.task_id),
@@ -191,94 +202,86 @@ export class TaskQueue {
 		}));
 	}
 
-	emit(id: string, type: string, message: string, data?: unknown): void {
-		this.database.db
-			.prepare("INSERT INTO task_events (task_id,type,message,created_at,data) VALUES (?,?,?,?,?)")
-			.run(
-				id,
-				type,
-				message.slice(0, 4000),
-				new Date().toISOString(),
-				data === undefined ? null : JSON.stringify(data),
-			);
+	async emit(id: string, type: string, message: string, data?: unknown): Promise<void> {
+		await this.database.sql.execute(
+			"INSERT INTO task_events (task_id,type,message,created_at,data) VALUES ($1,$2,$3,$4,$5)",
+			[id, type, message.slice(0, 4000), new Date().toISOString(), data === undefined ? null : JSON.stringify(data)],
+		);
 	}
 
-	private finish(id: string, state: TaskState, result?: unknown, error?: string): void {
-		this.database.transaction(() => {
-			const updated = this.database.db
-				.prepare(
-					"UPDATE tasks SET state=?,result=?,error=?,updated_at=?,owner_pid=NULL WHERE id=? AND state IN ('queued','running')",
-				)
-				.run(
-					state,
-					result === undefined ? null : JSON.stringify(result),
-					error ?? null,
-					new Date().toISOString(),
-					id,
-				);
-			if (updated.changes)
-				this.emit(id, state, error ?? (state === "succeeded" ? "任务完成。" : "任务已结束。"), result);
+	private async finish(id: string, state: TaskState, result?: unknown, error?: string): Promise<void> {
+		await this.database.transaction(async () => {
+			const updated = await this.database.sql.execute(
+				"UPDATE tasks SET state=$1,result=$2,error=$3,updated_at=$4,owner_pid=NULL WHERE id=$5 AND state IN ('queued','running')",
+				[state, result === undefined ? null : JSON.stringify(result), error ?? null, new Date().toISOString(), id],
+			);
+			if (updated.rowCount)
+				await this.emit(id, state, error ?? (state === "succeeded" ? "任务完成。" : "任务已结束。"), result);
 		});
 	}
 
-	private cancellationRequested(id: string, signal?: AbortSignal): boolean {
+	private async cancellationRequested(id: string, signal?: AbortSignal): Promise<boolean> {
 		if (signal?.aborted) return true;
-		const row = this.database.db.prepare("SELECT cancel_requested FROM tasks WHERE id=?").get(id) as
+		const row = (await this.database.sql.one("SELECT cancel_requested FROM tasks WHERE id=$1", [id])) as
 			| { cancel_requested: number }
 			| undefined;
 		return Boolean(row?.cancel_requested);
 	}
 
 	async cancel(id: string): Promise<TaskRecord> {
-		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
-		const state = this.database.transaction(() => {
-			const task = this.get(id);
-			if (task.state === "queued") this.finish(id, "cancelled", undefined, "任务已取消。");
+		const state = await this.database.transaction(async () => {
+			const task = await this.get(id);
+			if (task.state === "queued") await this.finish(id, "cancelled", undefined, "任务已取消。");
 			else if (task.state === "running") {
-				this.database.db.prepare("UPDATE tasks SET cancel_requested=1 WHERE id=?").run(id);
-				this.emit(id, "cancelling", "正在停止沙盒。 ");
+				await this.database.sql.execute("UPDATE tasks SET cancel_requested=1 WHERE id=$1", [id]);
+				await this.emit(id, "cancelling", "正在停止沙盒。 ");
 			} else throw new ManualProjectError("任务已经结束。", 409);
 			return task.state;
 		});
 		if (state === "queued") {
 			this.waiting.get(id)?.abort();
 			this.releaseSlot(id);
-			this.pump();
+			this.wake();
 		} else {
 			this.controllers.get(id)?.abort();
 			const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${id}`], { stdio: "ignore" });
 			cleaner.on("error", () => {});
 		}
-		return this.get(id);
+		return await this.get(id);
 	}
 
 	async retry(id: string): Promise<TaskRecord> {
-		this.assertWritable();
-		const task = this.get(id);
+		await this.assertWritable();
+		const task = await this.get(id);
 		if (!["failed", "cancelled", "stale", "interrupted"].includes(task.state))
 			throw new ManualProjectError("当前任务不可重试。", 409);
-		return this.submit(task.kind, task.resource.split(":").at(-1) ?? "", task.format, task.releaseName);
+		return await this.submit(task.kind, task.resource.split(":").at(-1) ?? "", task.format, task.releaseName);
 	}
 
-	isRunning(resource: string): boolean {
+	async isRunning(resource: string): Promise<boolean> {
 		return Boolean(
-			this.database.db.prepare("SELECT 1 FROM tasks WHERE resource=? AND state='running'").get(resource),
+			await this.database.sql.one("SELECT 1 FROM tasks WHERE resource=$1 AND state='running'", [resource]),
 		);
 	}
 
-	private pump(): void {
-		if (this.closed || (this.scheduling && !this.scheduling.enabled())) return;
-		const cancelling = this.database.db
-			.prepare("SELECT id FROM tasks WHERE state='running' AND cancel_requested=1 AND owner_pid=?")
-			.all(process.pid) as Array<{ id: string }>;
+	private async pump(): Promise<void> {
+		if (this.closed || (this.scheduling && !(await this.scheduling.enabled()))) return;
+		const cancelling = (await this.database.sql.all(
+			"SELECT id FROM tasks WHERE state='running' AND cancel_requested=1 AND owner_pid=$1",
+			[process.pid],
+		)) as Array<{ id: string }>;
 		for (const item of cancelling) this.controllers.get(item.id)?.abort();
-		const running = this.database.db.prepare("SELECT count(*) AS count FROM tasks WHERE state='running'").get() as {
+		const running = (await this.database.sql.one(
+			"SELECT count(*)::integer AS count FROM tasks WHERE state='running'",
+			[],
+		)) as {
 			count: number;
 		};
 		if (running.count >= 2) return;
-		const queued = this.database.db
-			.prepare("SELECT id FROM tasks WHERE state='queued' ORDER BY created_at LIMIT 1")
-			.get() as { id: string } | undefined;
+		const queued = (await this.database.sql.one(
+			"SELECT id FROM tasks WHERE state='queued' ORDER BY created_at LIMIT 1",
+			[],
+		)) as { id: string } | undefined;
 		if (!queued) return;
 		if (this.scheduling && !this.slots.has(queued.id)) {
 			if (!this.waiting.has(queued.id)) {
@@ -289,16 +292,16 @@ export class TaskQueue {
 						this.scheduling.userId,
 						queued.id,
 						controller.signal,
-						this.get(queued.id).kind === "image-build",
+						(await this.get(queued.id)).kind === "image-build",
 					)
-					.then((release) => {
+					.then(async (release) => {
 						this.waiting.delete(queued.id);
-						if (this.closed || controller.signal.aborted || !this.scheduling?.enabled()) {
+						if (this.closed || controller.signal.aborted || !(await this.scheduling?.enabled())) {
 							release();
 							return;
 						}
 						this.slots.set(queued.id, release);
-						this.pump();
+						this.wake();
 					})
 					.catch(() => {
 						this.waiting.delete(queued.id);
@@ -306,43 +309,46 @@ export class TaskQueue {
 			}
 			return;
 		}
-		const task = this.get(queued.id);
+		const task = await this.get(queued.id);
 		const resourceId = task.resource.split(":").at(-1) ?? "";
-		const started = this.database.transaction(() => {
-			const current = this.database.db
-				.prepare("SELECT count(*) AS count FROM tasks WHERE state='running'")
-				.get() as { count: number };
+		const started = await this.database.transaction(async () => {
+			const current = (await this.database.sql.one(
+				"SELECT count(*)::integer AS count FROM tasks WHERE state='running'",
+				[],
+			)) as { count: number };
 			if (current.count >= 2) return false;
-			const result = this.database.db
-				.prepare("UPDATE tasks SET state='running',owner_pid=?,updated_at=? WHERE id=? AND state='queued'")
-				.run(process.pid, new Date().toISOString(), task.id);
-			if (!result.changes) return false;
-			this.emit(task.id, "running", "任务开始执行。 ");
+			const result = await this.database.sql.execute(
+				"UPDATE tasks SET state='running',owner_pid=$1,updated_at=$2 WHERE id=$3 AND state='queued'",
+				[process.pid, new Date().toISOString(), task.id],
+			);
+			if (!result.rowCount) return false;
+			await this.emit(task.id, "running", "任务开始执行。 ");
 			return true;
 		});
 		if (!started) {
 			this.releaseSlot(task.id);
 			return;
 		}
-		if (task.fingerprint !== this.fingerprint(task.kind, resourceId)) {
-			this.finish(task.id, "stale", undefined, "排队期间内容发生变化，请重试。 ");
+		if (task.fingerprint !== (await this.fingerprint(task.kind, resourceId))) {
+			await this.finish(task.id, "stale", undefined, "排队期间内容发生变化，请重试。 ");
 			this.releaseSlot(task.id);
-			queueMicrotask(() => this.pump());
+			queueMicrotask(() => this.wake());
 			return;
 		}
 		const controller = new AbortController();
 		this.controllers.set(task.id, controller);
-		if (this.cancellationRequested(task.id, controller.signal)) {
-			this.finish(task.id, "cancelled", undefined, "任务已取消。 ");
+		if (await this.cancellationRequested(task.id, controller.signal)) {
+			await this.finish(task.id, "cancelled", undefined, "任务已取消。 ");
 			this.controllers.delete(task.id);
 			this.releaseSlot(task.id);
-			this.pump();
+			this.wake();
 			return;
 		}
+		const events = new EventWriter(() => controller.abort());
 		const context: ExecutionContext = {
 			id: task.id,
 			signal: controller.signal,
-			emit: (type, message, data) => this.emit(task.id, type, message, data),
+			emit: (type, message, data) => events.append(() => this.emit(task.id, type, message, data)),
 		};
 		const work = (async () => {
 			try {
@@ -353,14 +359,16 @@ export class TaskQueue {
 				else if (task.kind === "contest-export")
 					result = await this.contests.export(resourceId, task.format ?? "hydro", context, task.releaseName);
 				else result = await this.buildImage(context);
-				if (this.cancellationRequested(task.id, controller.signal)) {
-					this.finish(task.id, "cancelled", undefined, "任务已取消。 ");
+				await events.flush();
+				if (await this.cancellationRequested(task.id, controller.signal)) {
+					await this.finish(task.id, "cancelled", undefined, "任务已取消。 ");
 					return;
 				}
-				this.finish(task.id, "succeeded", result);
+				await this.finish(task.id, "succeeded", result);
 			} catch (error) {
-				const cancelled = this.cancellationRequested(task.id, controller.signal);
-				this.finish(
+				await events.flush().catch(() => undefined);
+				const cancelled = await this.cancellationRequested(task.id, controller.signal);
+				await this.finish(
 					task.id,
 					controller.signal.aborted || cancelled ? "cancelled" : "failed",
 					undefined,
@@ -369,7 +377,7 @@ export class TaskQueue {
 			} finally {
 				this.controllers.delete(task.id);
 				this.releaseSlot(task.id);
-				this.pump();
+				this.wake();
 			}
 		})();
 		this.running.add(work);
@@ -377,7 +385,7 @@ export class TaskQueue {
 			() => this.running.delete(work),
 			() => this.running.delete(work),
 		);
-		if (running.count + 1 < 2) queueMicrotask(() => this.pump());
+		if (running.count + 1 < 2) queueMicrotask(() => this.wake());
 	}
 
 	private buildImage(context: ExecutionContext): Promise<{ image: string }> {

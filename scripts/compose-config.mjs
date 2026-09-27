@@ -1,4 +1,6 @@
-import { writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
+import { parseEnv } from "node:util";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDeployment, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
@@ -14,8 +16,15 @@ export async function composeConfiguration(root, args, environment = process.env
 	if (!/^\d+$/u.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error("SETDRAFT_PORT 需要 1–65535。");
 	config.values.SETDRAFT_WORKSPACE_ROOT = config.dataRoot;
 	config.values.SETDRAFT_PORT = port;
-	const values = {
+	const previous=parseEnv(await readFile(join(root,".env.compose"),"utf8").catch(()=>""));
+ const secret=key=>environment[key] || previous[key] || randomBytes(32).toString("hex");
+ const values = {
 		...config.values,
+        SETDRAFT_DB_ADMIN_PASSWORD: secret("SETDRAFT_DB_ADMIN_PASSWORD"),
+        SETDRAFT_DB_APP_PASSWORD: secret("SETDRAFT_DB_APP_PASSWORD"),
+        SETDRAFT_SEARCH_SECRET: secret("SETDRAFT_SEARCH_SECRET"),
+        SETDRAFT_POSTGRES_IMAGE: config.values.SETDRAFT_POSTGRES_IMAGE || `${prefix}postgres:18-bookworm@sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650`,
+        SETDRAFT_SEARCH_IMAGE: config.values.SETDRAFT_SEARCH_IMAGE || `${config.values.SETDRAFT_DOCKER_REGISTRY ? `${config.values.SETDRAFT_DOCKER_REGISTRY}/` : ""}searxng/searxng@sha256:5286edb35782454ab8a102c5eff6b54bff745853191b46aeead95f225aa6dfb6`,
 		SETDRAFT_DATA_PATH: config.dataRoot,
 		SETDRAFT_BIND_ADDRESS: config.values.SETDRAFT_HOST,
 		SETDRAFT_PORT: port,
@@ -26,7 +35,8 @@ export async function composeConfiguration(root, args, environment = process.env
 		SETDRAFT_PYTHON_IMAGE: `${prefix}python:3.14-slim-trixie`,
 		SETDRAFT_GCC_IMAGE: `${prefix}gcc:16.2.0-trixie@sha256:28365a1efe31883fd29f9fce27811b731e815f9f9b2db16b0e1f0d99fcb3dae5`,
 	};
-	for (const value of Object.values(values)) if (/[\r\n\0']/u.test(value)) throw new Error("Compose 配置不能包含单引号或换行。");
+	for(const key of ["SETDRAFT_DB_ADMIN_PASSWORD","SETDRAFT_DB_APP_PASSWORD","SETDRAFT_SEARCH_SECRET"]) if(!/^[a-zA-Z0-9_-]{24,128}$/u.test(values[key]))throw new Error(`${key} 必须是 24–128 位字母、数字、下划线或短横线。`);
+ for (const value of Object.values(values)) if (/[\r\n\0']/u.test(value)) throw new Error("Compose 配置不能包含单引号或换行。");
 	await saveDeployment(config);
 	await writeFile(join(root, ".env.compose"), Object.entries(values).map(([key, value]) => `${key}='${value}'\n`).join(""), { mode: 0o600 });
 	console.log(`Setdraft 数据目录：${config.dataRoot}\nWeb：${values.SETDRAFT_BIND_ADDRESS}:${port}（反向代理自行配置）`);

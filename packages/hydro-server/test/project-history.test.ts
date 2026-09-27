@@ -17,8 +17,8 @@ beforeEach(async () => {
 	target = new ManualProjectStore({ root: join(root, "b") });
 });
 afterEach(async () => {
-	source.database.db.close();
-	target.database.db.close();
+	source.database.sql.close();
+	target.database.sql.close();
 	await rm(root, { recursive: true, force: true });
 });
 
@@ -37,7 +37,7 @@ async function fixture() {
 		{ ownerKind: "generated", ownerId: project.id, name: "2.out", source: { bytes: Buffer.from("5\n") } },
 		{ ownerKind: "pdf", ownerId: project.id, name: "problem.pdf", source: { bytes: Buffer.from("%PDF-1.4 test") } },
 	]);
-	const current = source.load(project.id);
+	const current = await source.load(project.id);
 	current.domjudgePdf = { size: 13, sha256: hash(Buffer.from("%PDF-1.4 test")) };
 	current.generatedFromHash = "generation-hash";
 	const report: ManualVerificationReport = {
@@ -55,7 +55,7 @@ async function fixture() {
 		verifiedAt: new Date().toISOString(),
 	};
 	current.lastReport = report;
-	source.save(current);
+	await source.save(current);
 	const release: ManualRelease = {
 		id: randomUUID(),
 		name: "初版",
@@ -75,8 +75,8 @@ async function fixture() {
 		"problem.pdf": Buffer.from("%PDF-1.4 test"),
 	};
 	for (const origin of ["manual", "generated"] as const)
-		for (const file of source.database.fileEntries(origin, project.id))
-			files[`data/${origin}/${file.name}`] = await readFile(source.dataFile(project.id, origin, file.name));
+		for (const file of await source.database.fileEntries(origin, project.id))
+			files[`data/${origin}/${file.name}`] = await readFile(await source.dataFile(project.id, origin, file.name));
 	const dir = join(source.releaseDirectory(release.id), "source");
 	for (const [name, bytes] of Object.entries(files)) {
 		await mkdir(join(dir, name, ".."), { recursive: true });
@@ -87,14 +87,14 @@ async function fixture() {
 		JSON.stringify({
 			projectId: project.id,
 			projectHash: report.projectHash,
-			cases: source.snapshot(project.id).cases,
+			cases: (await source.snapshot(project.id)).cases,
 			files: Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, hash(bytes)])),
 		}),
 	);
-	source.database.put("release", release.id, release);
+	await source.database.put("release", release.id, release);
 	current.latestReleaseId = release.id;
-	source.save(current);
-	return { project: source.snapshot(project.id), release, dir };
+	await source.save(current);
+	return { project: await source.snapshot(project.id), release, dir };
 }
 
 describe("problem copies and release restoration", () => {
@@ -115,13 +115,13 @@ describe("problem copies and release restoration", () => {
 		expect(copied.lastReport).toBeUndefined();
 		expect(await target.releases.listReleases()).toEqual([]);
 		for (const kind of ["manual", "generated", "pdf"])
-			for (const file of source.database.fileEntries(kind, project.id))
+			for (const file of await source.database.fileEntries(kind, project.id))
 				expect(await target.database.readBuffer(kind, copied.id, file.name)).toEqual(
 					await source.database.readBuffer(kind, project.id, file.name),
 				);
 		await target.update(copied.id, { title: "Recipient edited" });
 		await source.delete(project.id);
-		expect(target.snapshot(copied.id).title).toBe("Recipient edited");
+		expect((await target.snapshot(copied.id)).title).toBe("Recipient edited");
 		expect(await target.database.readBuffer("manual", copied.id, "1.in")).toEqual(Buffer.from("1 2\n"));
 	});
 	it("restores all content and file sets atomically, increments revision and retains every release", async () => {
@@ -135,7 +135,7 @@ describe("problem copies and release restoration", () => {
 		});
 		await source.addTextCase(project.id, { name: "3.in", input: "extra" });
 		await source.deleteDomjudgePdf(project.id);
-		const before = source.snapshot(project.id);
+		const before = await source.snapshot(project.id);
 		const restored = await restoreProject(source, project.id, release.id, before.revision);
 		expect(restored).toMatchObject({
 			title: project.title,
@@ -152,7 +152,7 @@ describe("problem copies and release restoration", () => {
 		expect(restored.lastReport).toBeUndefined();
 		expect(restored.latestReleaseId).toBe(release.id);
 		expect(await source.releases.listReleases()).toHaveLength(1);
-		expect(source.database.filePath("manual", project.id, "3.in")).toBeUndefined();
+		expect(await source.database.filePath("manual", project.id, "3.in")).toBeUndefined();
 		expect(await readFile((await source.domjudgePdfFile(project.id)).path, "utf8")).toBe("%PDF-1.4 test");
 		await expect(
 			source.update(project.id, { title: "Stale window", expectedRevision: before.revision }),
@@ -172,7 +172,7 @@ describe("problem copies and release restoration", () => {
 				statusCode: revision === undefined ? 422 : 409,
 			});
 		}
-		expect(source.snapshot(project.id)).toEqual(project);
+		expect(await source.snapshot(project.id)).toEqual(project);
 		expect(await target.list()).toEqual([]);
 	});
 	it("preserves current content when a release is damaged or a file is missing", async () => {
@@ -182,12 +182,12 @@ describe("problem copies and release restoration", () => {
 		await expect(restoreProject(source, project.id, release.id, edited.revision)).rejects.toMatchObject({
 			statusCode: 422,
 		});
-		expect(source.snapshot(project.id)).toEqual(edited);
+		expect(await source.snapshot(project.id)).toEqual(edited);
 		await rm(join(dir, "data/manual/1.in"));
 		await expect(restoreProject(source, project.id, release.id, edited.revision)).rejects.toMatchObject({
 			statusCode: 422,
 		});
-		expect(source.snapshot(project.id)).toEqual(edited);
+		expect(await source.snapshot(project.id)).toEqual(edited);
 	});
 	it("refuses copying when access is revoked before commit, without creating partial data", async () => {
 		const { project } = await fixture();
@@ -197,7 +197,7 @@ describe("problem copies and release restoration", () => {
 			}),
 		).rejects.toThrow("revoked");
 		expect(await target.list()).toEqual([]);
-		expect(target.database.db.prepare("SELECT count(*) AS n FROM files").get()).toMatchObject({ n: 0 });
+		expect(await target.database.sql.one("SELECT count(*)::integer AS n FROM files", [])).toMatchObject({ n: 0 });
 	});
 	it("rejects an intervening database update during restoration and keeps the winning file view", async () => {
 		const { project, release } = await fixture();
@@ -205,15 +205,15 @@ describe("problem copies and release restoration", () => {
 		const commit = source.database.commitFiles.bind(source.database);
 		vi.spyOn(source.database, "commitFiles").mockImplementationOnce(async (files, apply, owners) => {
 			await concurrent.update(project.id, { title: "Concurrent winner", expectedRevision: project.revision });
-			return commit(files, apply, owners);
+			return await commit(files, apply, owners);
 		});
 		try {
 			await expect(restoreProject(source, project.id, release.id, project.revision)).rejects.toMatchObject({
 				statusCode: 409,
 			});
-			expect(source.snapshot(project.id).title).toBe("Concurrent winner");
+			expect((await source.snapshot(project.id)).title).toBe("Concurrent winner");
 		} finally {
-			concurrent.database.db.close();
+			concurrent.database.sql.close();
 		}
 	});
 	it("restores legacy snapshots with default language standards and no explicit checker mode", async () => {

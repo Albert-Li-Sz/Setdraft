@@ -4,13 +4,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/promises";
 import { connect } from "node:net";
-import { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
 
-import { validateWorkspaceDirectory, workspaceDirectories } from "./workspace-integrity.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(scriptPath), "..");
@@ -263,6 +261,7 @@ async function checkPorts() {
 }
 
 async function startAll() {
+ if(!process.env.SETDRAFT_DATABASE_URL)throw new Error("原生开发需要配置 SETDRAFT_DATABASE_URL；默认部署请运行 ./install.sh 使用 PostgreSQL Compose。");
 	await checkPorts();
 	const started = [];
 	try {
@@ -509,16 +508,7 @@ async function doctor() {
 		try { output("docker", ["image", "inspect", image]); console.log("沙盒镜像已就绪。"); }
 		catch { console.log("沙盒镜像缺失；可在设置页构建。"); }
 	} catch { console.log("Docker 守护进程未运行；网页仍可启动。"); }
-	const directories = await workspaceDirectories(dataRoot);
-	console.log(`身份库：${await stat(join(dataRoot, "identity.sqlite")).catch(() => undefined) ? "校验通过" : "尚未创建"}`);
-	for (const workspace of directories) {
-		const databasePath = join(workspace, "workspace.sqlite");
-		if (await stat(databasePath).catch(() => undefined)) {
-			const database = new DatabaseSync(databasePath, { readOnly: true });
-			try { console.log(`SQLite ${workspace}: ${database.prepare("PRAGMA integrity_check").get().integrity_check}`); }
-			finally { database.close(); }
-		}
-	}
+	console.log(`PostgreSQL：${process.env.SETDRAFT_DATABASE_URL ? "已配置" : "未配置 SETDRAFT_DATABASE_URL"}`);
 	for (const [name, service] of Object.entries(services)) console.log(`${name}: ${await ready(service.url) ? "在线" : "未运行"}`);
 }
 
@@ -530,76 +520,13 @@ async function assertOffline() {
 	throw new Error("数据目录仍有直接启动的服务，请先停止该服务后再执行维护。");
 }
 
-async function backup(destination) {
-	if (resolve(destination) === resolve(dataRoot) || resolve(destination).startsWith(`${resolve(dataRoot)}${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("备份目标不能在业务数据目录内。");
-	if (await stat(destination).catch(() => undefined)) throw new Error("备份目标已存在，请选择新目录。");
-	await stopAll();
-	await assertOffline();
-	try {
-		await cp(dataRoot, destination, { recursive: true, filter: (source) => !source.includes(`${process.platform === "win32" ? "\\" : "/"}runtime${process.platform === "win32" ? "\\" : "/"}`) });
-		if (await stat(deployment.path).catch(() => undefined)) await cp(deployment.path, join(destination, "deployment.env"));
-		await validateWorkspaceDirectory(destination);
-	} catch (error) {
-		await rm(destination, { recursive: true, force: true });
-		throw error;
-	}
-	console.log(`备份完成：${destination}，包含全部工作区文件与部署配置快照。服务已停止，可运行 start 重启。`);
+async function maintenance(command,directory) {
+ await stopAll();await assertOffline();
+ run("sh",[join(root,"scripts/setdraft-compose.sh"),command,directory]);
 }
-
-async function restore(source) {
-	if (resolve(source) === resolve(dataRoot) || resolve(source).startsWith(`${resolve(dataRoot)}${process.platform === "win32" ? "\\" : "/"}`)) throw new Error("不能从业务数据目录内部恢复。");
-	await validateWorkspaceDirectory(source);
-	await stopAll();
-	await assertOffline();
-	const previous = `${dataRoot}.before-restore-${Date.now()}`;
-	if (await stat(dataRoot).catch(() => undefined)) await rename(dataRoot, previous);
-	try {
-		await cp(source, dataRoot, { recursive: true });
-		await validateWorkspaceDirectory(dataRoot);
-		const identityPath = join(dataRoot, "identity.sqlite");
-		if (await stat(identityPath).catch(() => undefined)) {
-			const identity = new DatabaseSync(identityPath);
-			try { identity.exec("DELETE FROM sessions; DELETE FROM metadata WHERE key='setup';"); } finally { identity.close(); }
-		}
-	}
-	catch (error) { await rm(dataRoot, { recursive: true, force: true }); if (await stat(previous).catch(() => undefined)) await rename(previous, dataRoot); throw error; }
-	console.log(`恢复完成：${dataRoot}。旧数据保存在 ${previous}；本机 .env 保留，迁移时请核对备份中的 deployment.env。运行 start 启动。`);
-}
-
-async function prune(args) {
-	if (args.length < 2 || args[0] !== "--older-than-days" || !/^\d+$/u.test(args[1]) || args.slice(2).some((item) => item !== "--dry-run")) throw new Error("用法：prune --older-than-days <天数> [--dry-run]");
-	const days = Number(args[1]);
-	if (days < 1 || !Number.isSafeInteger(days)) throw new Error("保留天数须为正整数。");
-	await stopAll();
-	await assertOffline();
-	for (const workspace of await workspaceDirectories(dataRoot)) await pruneWorkspace(workspace, days, args.includes("--dry-run"));
-}
-
-async function pruneWorkspace(workspace, days, dryRun) {
-	const databasePath = join(workspace, "workspace.sqlite");
-	if (!(await stat(databasePath).catch(() => undefined))) return;
-	const database = new DatabaseSync(databasePath);
-	try {
-		const readDocs = (kind) => database.prepare("SELECT id,body FROM documents WHERE kind=?").all(kind).map((row) => ({ id: row.id, ...JSON.parse(row.body) }));
-		const referenced = new Set(readDocs("contest").flatMap((item) => item.releaseIds ?? []));
-		const latest = new Set(readDocs("project").map((item) => item.latestReleaseId).filter(Boolean));
-		const limit = Date.now() - days * 24 * 60 * 60 * 1000;
-		const expired = readDocs("release").filter((item) => Date.parse(item.createdAt) < limit && !referenced.has(item.id) && !latest.has(item.id));
-		console.log(`找到 ${expired.length} 个超过 ${days} 天且未被竞赛引用、不是草稿最新版本的发布包。`);
-		if (dryRun) { for (const item of expired) console.log(`${item.id} ${item.title}`); return; }
-		for (const item of expired) {
-			database.prepare("DELETE FROM files WHERE owner_kind='release-file' AND owner_id=?").run(item.id);
-			database.prepare("DELETE FROM documents WHERE kind='release' AND id=?").run(item.id);
-			await rm(join(workspace, "releases", item.id), { recursive: true, force: true });
-		}
-		const referencedHashes = new Set(database.prepare("SELECT DISTINCT hash FROM files").all().map((item) => item.hash));
-		for (const shard of await readdir(join(workspace, "blobs"), { withFileTypes: true }).catch(() => [])) {
-			if (!shard.isDirectory()) continue;
-			for (const blob of await readdir(join(workspace, "blobs", shard.name))) if (!referencedHashes.has(blob)) await rm(join(workspace, "blobs", shard.name, blob));
-		}
-		console.log(`已清理 ${expired.length} 个过期发布包。服务已停止，可运行 start 重启。`);
-	} finally { database.close(); }
-}
+async function backup(directory){await maintenance("backup",directory);}
+async function restore(directory){await maintenance("restore",directory);}
+async function prune(){throw new Error("请在题目内部管理发布包；不再提供 SQLite 离线清理命令。");}
 
 main().catch((error) => {
 	console.error(`Setdraft：${redact(error instanceof Error ? error.message : String(error))}`);

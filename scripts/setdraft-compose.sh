@@ -50,16 +50,18 @@ if [ "$COMMAND" = install ]; then
       -e SETDRAFT_WORKSPACE_ROOT -e SETDRAFT_PORT -e SETDRAFT_HOST -e SETDRAFT_PUBLIC_ORIGIN \
       -e SETDRAFT_NETWORK -e SETDRAFT_NPM_REGISTRY -e SETDRAFT_DOCKER_REGISTRY -e SETDRAFT_DEBIAN_MIRROR \
       -e SETDRAFT_DOWNLOAD_PROXY -e SETDRAFT_NODE_IMAGE -e SETDRAFT_DOCKER_CLI_IMAGE \
+      -e SETDRAFT_POSTGRES_IMAGE -e SETDRAFT_SEARCH_IMAGE -e SETDRAFT_DB_ADMIN_PASSWORD -e SETDRAFT_DB_APP_PASSWORD -e SETDRAFT_SEARCH_SECRET \
       "$BOOTSTRAP_IMAGE" node scripts/compose-config.mjs "$@"
   fi
-  compose build web sandbox
-  compose up -d --wait --wait-timeout 90 web
+  compose build web sandbox maintenance
+  compose stop web
+  compose up -d --wait --wait-timeout 120 web
   compose logs --tail 15 web
   exit 0
 fi
 [ -f "$ROOT/.env.compose" ] || { echo '请先运行 ./install.sh 生成 Compose 配置。' >&2; exit 1; }
 case "$COMMAND" in
-  start) [ "$#" -eq 0 ]; compose up -d --wait --wait-timeout 90 web;;
+  start) [ "$#" -eq 0 ]; compose up -d --wait --wait-timeout 120 web;;
   stop) [ "$#" -eq 0 ]; compose stop web;;
   status) [ "$#" -eq 0 ]; compose ps;;
   logs) compose logs --tail 100 "$@" web;;
@@ -76,6 +78,6 @@ case "$COMMAND" in
     case "$DEST_PATH/" in "$DATA_PATH/"*) echo '备份目录不能在数据目录内。' >&2; exit 1;; esac
     case "$DATA_PATH/" in "$DEST_PATH/"*) echo '备份目录不能包含数据目录。' >&2; exit 1;; esac
     compose stop web
-    compose run --rm --no-deps -v "$DEST_PARENT:/backup" web node scripts/compose-maintenance.mjs "$COMMAND" "/backup/$DEST_NAME"
+    compose run --rm --no-deps -v "$DEST_PARENT:/backup" maintenance "$COMMAND" "/backup/$DEST_NAME"
     echo '维护完成；运行 ./scripts/setdraft-compose.sh start 启动服务。';;
 esac

@@ -104,7 +104,7 @@ describe("AI chat", () => {
 		const saved = await service.get(chat.id);
 		expect(saved.messages).toHaveLength(4);
 		expect(saved.messages[2].contextSnapshot).toBe("只读题面");
-		expect(JSON.stringify(new WorkspaceDatabase(root).get("ai-config", "default"))).toContain("secret");
+		expect(JSON.stringify(await new WorkspaceDatabase(root).get("ai-config", "default"))).toContain("secret");
 		expect(service.getConfiguration()).not.toHaveProperty("apiKey");
 	});
 
@@ -215,7 +215,7 @@ describe("AI chat", () => {
 			contextWindow: 4096,
 			maxTokens: 1024,
 		});
-		const saved = new WorkspaceDatabase(root).get("ai-config", "default") as {
+		const saved = (await new WorkspaceDatabase(root).get("ai-config", "default")) as {
 			version: number;
 			profiles: Array<{ id: string; apiKey: string }>;
 		};

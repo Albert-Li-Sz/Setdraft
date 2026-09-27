@@ -36,7 +36,7 @@ async function waitFor(
 	state: "done" | "failed",
 ): Promise<void> {
 	for (let attempt = 0; attempt < 100; attempt++) {
-		if (queue.get(requestId, chatId).state === state) {
+		if ((await queue.get(requestId, chatId)).state === state) {
 			await queue.idle();
 			return;
 		}
@@ -55,20 +55,21 @@ describe("persisted chat requests", () => {
 		});
 		const database = new WorkspaceDatabase(root);
 		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
 		const conversation = await chat.create();
 		const requestId = randomUUID();
 		await queue.submit(conversation.id, requestId, "hello");
 		await queue.submit(conversation.id, requestId, "hello");
 		await waitFor(queue, conversation.id, requestId, "done");
 		expect(calls).toBe(1);
-		const events = queue.events(requestId, conversation.id, 0);
+		const events = await queue.events(requestId, conversation.id, 0);
 		expect(events.map((event) => event.type)).toEqual(["start", "delta", "done"]);
-		expect(queue.events(requestId, conversation.id, events[0].sequence).map((event) => event.type)).toEqual([
+		expect((await queue.events(requestId, conversation.id, events[0].sequence)).map((event) => event.type)).toEqual([
 			"delta",
 			"done",
 		]);
 		await expect(queue.submit(conversation.id, requestId, "different")).rejects.toThrow("请求 ID 已用于其他消息");
-		database.db.close();
+		database.sql.close();
 	});
 
 	it("keeps image data intact when the same request is submitted concurrently", async () => {
@@ -83,6 +84,7 @@ describe("persisted chat requests", () => {
 		});
 		const database = new WorkspaceDatabase(root);
 		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
 		const conversation = await chat.create();
 		const requestId = randomUUID();
 		const image = {
@@ -97,7 +99,7 @@ describe("persisted chat requests", () => {
 		await waitFor(queue, conversation.id, requestId, "done");
 		expect(calls).toBe(1);
 		expect(sawImage).toBe(true);
-		database.db.close();
+		database.sql.close();
 	});
 
 	it("resumes queued requests after a restart and records interrupted runs", async () => {
@@ -111,13 +113,12 @@ describe("persisted chat requests", () => {
 		const requestId = randomUUID();
 		const database = new WorkspaceDatabase(root);
 		const initialQueue = new ChatRequestQueue(database, chat);
-		expect(initialQueue.list(conversation.id)).toEqual([]);
+		await initialQueue.ready;
+		expect(await initialQueue.list(conversation.id)).toEqual([]);
 		const now = new Date().toISOString();
-		database.db
-			.prepare(
-				"INSERT INTO chat_requests (id,chat_id,payload,fingerprint,state,created_at,updated_at,owner_pid) VALUES (?,?,?,?,?,?,?,?)",
-			)
-			.run(
+		await database.sql.execute(
+			"INSERT INTO chat_requests (id,chat_id,payload,fingerprint,state,created_at,updated_at,owner_pid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+			[
 				requestId,
 				conversation.id,
 				JSON.stringify({ message: "recover", images: [] }),
@@ -126,12 +127,11 @@ describe("persisted chat requests", () => {
 				now,
 				now,
 				0,
-			);
-		database.db
-			.prepare(
-				"INSERT INTO chat_requests (id,chat_id,payload,fingerprint,state,created_at,updated_at,owner_pid) VALUES (?,?,?,?,?,?,?,?)",
-			)
-			.run(
+			],
+		);
+		await database.sql.execute(
+			"INSERT INTO chat_requests (id,chat_id,payload,fingerprint,state,created_at,updated_at,owner_pid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+			[
 				randomUUID(),
 				interruptedConversation.id,
 				JSON.stringify({ message: "interrupted", images: [] }),
@@ -140,21 +140,23 @@ describe("persisted chat requests", () => {
 				now,
 				now,
 				0,
-			);
-		database.db.close();
+			],
+		);
+		database.sql.close();
 
 		const recoveredDatabase = new WorkspaceDatabase(root);
 		const recoveredQueue = new ChatRequestQueue(recoveredDatabase, chat);
+		await recoveredQueue.ready;
 		await waitFor(recoveredQueue, conversation.id, requestId, "done");
 		expect(calls).toBe(1);
-		expect(recoveredQueue.events(requestId, conversation.id, 0).map((event) => event.type)).toEqual([
+		expect((await recoveredQueue.events(requestId, conversation.id, 0)).map((event) => event.type)).toEqual([
 			"start",
 			"done",
 		]);
-		const failed = recoveredQueue.list(interruptedConversation.id)[0];
+		const failed = (await recoveredQueue.list(interruptedConversation.id))[0];
 		expect(failed?.state).toBe("failed");
 		expect(failed?.error).toBe("服务中断；请重试。");
-		recoveredDatabase.db.close();
+		recoveredDatabase.sql.close();
 	});
 
 	it("cancels a running request and emits a resumable cancellation error", async () => {
@@ -170,20 +172,25 @@ describe("persisted chat requests", () => {
 		);
 		const database = new WorkspaceDatabase(root);
 		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
 		const conversation = await chat.create();
 		const requestId = randomUUID();
 		await queue.submit(conversation.id, requestId, "cancel me");
-		for (let attempt = 0; attempt < 100 && queue.get(requestId, conversation.id).state !== "running"; attempt++)
+		for (
+			let attempt = 0;
+			attempt < 100 && (await queue.get(requestId, conversation.id)).state !== "running";
+			attempt++
+		)
 			await new Promise((resolveWait) => setTimeout(resolveWait, 5));
-		expect(queue.get(requestId, conversation.id).state).toBe("running");
+		expect((await queue.get(requestId, conversation.id)).state).toBe("running");
 		await queue.cancel(conversation.id, requestId);
 		await waitFor(queue, conversation.id, requestId, "failed");
-		expect(queue.get(requestId, conversation.id).error).toBe("已取消");
-		expect(queue.events(requestId, conversation.id, 0).at(-1)).toMatchObject({
+		expect((await queue.get(requestId, conversation.id)).error).toBe("已取消");
+		expect((await queue.events(requestId, conversation.id, 0)).at(-1)).toMatchObject({
 			type: "error",
 			data: { message: "已取消" },
 		});
-		database.db.close();
+		database.sql.close();
 	});
 
 	it("retries a failed request using the same user turn and clears stale stream events", async () => {
@@ -199,11 +206,12 @@ describe("persisted chat requests", () => {
 		});
 		const database = new WorkspaceDatabase(root);
 		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
 		const conversation = await chat.create();
 		const requestId = randomUUID();
 		await queue.submit(conversation.id, requestId, "hello");
 		await waitFor(queue, conversation.id, requestId, "failed");
-		expect(queue.events(requestId, conversation.id, 0).map((event) => event.type)).toEqual([
+		expect((await queue.events(requestId, conversation.id, 0)).map((event) => event.type)).toEqual([
 			"start",
 			"delta",
 			"error",
@@ -211,14 +219,14 @@ describe("persisted chat requests", () => {
 		await queue.retry(conversation.id, requestId);
 		await waitFor(queue, conversation.id, requestId, "done");
 		expect(calls).toBe(2);
-		expect(queue.events(requestId, conversation.id, 0).map((event) => event.type)).toEqual([
+		expect((await queue.events(requestId, conversation.id, 0)).map((event) => event.type)).toEqual([
 			"start",
 			"delta",
 			"done",
 		]);
 		const saved = await chat.get(conversation.id);
 		expect(saved.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-		database.db.close();
+		database.sql.close();
 	});
 
 	it("allows only one concurrent retry for a failed request", async () => {
@@ -230,6 +238,7 @@ describe("persisted chat requests", () => {
 		});
 		const database = new WorkspaceDatabase(root);
 		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
 		const conversation = await chat.create();
 		const requestId = randomUUID();
 		await queue.submit(conversation.id, requestId, "hello");
@@ -242,19 +251,20 @@ describe("persisted chat requests", () => {
 		expect(retries.filter((item) => item.status === "rejected")).toHaveLength(1);
 		await waitFor(queue, conversation.id, requestId, "done");
 		expect(calls).toBe(2);
-		database.db.close();
+		database.sql.close();
 	});
 
 	it("does not reuse a request ID from another conversation", async () => {
 		const chat = await configuredChat(async () => "ok");
 		const database = new WorkspaceDatabase(root);
 		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
 		const first = await chat.create();
 		const second = await chat.create();
 		const requestId = randomUUID();
 		await queue.submit(first.id, requestId, "same");
 		await expect(queue.submit(second.id, requestId, "same")).rejects.toThrow("请求 ID 已用于其他消息");
 		await queue.idle();
-		database.db.close();
+		database.sql.close();
 	});
 });

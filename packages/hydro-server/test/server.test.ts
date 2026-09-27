@@ -10,11 +10,13 @@ import { IdentityStore } from "../src/identity.ts";
 import { ManualProjectStore, type ManualRelease, parseGeneratorScript } from "../src/manual-projects.ts";
 import { cppLanguages, runManualSandbox } from "../src/manual-sandbox.ts";
 import { createHydroServer } from "../src/server.ts";
+import { rejectWrites } from "./database-setup.ts";
 
 let root: string;
+let baseRoot: string;
 let store: ManualProjectStore;
 let chat: ChatService;
-let server: ReturnType<typeof createHydroServer>;
+let server: Awaited<ReturnType<typeof createHydroServer>>;
 let origin: string;
 let identity: IdentityStore;
 let cookie: string;
@@ -119,13 +121,20 @@ async function seedRelease(projectId: string, overrides: Partial<ManualRelease> 
 	await writeFile(join(directory, "hydro.zip"), "historical Hydro package");
 	await store.database.commitFiles(
 		[{ ownerKind: "release-file", ownerId: id, name: "hydro.zip", source: { path: join(directory, "hydro.zip") } }],
-		() => store.database.put("release", id, release),
+		async () => await store.database.put("release", id, release),
 	);
 	return release;
 }
 
 beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "hydro-manual-api-"));
+	baseRoot = await mkdtemp(join(tmpdir(), "setdraft-manual-api-"));
+	root = baseRoot;
+	identity = new IdentityStore(root);
+	const user = await identity.setup(
+		{ setupToken: await identity.rotateSetupToken(), username: "test-admin", password: "a long test password" },
+		"test",
+	);
+	root = join(baseRoot, "users", user.id);
 	store = new ManualProjectStore({ root });
 	chat = new ChatService({
 		root,
@@ -135,15 +144,10 @@ beforeEach(async () => {
 			return "测试回复";
 		},
 	});
-	identity = new IdentityStore(root);
-	const user = await identity.setup(
-		{ setupToken: identity.rotateSetupToken(), username: "test-admin", password: "a long test password" },
-		"test",
-	);
-	const session = identity.createSession(user.id);
+	const session = await identity.createSession(user.id);
 	cookie = `setdraft-session=${session.token}`;
 	csrf = session.access.csrfToken;
-	server = createHydroServer({ projects: store, chat, identity, staticRoot: join(root, "web") });
+	server = await createHydroServer({ projects: store, chat, identity, staticRoot: join(root, "web") });
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -152,7 +156,7 @@ afterEach(async () => {
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 	await server.closeWorkspaces();
 	identity.close();
-	await rm(root, { recursive: true, force: true });
+	await rm(baseRoot, { recursive: true, force: true });
 });
 
 describe("manual project API", () => {
@@ -174,9 +178,9 @@ describe("manual project API", () => {
 		const project = await createProject();
 		const release = await seedRelease(project.id);
 		// Simulate an interruption after the database commit but before old directory cleanup.
-		store.database.transaction(() => {
-			store.database.delete("release", release.id);
-			store.database.removeOwnerFiles("release-file", release.id);
+		await store.database.transaction(async () => {
+			await store.database.delete("release", release.id);
+			await store.database.removeOwnerFiles("release-file", release.id);
 		});
 		await mkdir(join(root, "releases", randomUUID()), { recursive: true });
 		expect((await json<{ releases: ManualRelease[] }>("/releases")).body.releases).toEqual([]);
@@ -186,12 +190,10 @@ describe("manual project API", () => {
 	it("rolls back release deletion and file references when the draft update fails", async () => {
 		const project = await createProject();
 		const release = await seedRelease(project.id);
-		const draft = store.load(project.id);
+		const draft = await store.load(project.id);
 		draft.latestReleaseId = release.id;
-		store.save(draft);
-		store.database.db.exec(
-			"CREATE TEMP TRIGGER reject_release_delete BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
-		);
+		await store.save(draft);
+		const removeFailure = await rejectWrites("documents", "UPDATE", "kind", "project", "simulated save failure");
 		try {
 			await expect(store.releases.deleteRelease(release.id)).rejects.toThrow("simulated save failure");
 			expect((await store.get(project.id)).latestReleaseId).toBe(release.id);
@@ -200,7 +202,7 @@ describe("manual project API", () => {
 				"historical Hydro package",
 			);
 		} finally {
-			store.database.db.exec("DROP TRIGGER reject_release_delete");
+			await removeFailure();
 		}
 	});
 
@@ -240,8 +242,8 @@ describe("manual project API", () => {
 		});
 		expect(contest.status).toBe(201);
 		const path = `/contests/${contest.body.id}`;
-		const update = (colors: unknown, colorNames: unknown, releaseIds = [release.id]) =>
-			json<{ colors?: Record<string, string>; colorNames?: Record<string, string>; message?: string }>(path, {
+		const update = async (colors: unknown, colorNames: unknown, releaseIds = [release.id]) =>
+			await json<{ colors?: Record<string, string>; colorNames?: Record<string, string>; message?: string }>(path, {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title: "Practice", slug: "practice", releaseIds, colors, colorNames }),
@@ -446,8 +448,8 @@ describe("manual project API", () => {
 				).status,
 			).toBe(200);
 		}
-		const add = (value: unknown) =>
-			json<{
+		const add = async (value: unknown) =>
+			await json<{
 				inputFile: string;
 				outputFile?: string;
 				project: { revision: number; cases: Array<{ inputFile: string; subtaskId: number }> };
@@ -500,15 +502,13 @@ describe("manual project API", () => {
 
 	it("rolls back both text files when saving the case fails", async () => {
 		const project = await createProject();
-		store.database.db.exec(
-			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
-		);
+		const removeFailure = await rejectWrites("documents", "UPDATE", "kind", "project", "simulated save failure");
 		try {
 			await expect(store.addTextCase(project.id, { name: "retry.in", input: "x", output: "y" })).rejects.toThrow(
 				"simulated save failure",
 			);
 		} finally {
-			store.database.db.exec("DROP TRIGGER fail_project_write");
+			await removeFailure();
 		}
 		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/retry.in`)).status).toBe(404);
 		expect((await authenticatedFetch(`${origin}/api/projects/${project.id}/files/retry.out`)).status).toBe(404);
@@ -520,11 +520,11 @@ describe("manual project API", () => {
 
 	it("preserves OI mode and text Checker when loading an older draft", async () => {
 		const project = await createProject("oi");
-		const stored = store.database.get<Record<string, unknown>>("project", project.id)!;
+		const stored = (await store.database.get<Record<string, unknown>>("project", project.id))!;
 		delete stored.scoringMode;
 		delete stored.checkerMode;
 		stored.subtasks = [{ id: 1, type: "min", score: 100 }];
-		store.database.put("project", project.id, stored);
+		await store.database.put("project", project.id, stored);
 		expect(await store.get(project.id)).toMatchObject({ scoringMode: "oi", checkerMode: "text" });
 	});
 
@@ -549,9 +549,7 @@ describe("manual project API", () => {
 		);
 		expect((await fetch(`${origin}/api${pdfPath}?preview=1`)).status).toBe(401);
 		const revision = (await json<{ revision: number }>(`/projects/${project.id}`)).body.revision;
-		store.database.db.exec(
-			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
-		);
+		const removeFailure = await rejectWrites("documents", "UPDATE", "kind", "project", "simulated save failure");
 		try {
 			const failed = await authenticatedFetch(`${origin}/api${pdfPath}`, {
 				method: "PUT",
@@ -560,7 +558,7 @@ describe("manual project API", () => {
 			});
 			expect(failed.status).toBe(500);
 		} finally {
-			store.database.db.exec("DROP TRIGGER fail_project_write");
+			await removeFailure();
 		}
 		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
 		expect(await (await authenticatedFetch(`${origin}/api${pdfPath}`)).text()).toBe(original);
@@ -577,9 +575,7 @@ describe("manual project API", () => {
 		});
 		expect(uploaded.status).toBe(200);
 		const revision = (await json<{ revision: number }>(`/projects/${project.id}`)).body.revision;
-		store.database.db.exec(
-			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
-		);
+		const removeFailure = await rejectWrites("documents", "UPDATE", "kind", "project", "simulated save failure");
 		try {
 			const failed = await authenticatedFetch(`${origin}/api${path}`, {
 				method: "PUT",
@@ -588,7 +584,7 @@ describe("manual project API", () => {
 			});
 			expect(failed.status).toBe(500);
 		} finally {
-			store.database.db.exec("DROP TRIGGER fail_project_write");
+			await removeFailure();
 		}
 		expect((await json<{ revision: number }>(`/projects/${project.id}`)).body.revision).toBe(revision);
 		expect(await (await authenticatedFetch(`${origin}/api${path}`)).text()).toBe(original);
@@ -605,13 +601,11 @@ describe("manual project API", () => {
 		expect(uploaded.status).toBe(200);
 		const before = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
 		expect(before.body.cases.map((item) => item.inputFile)).toEqual(["2.in"]);
-		store.database.db.exec(
-			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
-		);
+		const removeFailure = await rejectWrites("documents", "UPDATE", "kind", "project", "simulated save failure");
 		try {
 			await expect(store.renumberCases(project.id)).rejects.toThrow("simulated save failure");
 		} finally {
-			store.database.db.exec("DROP TRIGGER fail_project_write");
+			await removeFailure();
 		}
 		const after = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
 		expect(after.body.revision).toBe(before.body.revision);
@@ -630,13 +624,11 @@ describe("manual project API", () => {
 		});
 		expect(uploaded.status).toBe(200);
 		const before = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
-		store.database.db.exec(
-			"CREATE TEMP TRIGGER fail_project_write BEFORE UPDATE ON documents WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT, 'simulated save failure'); END",
-		);
+		const removeFailure = await rejectWrites("documents", "UPDATE", "kind", "project", "simulated save failure");
 		try {
 			await expect(store.deleteCases(project.id, ["1"])).rejects.toThrow("simulated save failure");
 		} finally {
-			store.database.db.exec("DROP TRIGGER fail_project_write");
+			await removeFailure();
 		}
 		const after = await json<{ revision: number; cases: Array<{ inputFile: string }> }>(`/projects/${project.id}`);
 		expect(after.body.revision).toBe(before.body.revision);
@@ -1218,8 +1210,9 @@ describe("manual project API", () => {
 			expect(entries).not.toContain("problem.pdf");
 			expect(entries.some((name) => name.includes("problem_zh.md"))).toBe(false);
 			const qduojExports = await Promise.all(
-				Array.from({ length: 2 }, () =>
-					json<{ download: string }>(`/releases/${releaseId}/exports/qduoj`, { method: "POST" }),
+				Array.from(
+					{ length: 2 },
+					async () => await json<{ download: string }>(`/releases/${releaseId}/exports/qduoj`, { method: "POST" }),
 				),
 			);
 			for (const qduoj of qduojExports) expect(qduoj.status, JSON.stringify(qduoj.body)).toBe(200);

@@ -1,0 +1,14 @@
+use_default_settings:
+  engines:
+    keep_only: [bing, duckduckgo, brave, baidu]
+search:
+  formats: [json]
+  safe_search: 1
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  image_proxy: false
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 10.0

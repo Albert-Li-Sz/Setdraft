@@ -21,21 +21,21 @@ export class ReleaseStore {
 	}
 	async release(id: string): Promise<ManualRelease> {
 		this.projects.releaseDirectory(id);
-		const stored = this.projects.database.get<ManualRelease>("release", id);
+		const stored = await this.projects.database.get<ManualRelease>("release", id);
 		if (!stored) throw new ManualProjectError("发布记录不存在。", 404);
 		return stored;
 	}
 
 	async listReleases(): Promise<ManualRelease[]> {
-		return this.projects.database
-			.list<ManualRelease>("release")
-			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+		return (await this.projects.database.list<ManualRelease>("release")).sort((left, right) =>
+			right.createdAt.localeCompare(left.createdAt),
+		);
 	}
 
 	async rename(id: string, value: unknown): Promise<ManualRelease> {
 		const release = await this.release(id);
 		release.name = releaseName(value);
-		this.projects.database.put("release", id, release);
+		await this.projects.database.put("release", id, release);
 		return release;
 	}
 
@@ -63,7 +63,7 @@ export class ReleaseStore {
 			"domjudge.zip",
 			join(this.projects.releaseDirectory(id), "domjudge.zip"),
 		);
-		return this.releaseFile(id, "domjudge");
+		return await this.releaseFile(id, "domjudge");
 	}
 
 	async exportLegacy(id: string, format: "fps" | "qduoj"): Promise<{ path: string; size: number; name: string }> {
@@ -79,7 +79,7 @@ export class ReleaseStore {
 			`${format}.${format === "fps" ? "xml" : "zip"}`,
 			join(this.projects.releaseDirectory(id), `${format}.${format === "fps" ? "xml" : "zip"}`),
 		);
-		return this.releaseFile(id, format);
+		return await this.releaseFile(id, format);
 	}
 
 	async releaseFile(
@@ -89,7 +89,7 @@ export class ReleaseStore {
 		const release = await this.release(id);
 		const fileName = `${kind}.${kind === "fps" ? "xml" : "zip"}`;
 		const path =
-			this.projects.database.filePath("release-file", id, fileName) ??
+			(await this.projects.database.filePath("release-file", id, fileName)) ??
 			join(this.projects.releaseDirectory(id), fileName);
 		let size: number;
 		try {
@@ -107,19 +107,18 @@ export class ReleaseStore {
 
 	async deleteRelease(id: string): Promise<void> {
 		const release = await this.release(id);
-		this.projects.database.transaction(() => {
-			this.projects.assertNotBusy(release.projectId);
-			this.projects.database.delete("release", id);
-			this.projects.database.removeOwnerFiles("release-file", id);
-			const project = this.projects.database.get<ManualProject>("project", release.projectId)
-				? this.projects.load(release.projectId)
+		await this.projects.database.transaction(async () => {
+			await this.projects.assertNotBusy(release.projectId);
+			await this.projects.database.delete("release", id);
+			await this.projects.database.removeOwnerFiles("release-file", id);
+			const project = (await this.projects.database.get<ManualProject>("project", release.projectId))
+				? await this.projects.load(release.projectId)
 				: undefined;
 			if (project?.latestReleaseId === id) {
-				project.latestReleaseId = this.projects.database
-					.list<ManualRelease>("release")
+				project.latestReleaseId = (await this.projects.database.list<ManualRelease>("release"))
 					.filter((item) => item.projectId === project.id)
 					.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id;
-				this.projects.save(project);
+				await this.projects.save(project);
 			}
 		});
 		await rm(this.projects.releaseDirectory(id), { recursive: true, force: true });

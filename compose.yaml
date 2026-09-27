@@ -4,18 +4,28 @@ services:
     image: ${SETDRAFT_WEB_IMAGE:-setdraft/web:local}
     build:
       context: .
+      target: web
       args:
         NODE_IMAGE: ${SETDRAFT_NODE_IMAGE:-node:24.18.0-bookworm-slim}
         DOCKER_CLI_IMAGE: ${SETDRAFT_DOCKER_CLI_IMAGE:-docker:29-cli}
         NPM_REGISTRY: ${SETDRAFT_NPM_REGISTRY:-https://registry.npmmirror.com}
         HTTP_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
         HTTPS_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
+    depends_on:
+      database:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      search:
+        condition: service_started
     init: true
     restart: unless-stopped
     stop_grace_period: 40s
     ports:
       - "${SETDRAFT_BIND_ADDRESS:-0.0.0.0}:${SETDRAFT_PORT:-4321}:${SETDRAFT_PORT:-4321}"
     environment:
+      SETDRAFT_DATABASE_URL: postgresql://setdraft_app:${SETDRAFT_DB_APP_PASSWORD:?Run ./install.sh}@database:5432/setdraft
+      SETDRAFT_SEARCH_URL: http://search:8080
       PORT: ${SETDRAFT_PORT:-4321}
       SETDRAFT_WORKSPACE_ROOT: ${SETDRAFT_DATA_PATH:?Run ./install.sh first to generate .env.compose}
       SETDRAFT_PUBLIC_ORIGIN: ${SETDRAFT_PUBLIC_ORIGIN:-}
@@ -40,6 +50,60 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+  database:
+    image: ${SETDRAFT_POSTGRES_IMAGE:-postgres:18-bookworm@sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: setdraft
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${SETDRAFT_DB_ADMIN_PASSWORD:?Run ./install.sh}
+      SETDRAFT_DB_APP_PASSWORD: ${SETDRAFT_DB_APP_PASSWORD:?Run ./install.sh}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d setdraft"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  migrate:
+    image: ${SETDRAFT_WEB_IMAGE:-setdraft/web:local}
+    entrypoint: ["node", "packages/hydro-server/dist/migrate-cli.js"]
+    environment:
+      SETDRAFT_DB_APP_PASSWORD: ${SETDRAFT_DB_APP_PASSWORD:?Run ./install.sh}
+      SETDRAFT_DATABASE_ADMIN_URL: postgresql://postgres:${SETDRAFT_DB_ADMIN_PASSWORD:?Run ./install.sh}@database:5432/setdraft
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: "no"
+  search:
+    image: ${SETDRAFT_SEARCH_IMAGE:-searxng/searxng@sha256:5286edb35782454ab8a102c5eff6b54bff745853191b46aeead95f225aa6dfb6}
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SETDRAFT_SEARCH_SECRET:?Run ./install.sh}
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - search-cache:/var/cache/searxng
+  maintenance:
+    image: ${SETDRAFT_MAINTENANCE_IMAGE:-setdraft/maintenance:local}
+    profiles: ["maintenance"]
+    build:
+      context: .
+      target: maintenance
+      args:
+        NODE_IMAGE: ${SETDRAFT_NODE_IMAGE:-node:24.18.0-bookworm-slim}
+        DOCKER_CLI_IMAGE: ${SETDRAFT_DOCKER_CLI_IMAGE:-docker:29-cli}
+        POSTGRES_IMAGE: ${SETDRAFT_POSTGRES_IMAGE:-postgres:18-bookworm@sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650}
+        NPM_REGISTRY: ${SETDRAFT_NPM_REGISTRY:-https://registry.npmmirror.com}
+        HTTP_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
+        HTTPS_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
+    environment:
+      SETDRAFT_DATABASE_ADMIN_URL: postgresql://postgres:${SETDRAFT_DB_ADMIN_PASSWORD:?Run ./install.sh}@database:5432/setdraft
+      SETDRAFT_WORKSPACE_ROOT: ${SETDRAFT_DATA_PATH}
+    volumes:
+      - type: bind
+        source: ${SETDRAFT_DATA_PATH}
+        target: ${SETDRAFT_DATA_PATH}
+    restart: "no"
   sandbox:
     image: ${SETDRAFT_SANDBOX_IMAGE:-setdraft/sandbox:local}
     profiles: ["build"]
@@ -51,3 +115,7 @@ services:
         DEBIAN_MIRROR: ${SETDRAFT_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}
     entrypoint: ["/bin/true"]
     restart: "no"
+
+volumes:
+  postgres-data:
+  search-cache:

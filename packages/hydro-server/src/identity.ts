@@ -1,8 +1,8 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+
+import { resolve } from "node:path";
 import type { AuthSession, AuthUser, UserPreferences, UserRole } from "@setdraft/contracts";
+import { PostgresScope } from "./postgres.ts";
 
 const day = 86_400_000;
 const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -90,93 +90,59 @@ function publicUser(row: UserRow): AuthUser {
 
 /** Identity is deliberately independent of any user's workspace database. */
 export class IdentityStore {
-	readonly db: DatabaseSync;
+	readonly root: string;
+	readonly sql: PostgresScope;
 	private readonly now: () => number;
 	private readonly listeners = new Set<() => void>();
 	constructor(root: string, now: () => number = Date.now) {
-		mkdirSync(root, { recursive: true });
+		this.root = resolve(root);
 		this.now = now;
-		const path = join(root, "identity.sqlite");
-		this.db = new DatabaseSync(path);
-		chmodSync(path, 0o600);
-		this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=30000");
-		const version = this.db.prepare("PRAGMA user_version").get() as { user_version: number };
-		if (version.user_version > 1) throw new Error("账号数据库来自更新版本，请升级应用。");
-		this.db.exec(`
-			BEGIN IMMEDIATE;
-			CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-			CREATE TABLE IF NOT EXISTS users (
-				id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
-				role TEXT NOT NULL CHECK(role IN ('admin','user')), enabled INTEGER NOT NULL DEFAULT 1,
-				must_change_password INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
-			);
-			CREATE TABLE IF NOT EXISTS sessions (
-				token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf_token TEXT NOT NULL,
-				created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL, expires_at INTEGER NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
-			CREATE TABLE IF NOT EXISTS login_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-			CREATE TABLE IF NOT EXISTS audit (
-				id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id TEXT, action TEXT NOT NULL, subject_id TEXT,
-				created_at INTEGER NOT NULL
-			);
-			CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-			PRAGMA user_version=1;
-			COMMIT;
-		`);
+		this.sql = new PostgresScope(root, "identity");
 	}
-	close(): void {
-		this.db.close();
+	close(): void {}
+	private transaction<T>(work: () => Promise<T> | T): Promise<T> {
+		return this.sql.transaction(work);
 	}
-	private transaction<T>(work: () => T): T {
-		this.db.exec("BEGIN IMMEDIATE");
-		try {
-			const value = work();
-			this.db.exec("COMMIT");
-			return value;
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
-	}
-	private metadata(key: string): string | undefined {
-		return (this.db.prepare("SELECT value FROM metadata WHERE key=?").get(key) as { value: string } | undefined)
+	private async metadata(key: string): Promise<string | undefined> {
+		return ((await this.sql.one("SELECT value FROM metadata WHERE key=$1", [key])) as { value: string } | undefined)
 			?.value;
 	}
-	get initialized(): boolean {
-		return Boolean(this.metadata("legacy-owner"));
+	async isInitialized(): Promise<boolean> {
+		return Boolean(await this.metadata("initialized"));
 	}
-	get legacyOwnerId(): string | undefined {
-		return this.metadata("legacy-owner");
-	}
-	getSetting(key: string): unknown {
-		const row = this.db.prepare("SELECT value FROM settings WHERE key=?").get(key) as { value: string } | undefined;
+	async getSetting(key: string): Promise<unknown> {
+		const row = (await this.sql.one("SELECT value FROM settings WHERE key=$1", [key])) as
+			| { value: string }
+			| undefined;
 		return row ? (JSON.parse(row.value) as unknown) : undefined;
 	}
-	setSetting(key: string, value: unknown): void {
-		this.db
-			.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-			.run(key, JSON.stringify(value));
+	async setSetting(key: string, value: unknown): Promise<void> {
+		await this.sql.execute(
+			"INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+			[key, JSON.stringify(value)],
+		);
 	}
-	private audit(actor: string | undefined, action: string, subject?: string): void {
-		this.db
-			.prepare("INSERT INTO audit(actor_id,action,subject_id,created_at) VALUES(?,?,?,?)")
-			.run(actor ?? null, action, subject ?? null, this.now());
+	private async audit(actor: string | undefined, action: string, subject?: string): Promise<void> {
+		await this.sql.execute("INSERT INTO audit(actor_id,action,subject_id,created_at) VALUES($1,$2,$3,$4)", [
+			actor ?? null,
+			action,
+			subject ?? null,
+			this.now(),
+		]);
 	}
-	rotateSetupToken(): string {
-		return this.transaction(() => {
-			if (this.initialized) throw new AuthError("管理员已经初始化。", 409, "ALREADY_INITIALIZED");
+	async rotateSetupToken(): Promise<string> {
+		return await this.transaction(async () => {
+			if (await this.isInitialized()) throw new AuthError("管理员已经初始化。", 409, "ALREADY_INITIALIZED");
 			const token = secret();
-			this.db
-				.prepare(
-					"INSERT INTO metadata(key,value) VALUES('setup',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-				)
-				.run(JSON.stringify({ hash: hashToken(token), expiresAt: this.now() + day }));
+			await this.sql.execute(
+				"INSERT INTO metadata(key,value) VALUES('setup',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+				[JSON.stringify({ hash: hashToken(token), expiresAt: this.now() + day })],
+			);
 			return token;
 		});
 	}
-	private validSetupToken(token: unknown): boolean {
-		const value = this.metadata("setup");
+	private async validSetupToken(token: unknown): Promise<boolean> {
+		const value = await this.metadata("setup");
 		if (typeof token !== "string" || !value) return false;
 		const stored = JSON.parse(value) as { hash: string; expiresAt: number };
 		return (
@@ -185,36 +151,40 @@ export class IdentityStore {
 		);
 	}
 	async setup(input: Record<string, unknown>, ip: string): Promise<AuthUser> {
-		this.throttle([`setup:${ip}`], [10]);
-		if (this.initialized) throw new AuthError("管理员已经初始化。", 409, "ALREADY_INITIALIZED");
-		if (!this.validSetupToken(input.setupToken))
+		await this.throttle([`setup:${ip}`], [10]);
+		if (await this.isInitialized()) throw new AuthError("管理员已经初始化。", 409, "ALREADY_INITIALIZED");
+		if (!(await this.validSetupToken(input.setupToken)))
 			throw new AuthError("安装码无效或已过期。", 400, "INVALID_SETUP_TOKEN");
 		const name = username(input.username);
 		const hashed = await passwordHash(input.password);
-		return this.transaction(() => {
-			if (this.initialized) throw new AuthError("管理员已经初始化。", 409, "ALREADY_INITIALIZED");
-			if (!this.validSetupToken(input.setupToken))
+		return await this.transaction(async () => {
+			if (await this.isInitialized()) throw new AuthError("管理员已经初始化。", 409, "ALREADY_INITIALIZED");
+			if (!(await this.validSetupToken(input.setupToken)))
 				throw new AuthError("安装码无效或已过期。", 400, "INVALID_SETUP_TOKEN");
 			const id = randomUUID();
-			this.db
-				.prepare("INSERT INTO users(id,username,password_hash,role,created_at) VALUES(?,?,?,'admin',?)")
-				.run(id, name, hashed, this.now());
-			this.db.prepare("INSERT INTO metadata(key,value) VALUES('legacy-owner',?)").run(id);
-			this.db.prepare("DELETE FROM metadata WHERE key='setup'").run();
-			this.audit(id, "setup", id);
-			return this.getUser(id);
+			await this.sql.execute(
+				"INSERT INTO users(id,username,password_hash,role,created_at) VALUES($1,$2,$3,'admin',$4)",
+				[id, name, hashed, this.now()],
+			);
+			await this.sql.execute("INSERT INTO metadata(key,value) VALUES('initialized',$1)", [id]);
+			await this.sql.execute("DELETE FROM metadata WHERE key='setup'", []);
+			await this.audit(id, "setup", id);
+			return await this.getUser(id);
 		});
 	}
-	private row(id: string): UserRow {
-		const row = this.db.prepare("SELECT * FROM users WHERE id=?").get(id) as unknown as UserRow | undefined;
+	private async row(id: string): Promise<UserRow> {
+		const row = (await this.sql.one("SELECT * FROM users WHERE id=$1", [id])) as unknown as UserRow | undefined;
 		if (!row) throw new AuthError("账号不存在。", 404, "NOT_FOUND");
 		return row;
 	}
-	getUser(id: string): AuthUser {
-		return { ...publicUser(this.row(id)), ...(this.getSetting(`profile:${id}`) as UserPreferences | undefined) };
+	async getUser(id: string): Promise<AuthUser> {
+		return {
+			...publicUser(await this.row(id)),
+			...((await this.getSetting(`profile:${id}`)) as UserPreferences | undefined),
+		};
 	}
-	updateProfile(id: string, input: Record<string, unknown>): AuthUser {
-		const user = this.getUser(id);
+	async updateProfile(id: string, input: Record<string, unknown>): Promise<AuthUser> {
+		const user = await this.getUser(id);
 		if (!user.enabled || user.mustChangePassword) throw new AuthError("请先完成登录。", 403);
 		const profile: UserPreferences = { locale: user.locale, avatar: user.avatar };
 		if (input.locale !== undefined) {
@@ -241,81 +211,94 @@ export class IdentityStore {
 				profile.avatar = input.avatar as string;
 			}
 		}
-		this.setSetting(`profile:${id}`, profile);
-		return this.getUser(id);
+		await this.setSetting(`profile:${id}`, profile);
+		return await this.getUser(id);
 	}
-	listUsers(): AuthUser[] {
-		return (this.db.prepare("SELECT * FROM users ORDER BY created_at,username").all() as unknown as UserRow[]).map(
+	async listUsers(): Promise<AuthUser[]> {
+		return ((await this.sql.all("SELECT * FROM users ORDER BY created_at,username", [])) as unknown as UserRow[]).map(
 			publicUser,
 		);
 	}
-	private throttle(keys: string[], limits: number[]): void {
-		this.transaction(() => {
-			this.db.prepare("DELETE FROM login_limits WHERE expires_at<=?").run(this.now());
+	private async throttle(keys: string[], limits: number[]): Promise<void> {
+		await this.transaction(async () => {
+			await this.sql.execute("DELETE FROM login_limits WHERE expires_at<=$1", [this.now()]);
 			for (const [index, key] of keys.entries()) {
-				const row = this.db.prepare("SELECT count FROM login_limits WHERE key=?").get(key) as
+				const row = (await this.sql.one("SELECT count FROM login_limits WHERE key=$1", [key])) as
 					| { count: number }
 					| undefined;
 				if (row && row.count >= limits[index])
 					throw new AuthError("登录请求过多，请 15 分钟后重试。", 429, "RATE_LIMITED");
 			}
 			for (const key of keys)
-				this.db
-					.prepare(
-						"INSERT INTO login_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1",
-					)
-					.run(key, this.now() + 15 * 60_000);
+				await this.sql.execute(
+					"INSERT INTO login_limits(key,count,expires_at) VALUES($1,1,$2) ON CONFLICT(key) DO UPDATE SET count=login_limits.count+1",
+					[key, this.now() + 15 * 60_000],
+				);
 		});
 	}
 	async login(input: Record<string, unknown>, ip: string): Promise<AuthUser> {
+		return publicUser(await this.authenticate(input, ip));
+	}
+	async loginSession(input: Record<string, unknown>, ip: string): ReturnType<IdentityStore["createSession"]> {
+		const row = await this.authenticate(input, ip);
+		return this.createSession(row.id, row.password_hash);
+	}
+	private async authenticate(input: Record<string, unknown>, ip: string): Promise<UserRow> {
 		const name = typeof input.username === "string" ? input.username.toLowerCase().slice(0, 128) : "";
 		const accountKey = `account:${hashToken(name)}`;
-		this.throttle([accountKey, `ip:${ip}`], [5, 30]);
-		const row = this.db.prepare("SELECT * FROM users WHERE username=?").get(name) as unknown as UserRow | undefined;
+		await this.throttle([accountKey, `ip:${ip}`], [5, 30]);
+		const row = (await this.sql.one("SELECT * FROM users WHERE username=$1", [name])) as unknown as
+			| UserRow
+			| undefined;
 		const valid = await verifyPassword(input.password, row?.password_hash);
 		// Re-read after expensive hashing: disabling/resetting an account must win the race.
-		const current = row ? this.row(row.id) : undefined;
+		const current = row ? await this.row(row.id) : undefined;
 		if (!valid || !current?.enabled || current.password_hash !== row?.password_hash)
 			throw new AuthError("用户名或密码错误。", 401, "INVALID_CREDENTIALS");
-		this.db.prepare("DELETE FROM login_limits WHERE key=?").run(accountKey);
-		this.audit(current.id, "login", current.id);
-		return publicUser(current);
+		await this.sql.execute("DELETE FROM login_limits WHERE key=$1", [accountKey]);
+		await this.audit(current.id, "login", current.id);
+		return current;
 	}
-	createSession(id: string): { token: string; access: SessionAccess } {
-		const user = this.getUser(id);
-		if (!user.enabled) throw new AuthError("请重新登录。", 401, "AUTH_REQUIRED");
-		const token = secret();
-		const tokenHash = hashToken(token);
-		const csrfToken = secret();
-		const now = this.now();
-		const expiresAt = now + 7 * day;
-		this.db.prepare("DELETE FROM sessions WHERE expires_at<=? OR last_seen<=?").run(now, now - day);
-		this.db
-			.prepare(
-				"INSERT INTO sessions(token_hash,user_id,csrf_token,created_at,last_seen,expires_at) VALUES(?,?,?,?,?,?)",
-			)
-			.run(tokenHash, id, csrfToken, now, now, expiresAt);
-		return { token, access: { user, tokenHash, csrfToken, expiresAt } };
+	async createSession(id: string, verifiedPasswordHash?: string): Promise<{ token: string; access: SessionAccess }> {
+		return this.transaction(async () => {
+			if (verifiedPasswordHash && (await this.row(id)).password_hash !== verifiedPasswordHash)
+				throw new AuthError("请重新登录。", 401, "AUTH_REQUIRED");
+			const user = await this.getUser(id);
+			if (!user.enabled) throw new AuthError("请重新登录。", 401, "AUTH_REQUIRED");
+			const token = secret();
+			const tokenHash = hashToken(token);
+			const csrfToken = secret();
+			const now = this.now();
+			const expiresAt = now + 7 * day;
+			await this.sql.execute("DELETE FROM sessions WHERE expires_at<=$1 OR last_seen<=$2", [now, now - day]);
+			await this.sql.execute(
+				"INSERT INTO sessions(token_hash,user_id,csrf_token,created_at,last_seen,expires_at) VALUES($1,$2,$3,$4,$5,$6)",
+				[tokenHash, id, csrfToken, now, now, expiresAt],
+			);
+			return { token, access: { user, tokenHash, csrfToken, expiresAt } };
+		});
 	}
-	session(token: string | undefined, touch = true, hashed = false): SessionAccess | undefined {
+
+	async session(token: string | undefined, touch = true, hashed = false): Promise<SessionAccess | undefined> {
 		if (!token) return undefined;
 		const tokenHash = hashed ? token : hashToken(token);
-		const row = this.db.prepare("SELECT * FROM sessions WHERE token_hash=?").get(tokenHash) as
+		const row = (await this.sql.one("SELECT * FROM sessions WHERE token_hash=$1", [tokenHash])) as
 			| { user_id: string; csrf_token: string; expires_at: number; last_seen: number }
 			| undefined;
 		if (!row) return undefined;
-		const user = this.getUser(row.user_id);
+		const user = await this.getUser(row.user_id);
 		if (!user.enabled || row.expires_at <= this.now() || row.last_seen + day <= this.now()) {
-			this.db.prepare("DELETE FROM sessions WHERE token_hash=?").run(tokenHash);
+			await this.sql.execute("DELETE FROM sessions WHERE token_hash=$1", [tokenHash]);
 			return undefined;
 		}
-		if (touch) this.db.prepare("UPDATE sessions SET last_seen=? WHERE token_hash=?").run(this.now(), tokenHash);
+		if (touch)
+			await this.sql.execute("UPDATE sessions SET last_seen=$1 WHERE token_hash=$2", [this.now(), tokenHash]);
 		return { user, tokenHash, csrfToken: row.csrf_token, expiresAt: row.expires_at };
 	}
-	snapshot(access?: SessionAccess): AuthSession {
+	async snapshot(access?: SessionAccess): Promise<AuthSession> {
 		return {
 			user: access?.user ?? null,
-			setupRequired: !this.initialized,
+			setupRequired: !(await this.isInitialized()),
 			csrfToken: access?.csrfToken,
 			expiresAt: access ? new Date(access.expiresAt).toISOString() : undefined,
 		};
@@ -329,26 +312,27 @@ export class IdentityStore {
 	private changed(): void {
 		for (const listener of this.listeners) listener();
 	}
-	logout(access: SessionAccess): void {
-		this.db.prepare("DELETE FROM sessions WHERE token_hash=?").run(access.tokenHash);
+	async logout(access: SessionAccess): Promise<void> {
+		await this.sql.execute("DELETE FROM sessions WHERE token_hash=$1", [access.tokenHash]);
 		this.changed();
 	}
-	private revoke(id: string): void {
-		this.db.prepare("DELETE FROM sessions WHERE user_id=?").run(id);
+	private async revoke(id: string): Promise<void> {
+		await this.sql.execute("DELETE FROM sessions WHERE user_id=$1", [id]);
 	}
-	async changePassword(id: string, input: Record<string, unknown>): Promise<void> {
-		const row = this.row(id);
+	async changePassword(id: string, input: Record<string, unknown>): Promise<string> {
+		const row = await this.row(id);
 		if (!(await verifyPassword(input.currentPassword, row.password_hash))) throw new AuthError("当前密码错误。", 400);
 		const hashed = await passwordHash(input.password);
-		this.transaction(() => {
-			const current = this.row(id);
+		await this.transaction(async () => {
+			const current = await this.row(id);
 			if (!current.enabled || current.password_hash !== row.password_hash)
 				throw new AuthError("请重新登录。", 401, "AUTH_REQUIRED");
-			this.db.prepare("UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?").run(hashed, id);
-			this.revoke(id);
-			this.audit(id, "password-change", id);
+			await this.sql.execute("UPDATE users SET password_hash=$1,must_change_password=0 WHERE id=$2", [hashed, id]);
+			await this.revoke(id);
+			await this.audit(id, "password-change", id);
 		});
 		this.changed();
+		return hashed;
 	}
 	async createUser(
 		actor: string,
@@ -359,57 +343,57 @@ export class IdentityStore {
 		if (role !== "admin" && role !== "user") throw new AuthError("角色无效。", 422);
 		const temporaryPassword = secret();
 		const hashed = await passwordHash(temporaryPassword);
-		return this.transaction(() => {
-			this.requireAdmin(actor);
-			if (this.db.prepare("SELECT 1 FROM users WHERE username=?").get(name))
+		return await this.transaction(async () => {
+			await this.requireAdmin(actor);
+			if (await this.sql.one("SELECT 1 FROM users WHERE username=$1", [name]))
 				throw new AuthError("用户名已存在。", 409);
 			const id = randomUUID();
-			this.db
-				.prepare(
-					"INSERT INTO users(id,username,password_hash,role,must_change_password,created_at) VALUES(?,?,?,?,1,?)",
-				)
-				.run(id, name, hashed, role, this.now());
-			this.audit(actor, "user-create", id);
-			return { user: this.getUser(id), temporaryPassword };
+			await this.sql.execute(
+				"INSERT INTO users(id,username,password_hash,role,must_change_password,created_at) VALUES($1,$2,$3,$4,1,$5)",
+				[id, name, hashed, role, this.now()],
+			);
+			await this.audit(actor, "user-create", id);
+			return { user: await this.getUser(id), temporaryPassword };
 		});
 	}
-	requireAdmin(id: string): void {
-		const user = this.getUser(id);
+	async requireAdmin(id: string): Promise<void> {
+		const user = await this.getUser(id);
 		if (!user.enabled || user.role !== "admin" || user.mustChangePassword)
 			throw new AuthError("需要管理员权限。", 403, "FORBIDDEN");
 	}
-	updateUser(actor: string, id: string, input: Record<string, unknown>): AuthUser {
-		const result = this.transaction(() => {
-			this.requireAdmin(actor);
-			const previous = this.getUser(id);
+	async updateUser(actor: string, id: string, input: Record<string, unknown>): Promise<AuthUser> {
+		const result = await this.transaction(async () => {
+			await this.requireAdmin(actor);
+			const previous = await this.getUser(id);
 			const role = input.role ?? previous.role;
 			const enabled = input.enabled ?? previous.enabled;
 			if ((role !== "admin" && role !== "user") || typeof enabled !== "boolean")
 				throw new AuthError("账号设置无效。", 422);
 			if (previous.role === "admin" && previous.enabled && (role !== "admin" || !enabled)) {
-				const count = this.db
-					.prepare("SELECT count(*) AS count FROM users WHERE role='admin' AND enabled=1")
-					.get() as { count: number };
+				const count = (await this.sql.one(
+					"SELECT count(*)::integer AS count FROM users WHERE role='admin' AND enabled=1",
+					[],
+				)) as { count: number };
 				if (count.count <= 1) throw new AuthError("必须保留至少一名启用的管理员。", 409);
 			}
-			this.db.prepare("UPDATE users SET role=?,enabled=? WHERE id=?").run(role, Number(enabled), id);
-			if (role !== previous.role || !enabled) this.revoke(id);
-			this.audit(actor, enabled ? "user-update" : "user-disable", id);
-			return this.getUser(id);
+			await this.sql.execute("UPDATE users SET role=$1,enabled=$2 WHERE id=$3", [role, Number(enabled), id]);
+			if (role !== previous.role || !enabled) await this.revoke(id);
+			await this.audit(actor, enabled ? "user-update" : "user-disable", id);
+			return await this.getUser(id);
 		});
 		this.changed();
 		return result;
 	}
 	async resetPassword(actor: string | undefined, id: string): Promise<{ temporaryPassword: string }> {
-		if (actor) this.requireAdmin(actor);
-		this.row(id);
+		if (actor) await this.requireAdmin(actor);
+		await this.row(id);
 		const temporaryPassword = secret();
 		const hashed = await passwordHash(temporaryPassword);
-		this.transaction(() => {
-			if (actor) this.requireAdmin(actor);
-			this.db.prepare("UPDATE users SET password_hash=?,must_change_password=1 WHERE id=?").run(hashed, id);
-			this.revoke(id);
-			this.audit(actor, "password-reset", id);
+		await this.transaction(async () => {
+			if (actor) await this.requireAdmin(actor);
+			await this.sql.execute("UPDATE users SET password_hash=$1,must_change_password=1 WHERE id=$2", [hashed, id]);
+			await this.revoke(id);
+			await this.audit(actor, "password-reset", id);
 		});
 		this.changed();
 		return { temporaryPassword };

@@ -131,14 +131,13 @@ export class ManualProjectStore {
 		return join(this.root, "releases", id);
 	}
 
-	dataFile(id: string, origin: "manual" | "generated", name: string): string {
-		const path = this.database.filePath(origin, id, name);
+	async dataFile(id: string, origin: "manual" | "generated", name: string): Promise<string> {
+		const path = await this.database.filePath(origin, id, name);
 		if (!path) throw new ManualProjectError(`测试文件 ${name} 不存在于数据索引。`, 404);
 		return path;
 	}
 
 	async create(scoringMode: "acm" | "oi"): Promise<ManualProjectSnapshot> {
-		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
 		const id = randomUUID();
 		const now = new Date().toISOString();
 		const project: ManualProject = {
@@ -170,12 +169,12 @@ export class ManualProjectStore {
 		const directory = this.projectDirectory(id);
 		await mkdir(join(directory, "manual"), { recursive: true });
 		await this.save(project);
-		return this.get(id);
+		return await this.get(id);
 	}
 
-	load(id: string): ManualProject {
+	async load(id: string): Promise<ManualProject> {
 		try {
-			const document = this.database.getVersioned<ManualProject>("project", id);
+			const document = await this.database.getVersioned<ManualProject>("project", id);
 			if (!document) throw new ManualProjectError("项目不存在。", 404);
 			const { value: stored, version } = document;
 			const project = {
@@ -194,18 +193,22 @@ export class ManualProjectStore {
 		}
 	}
 
-	save(project: ManualProject, context?: ExecutionContext): void {
+	async save(project: ManualProject, context?: ExecutionContext): Promise<void> {
 		const knownVersion = this.documentVersions.get(project);
-		const expectedVersion = knownVersion ?? this.database.version("project", project.id) ?? -1;
+		const expectedVersion = knownVersion ?? (await this.database.version("project", project.id)) ?? -1;
 		try {
-			this.database.transaction(() => {
+			await this.database.transaction(async () => {
 				context?.signal.throwIfAborted();
-				this.assertTaskAccess(project.id, context);
-				this.database.put("project", project.id, project, expectedVersion);
+				await this.assertTaskAccess(project.id, context);
+				await this.database.put("project", project.id, project, expectedVersion);
 			});
 		} catch (error) {
 			if (String(error).includes("VERSION_CONFLICT")) {
-				throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
+				throw new ManualProjectError(
+					"题目版本已变化，请检查最新内容后重试。",
+					409,
+					await this.snapshot(project.id),
+				);
 			}
 			throw error;
 		}
@@ -217,15 +220,15 @@ export class ManualProjectStore {
 			throw new ManualProjectError("题目版本无效。", 422);
 		}
 		if (expectedRevision !== undefined && expectedRevision !== project.revision) {
-			throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, this.snapshot(project.id));
+			throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, await this.snapshot(project.id));
 		}
 	}
 
-	caseList(project: ManualProject): { cases: ManualCaseSummary[]; orphanOutputs: string[] } {
+	async caseList(project: ManualProject): Promise<{ cases: ManualCaseSummary[]; orphanOutputs: string[] }> {
 		const cases: ManualCaseSummary[] = [];
 		const orphanOutputs: string[] = [];
 		for (const origin of ["manual", "generated"] as const) {
-			const files = this.database.fileEntries(origin, project.id);
+			const files = await this.database.fileEntries(origin, project.id);
 			const byName = new Map(files.map((item) => [item.name, item.size]));
 			for (const file of files) {
 				const { stem, extension } = dataStem(file.name);
@@ -256,23 +259,23 @@ export class ManualProjectStore {
 	}
 
 	async get(id: string): Promise<ManualProjectSnapshot> {
-		return this.snapshot(id);
+		return await this.snapshot(id);
 	}
 
-	snapshot(id: string): ManualProjectSnapshot {
-		const project = this.load(id);
-		return { ...project, ...this.caseList(project) };
+	async snapshot(id: string): Promise<ManualProjectSnapshot> {
+		const project = await this.load(id);
+		return { ...project, ...(await this.caseList(project)) };
 	}
 
 	async list(): Promise<ManualProjectSnapshot[]> {
-		const ids = this.database.list<ManualProject>("project").map((item) => item.id);
-		return (await Promise.all(ids.map((id) => this.get(id)))).sort((left, right) =>
+		const ids = (await this.database.list<ManualProject>("project")).map((item) => item.id);
+		return (await Promise.all(ids.map(async (id) => await this.get(id)))).sort((left, right) =>
 			right.updatedAt.localeCompare(left.updatedAt),
 		);
 	}
 
 	async update(id: string, value: unknown): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
+		await this.assertNotBusy(id);
 		const project = await this.load(id);
 		const input = record(value, "题目");
 		if (input.expectedRevision !== undefined && input.expectedRevision !== project.revision) {
@@ -366,38 +369,40 @@ export class ManualProjectStore {
 		project.revision += 1;
 		project.updatedAt = new Date().toISOString();
 		await this.save(project);
-		return this.get(id);
+		return await this.get(id);
 	}
 
-	assertNotBusy(id: string, context?: ExecutionContext): void {
-		if (this.database.migrationError) throw new ManualProjectError("旧数据迁移失败，当前只读。", 503);
+	async assertNotBusy(id: string, context?: ExecutionContext): Promise<void> {
 		if (this.busy.has(id)) throw new ManualProjectError("项目正在生成或验证，请稍后重试。", 409);
-		this.assertTaskAccess(id, context);
+		await this.assertTaskAccess(id, context);
 	}
 
-	lock(id: string, context?: ExecutionContext): () => void {
-		this.assertNotBusy(id, context);
+	async lock(id: string, context?: ExecutionContext): Promise<() => void> {
+		await this.assertNotBusy(id, context);
+		// Another operation can acquire the in-process lock while the task query awaits PostgreSQL.
+		if (this.busy.has(id)) throw new ManualProjectError("项目正在生成或验证，请稍后重试。", 409);
 		this.busy.add(id);
 		return () => this.busy.delete(id);
 	}
 
-	private assertTaskAccess(id: string, context?: ExecutionContext): void {
-		const running = this.database.db
-			.prepare("SELECT id FROM tasks WHERE resource=? AND state='running'")
-			.get(`project:${id}`) as { id: string } | undefined;
+	private async assertTaskAccess(id: string, context?: ExecutionContext): Promise<void> {
+		const running = (await this.database.sql.one("SELECT id FROM tasks WHERE resource=$1 AND state='running'", [
+			`project:${id}`,
+		])) as { id: string } | undefined;
 		if (running && running.id !== context?.id) {
 			throw new ManualProjectError("项目正在生成或验证，请稍后重试。", 409);
 		}
 	}
 
-	projectDataBytes(id: string): number {
-		return ["manual", "generated"]
-			.flatMap((kind) => this.database.fileEntries(kind, id))
-			.reduce((sum, file) => sum + file.size, 0);
+	async projectDataBytes(id: string): Promise<number> {
+		const files = (
+			await Promise.all(["manual", "generated"].map(async (kind) => await this.database.fileEntries(kind, id)))
+		).flat();
+		return files.reduce((sum, file) => sum + file.size, 0);
 	}
 
 	async addTextCase(id: string, value: unknown): Promise<AddedManualCase> {
-		this.assertNotBusy(id);
+		await this.assertNotBusy(id);
 		this.busy.add(id);
 
 		try {
@@ -452,9 +457,9 @@ export class ManualProjectStore {
 						? [{ ownerKind: "manual", ownerId: id, name: outputFile, source: { bytes: output } }]
 						: []),
 				],
-				() => this.save(project),
+				async () => await this.save(project),
 			);
-			return { inputFile, outputFile, project: this.snapshot(id) };
+			return { inputFile, outputFile, project: await this.snapshot(id) };
 		} finally {
 			this.busy.delete(id);
 		}
@@ -497,24 +502,26 @@ export class ManualProjectStore {
 		request: AsyncIterable<Uint8Array | string>,
 		expectedRevision?: number,
 	): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
+		await this.assertNotBusy(id);
 		this.busy.add(id);
 		let path: string | undefined;
 		try {
-			const project = this.load(id);
+			const project = await this.load(id);
 			await this.assertExpectedRevision(project, expectedRevision);
 			dataStem(name);
 			const uploaded = await this.receiveFile(id, request);
 			path = uploaded.path;
-			const previous = this.database.fileEntries("manual", id).find((entry) => entry.name === name)?.size ?? 0;
-			if (this.projectDataBytes(id) - previous + uploaded.size > this.maxProjectBytes)
+			const previous =
+				(await this.database.fileEntries("manual", id)).find((entry) => entry.name === name)?.size ?? 0;
+			if ((await this.projectDataBytes(id)) - previous + uploaded.size > this.maxProjectBytes)
 				throw new ManualProjectError(`项目数据总量不能超过 ${this.maxProjectBytes} 字节。`, 413);
 			project.revision++;
 			project.updatedAt = new Date().toISOString();
-			await this.database.commitFiles([{ ownerKind: "manual", ownerId: id, name, source: { path } }], () =>
-				this.save(project),
+			await this.database.commitFiles(
+				[{ ownerKind: "manual", ownerId: id, name, source: { path } }],
+				async () => await this.save(project),
 			);
-			return this.snapshot(id);
+			return await this.snapshot(id);
 		} finally {
 			this.busy.delete(id);
 			if (path) await rm(path, { force: true });
@@ -526,11 +533,11 @@ export class ManualProjectStore {
 		request: AsyncIterable<Uint8Array | string>,
 		expectedRevision?: number,
 	): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
+		await this.assertNotBusy(id);
 		this.busy.add(id);
 		let path: string | undefined;
 		try {
-			const project = this.load(id);
+			const project = await this.load(id);
 			await this.assertExpectedRevision(project, expectedRevision);
 			if (project.scoringMode !== "acm") throw new ManualProjectError("只有 ACM 题目可以上传 DOMjudge PDF。", 422);
 			const uploaded = await this.receiveFile(id, request);
@@ -548,9 +555,9 @@ export class ManualProjectStore {
 			project.updatedAt = new Date().toISOString();
 			await this.database.commitFiles(
 				[{ ownerKind: "pdf", ownerId: id, name: "problem.pdf", source: { path } }],
-				() => this.save(project),
+				async () => await this.save(project),
 			);
-			return this.snapshot(id);
+			return await this.snapshot(id);
 		} finally {
 			this.busy.delete(id);
 			if (path) await rm(path, { force: true });
@@ -558,17 +565,17 @@ export class ManualProjectStore {
 	}
 
 	async deleteDomjudgePdf(id: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
-		const project = this.load(id);
+		await this.assertNotBusy(id);
+		const project = await this.load(id);
 		await this.assertExpectedRevision(project, expectedRevision);
 		delete project.domjudgePdf;
 		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		this.database.transaction(() => {
-			this.save(project);
-			this.database.removeFile("pdf", id, "problem.pdf");
+		await this.database.transaction(async () => {
+			await this.save(project);
+			await this.database.removeFile("pdf", id, "problem.pdf");
 		});
-		return this.snapshot(id);
+		return await this.snapshot(id);
 	}
 
 	async domjudgePdfFile(id: string): Promise<{ path: string; size: number }> {
@@ -576,7 +583,7 @@ export class ManualProjectStore {
 		if (!project.domjudgePdf) throw new ManualProjectError("尚未上传 DOMjudge PDF。", 404);
 		return {
 			path:
-				this.database.filePath("pdf", id, "problem.pdf") ??
+				(await this.database.filePath("pdf", id, "problem.pdf")) ??
 				join(this.projectDirectory(id), "domjudge", "problem.pdf"),
 			size: project.domjudgePdf.size,
 		};
@@ -586,7 +593,7 @@ export class ManualProjectStore {
 		await this.load(id);
 		dataStem(name);
 		for (const source of origin ? [origin] : (["manual", "generated"] as const)) {
-			const path = this.database.filePath(source, id, name);
+			const path = await this.database.filePath(source, id, name);
 			if (!path) continue;
 			try {
 				const info = await stat(path);
@@ -599,26 +606,26 @@ export class ManualProjectStore {
 	}
 
 	async deleteFile(id: string, name: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
+		await this.assertNotBusy(id);
 		dataStem(name);
-		const project = this.load(id);
+		const project = await this.load(id);
 		await this.assertExpectedRevision(project, expectedRevision);
 		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		this.database.transaction(() => {
-			this.save(project);
-			this.database.removeFile("manual", id, name);
+		await this.database.transaction(async () => {
+			await this.save(project);
+			await this.database.removeFile("manual", id, name);
 		});
-		return this.snapshot(id);
+		return await this.snapshot(id);
 	}
 
 	async deleteCases(id: string, stems: string[], expectedRevision?: number): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
-		const project = this.load(id);
+		await this.assertNotBusy(id);
+		const project = await this.load(id);
 		await this.assertExpectedRevision(project, expectedRevision);
 		if (!stems.length || stems.length > 500 || new Set(stems).size !== stems.length)
 			throw new ManualProjectError("请选择有效的测试点。", 422);
-		const cases = this.caseList(project).cases.filter((item) => item.origin === "manual");
+		const cases = (await this.caseList(project)).cases.filter((item) => item.origin === "manual");
 		const selected = stems.map((stem) => {
 			const item = cases.find((entry) => entry.id === stem);
 			if (!item) throw new ManualProjectError(`手动测试点 ${stem} 不存在。`, 404);
@@ -627,27 +634,27 @@ export class ManualProjectStore {
 		for (const item of selected) delete project.caseSubtasks[`manual:${item.id}`];
 		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		this.database.transaction(() => {
-			this.save(project);
+		await this.database.transaction(async () => {
+			await this.save(project);
 			for (const item of selected)
 				for (const name of [item.inputFile, item.outputFile])
-					if (name) this.database.removeFile("manual", id, name);
+					if (name) await this.database.removeFile("manual", id, name);
 		});
-		return this.snapshot(id);
+		return await this.snapshot(id);
 	}
 
 	async clearGenerated(id: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
-		const project = this.load(id);
+		await this.assertNotBusy(id);
+		const project = await this.load(id);
 		await this.assertExpectedRevision(project, expectedRevision);
 		project.generatedFromHash = undefined;
 		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		this.database.transaction(() => {
-			this.save(project);
-			this.database.removeOwnerFiles("generated", id);
+		await this.database.transaction(async () => {
+			await this.save(project);
+			await this.database.removeOwnerFiles("generated", id);
 		});
-		return this.snapshot(id);
+		return await this.snapshot(id);
 	}
 
 	async renumberPreview(id: string): Promise<Array<{ from: string; to: string }>> {
@@ -666,12 +673,12 @@ export class ManualProjectStore {
 	}
 
 	async renumberCases(id: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
-		this.assertNotBusy(id);
-		const project = this.load(id);
+		await this.assertNotBusy(id);
+		const project = await this.load(id);
 		await this.assertExpectedRevision(project, expectedRevision);
 		const preview = (await this.renumberPreview(id)).filter((item) => item.from !== item.to);
-		if (!preview.length) return this.snapshot(id);
-		const names = new Set(this.database.fileEntries("manual", id).map((file) => file.name));
+		if (!preview.length) return await this.snapshot(id);
+		const names = new Set((await this.database.fileEntries("manual", id)).map((file) => file.name));
 		const changes = preview.flatMap(({ from, to }) =>
 			["in", "out", "ans"]
 				.filter((extension) => names.has(`${from}.${extension}`))
@@ -685,11 +692,11 @@ export class ManualProjectStore {
 		}
 		project.revision++;
 		project.updatedAt = new Date().toISOString();
-		this.database.transaction(() => {
-			this.save(project);
-			this.database.renameFiles("manual", id, changes);
+		await this.database.transaction(async () => {
+			await this.save(project);
+			await this.database.renameFiles("manual", id, changes);
 		});
-		return this.snapshot(id);
+		return await this.snapshot(id);
 	}
 
 	async casePreview(
@@ -704,8 +711,8 @@ export class ManualProjectStore {
 			const bytes = await readFile(path);
 			return { text: bytes.subarray(0, 32 * 1024).toString("utf8"), truncated: bytes.length > 32 * 1024 };
 		};
-		const input = await read(this.dataFile(id, origin, item.inputFile));
-		const output = item.outputFile ? await read(this.dataFile(id, origin, item.outputFile)) : undefined;
+		const input = await read(await this.dataFile(id, origin, item.inputFile));
+		const output = item.outputFile ? await read(await this.dataFile(id, origin, item.outputFile)) : undefined;
 		const released = project.latestReleaseId
 			? await this.releases.release(project.latestReleaseId).catch(() => undefined)
 			: undefined;
@@ -730,16 +737,16 @@ export class ManualProjectStore {
 	}
 
 	async delete(id: string): Promise<void> {
-		const releases = this.database.transaction(() => {
-			this.assertNotBusy(id);
-			this.load(id);
-			const releases = this.database.list<ManualRelease>("release").filter((item) => item.projectId === id);
+		const releases = await this.database.transaction(async () => {
+			await this.assertNotBusy(id);
+			await this.load(id);
+			const releases = (await this.database.list<ManualRelease>("release")).filter((item) => item.projectId === id);
 			for (const release of releases) {
-				this.database.delete("release", release.id);
-				this.database.removeOwnerFiles("release-file", release.id);
+				await this.database.delete("release", release.id);
+				await this.database.removeOwnerFiles("release-file", release.id);
 			}
-			for (const kind of ["manual", "generated", "pdf"]) this.database.removeOwnerFiles(kind, id);
-			this.database.delete("project", id);
+			for (const kind of ["manual", "generated", "pdf"]) await this.database.removeOwnerFiles(kind, id);
+			await this.database.delete("project", id);
 			return releases;
 		});
 		for (const release of releases) await rm(this.releaseDirectory(release.id), { recursive: true, force: true });

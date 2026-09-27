@@ -65,7 +65,7 @@ export class ProjectPipeline {
 		id: string,
 		context?: ExecutionContext,
 	): Promise<{ project: ManualProjectSnapshot; report: ManualSandboxReport }> {
-		const unlock = this.projects.lock(id, context);
+		const unlock = await this.projects.lock(id, context);
 		let stage: string | undefined;
 
 		try {
@@ -105,11 +105,14 @@ export class ProjectPipeline {
 			context?.signal.throwIfAborted();
 			if (!report.success) return { project: await this.projects.get(id), report };
 			const generated = await fileEntries(join(stage, "generated"));
-			const previousBytes = this.projects.database
-				.fileEntries("generated", id)
-				.reduce((sum, file) => sum + file.size, 0);
+			const previousBytes = (await this.projects.database.fileEntries("generated", id)).reduce(
+				(sum, file) => sum + file.size,
+				0,
+			);
 			if (
-				this.projects.projectDataBytes(id) - previousBytes + generated.reduce((sum, file) => sum + file.size, 0) >
+				(await this.projects.projectDataBytes(id)) -
+					previousBytes +
+					generated.reduce((sum, file) => sum + file.size, 0) >
 				this.projects.maxProjectBytes
 			)
 				throw new ManualProjectError("生成数据超过项目容量上限。", 413);
@@ -124,10 +127,10 @@ export class ProjectPipeline {
 					name: file.name,
 					source: { path: join(directory, file.name) },
 				})),
-				() => this.projects.save(project, context),
+				async () => await this.projects.save(project, context),
 				[{ ownerKind: "generated", ownerId: id }],
 			);
-			return { project: this.projects.snapshot(id), report };
+			return { project: await this.projects.snapshot(id), report };
 		} finally {
 			unlock();
 			if (stage) await rm(stage, { recursive: true, force: true });
@@ -165,11 +168,11 @@ export class ProjectPipeline {
 			hash
 				.update(item.origin)
 				.update(item.inputFile)
-				.update(await hashFile(this.projects.dataFile(project.id, item.origin, item.inputFile)));
+				.update(await hashFile(await this.projects.dataFile(project.id, item.origin, item.inputFile)));
 			if (item.outputFile)
 				hash
 					.update(item.outputFile)
-					.update(await hashFile(this.projects.dataFile(project.id, item.origin, item.outputFile)));
+					.update(await hashFile(await this.projects.dataFile(project.id, item.origin, item.outputFile)));
 		}
 		return hash.digest("hex");
 	}
@@ -182,7 +185,7 @@ export class ProjectPipeline {
 				.map(async (item) => ({
 					origin: item.origin,
 					name: item.inputFile,
-					hash: await hashFile(this.projects.dataFile(id, item.origin, item.inputFile)),
+					hash: await hashFile(await this.projects.dataFile(id, item.origin, item.inputFile)),
 				})),
 		);
 		return createHash("sha256")
@@ -232,7 +235,7 @@ export class ProjectPipeline {
 		context?: ExecutionContext,
 		name?: string,
 	): Promise<{ release?: ManualRelease; report: ManualVerificationReport }> {
-		const unlock = this.projects.lock(id, context);
+		const unlock = await this.projects.lock(id, context);
 		let stage: string | undefined;
 		let releaseDirectory: string | undefined;
 		let releaseId: string | undefined;
@@ -285,12 +288,14 @@ export class ProjectPipeline {
 					422,
 				);
 			stage = await mkdtemp(join(this.projects.projectDirectory(id), ".verify-"));
-			const sandboxCases: SandboxCase[] = cases.map((item) => ({
-				id: item.id,
-				inputPath: this.projects.dataFile(id, item.origin, item.inputFile),
-				outputPath: item.outputFile ? this.projects.dataFile(id, item.origin, item.outputFile) : undefined,
-				outputName: item.outputFile ?? `${item.id}.out`,
-			}));
+			const sandboxCases: SandboxCase[] = await Promise.all(
+				cases.map(async (item) => ({
+					id: item.id,
+					inputPath: await this.projects.dataFile(id, item.origin, item.inputFile),
+					outputPath: item.outputFile ? await this.projects.dataFile(id, item.origin, item.outputFile) : undefined,
+					outputName: item.outputFile ?? `${item.id}.out`,
+				})),
+			);
 			const sandbox = await runManualSandbox({
 				mode: "finalize",
 				context,
@@ -331,7 +336,7 @@ export class ProjectPipeline {
 			}
 			for (const item of cases) {
 				await copyFile(
-					this.projects.dataFile(id, item.origin, item.inputFile),
+					await this.projects.dataFile(id, item.origin, item.inputFile),
 					join(hydroRoot, "testdata", item.inputFile),
 				);
 				await copyFile(
@@ -366,7 +371,7 @@ export class ProjectPipeline {
 			}
 			if (project.domjudgePdf) {
 				const pdfSource =
-					this.projects.database.filePath("pdf", id, "problem.pdf") ??
+					(await this.projects.database.filePath("pdf", id, "problem.pdf")) ??
 					join(this.projects.projectDirectory(id), "domjudge", "problem.pdf");
 				if ((await hashFile(pdfSource)) !== project.domjudgePdf.sha256) {
 					throw new ManualProjectError("DOMjudge PDF 已在项目目录外被修改，请重新上传。", 422);
@@ -383,7 +388,7 @@ export class ProjectPipeline {
 					const relative = `data/${item.origin}/${name}`;
 					const target = join(sourceRoot, relative);
 					await mkdir(join(target, ".."), { recursive: true });
-					await copyFile(this.projects.dataFile(id, item.origin, name), target);
+					await copyFile(await this.projects.dataFile(id, item.origin, name), target);
 					sourceFiles.set(relative, target);
 				}
 				const verifiedName = item.outputFile ?? `${item.id}.out`;
@@ -470,10 +475,10 @@ export class ProjectPipeline {
 				source: { path: join(releaseDirectory!, name) },
 			}));
 			project.latestReleaseId = releaseId;
-			await this.projects.database.commitFiles(files, () => {
+			await this.projects.database.commitFiles(files, async () => {
 				context?.signal.throwIfAborted();
-				this.projects.database.put("release", release.id, release);
-				this.projects.save(project, context);
+				await this.projects.database.put("release", release.id, release);
+				await this.projects.save(project, context);
 			});
 			releaseDirectory = undefined;
 			return { release, report };
@@ -482,8 +487,8 @@ export class ProjectPipeline {
 			if (stage) await rm(stage, { recursive: true, force: true });
 			if (releaseDirectory) {
 				if (releaseId) {
-					this.projects.database.delete("release", releaseId);
-					this.projects.database.removeOwnerFiles("release-file", releaseId);
+					await this.projects.database.delete("release", releaseId);
+					await this.projects.database.removeOwnerFiles("release-file", releaseId);
 				}
 				await rm(releaseDirectory, { recursive: true, force: true });
 			}

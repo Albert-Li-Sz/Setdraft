@@ -116,15 +116,15 @@ function readStoredCatalog(value: unknown): StoredCatalog {
 export class AiConfigurationStore {
 	catalog: StoredCatalog = { version: 2, profiles: [] };
 	private configurationError?: string;
-	private readonly storage: { read(): unknown; write(value: StoredCatalog): void };
+	private readonly storage: { read(): unknown; write(value: StoredCatalog): Promise<void> | void };
 	private readonly configPath: string;
-	constructor(storage: { read(): unknown; write(value: StoredCatalog): void }, configPath: string) {
+	constructor(storage: { read(): unknown; write(value: StoredCatalog): Promise<void> | void }, configPath: string) {
 		this.storage = storage;
 		this.configPath = configPath;
 	}
 	async load(): Promise<void> {
 		try {
-			const stored = this.storage.read();
+			const stored = await this.storage.read();
 			if (stored !== undefined) this.catalog = readStoredCatalog(stored);
 			else {
 				try {
@@ -132,7 +132,7 @@ export class AiConfigurationStore {
 				} catch (error) {
 					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 				}
-				this.storage.write(this.catalog);
+				await this.storage.write(this.catalog);
 			}
 			this.configurationError = undefined;
 		} catch {
@@ -153,7 +153,7 @@ export class AiConfigurationStore {
 		};
 	}
 	private async saveCatalog(catalog: StoredCatalog): Promise<void> {
-		this.storage.write(catalog);
+		await this.storage.write(catalog);
 		this.catalog = catalog;
 		this.configurationError = undefined;
 	}
@@ -192,7 +192,7 @@ export class AiConfigurationStore {
 	async removeProfile(id: string): Promise<ChatConfigurationSnapshot> {
 		if (!this.catalog.profiles.some((item) => item.id === id)) throw new ChatError("AI 配置不存在。", 404);
 		const profiles = this.catalog.profiles.filter((item) => item.id !== id);
-		if (profiles.length === 0) return this.clearConfiguration();
+		if (profiles.length === 0) return await this.clearConfiguration();
 		await this.saveCatalog({
 			version: 2,
 			profiles,
@@ -203,7 +203,7 @@ export class AiConfigurationStore {
 
 	async clearConfiguration(): Promise<ChatConfigurationSnapshot> {
 		this.catalog = { version: 2, profiles: [] };
-		this.storage.write(this.catalog);
+		await this.storage.write(this.catalog);
 		this.configurationError = undefined;
 		return this.getConfiguration();
 	}

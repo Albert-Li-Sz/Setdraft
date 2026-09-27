@@ -84,6 +84,9 @@ export function AiChatPage(props: Props) {
 	const [readingImages, setReadingImages] = useState(false);
 	const [copiedMessageId, setCopiedMessageId] = useState<string>();
 	const [attachProject, setAttachProject] = useState(false);
+	const [webSearch, setWebSearch] = useState(true);
+	const [searchQuery, setSearchQuery] = useState("");
+	const [searchPhase, setSearchPhase] = useState("");
 	const [streaming, setStreaming] = useState("");
 	const deferredStreaming = useDeferredValue(streaming);
 	const [streamFailed, setStreamFailed] = useState(false);
@@ -173,6 +176,7 @@ export function AiChatPage(props: Props) {
 					});
 					if (!controller.signal.aborted) {
 						setChat(selected);
+						setWebSearch(selected?.webSearch ?? true);
 						setSelectedProfileId(profileForChat(config, selected));
 					}
 				} else setSelectedProfileId(profileForChat(config));
@@ -201,6 +205,7 @@ export function AiChatPage(props: Props) {
 		setFailedRequest(undefined);
 		if (configuration && !preserveProfileSelection) setSelectedProfileId(profileForChat(configuration, created));
 		setStreaming("");
+		setSearchPhase("");
 		setStreamFailed(false);
 		followOutputRef.current = true;
 		await refreshList();
@@ -213,6 +218,7 @@ export function AiChatPage(props: Props) {
 		try {
 			const selected = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${id}`));
 			setChat(selected);
+			setWebSearch(selected?.webSearch ?? true);
 			setFailedRequest(undefined);
 			if (configuration) setSelectedProfileId(profileForChat(configuration, selected));
 			setStreaming("");
@@ -235,6 +241,7 @@ export function AiChatPage(props: Props) {
 					? await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${remaining[0].id}`))
 					: undefined;
 				setChat(selected);
+				setWebSearch(selected?.webSearch ?? true);
 				setFailedRequest(undefined);
 				setStreaming("");
 				setStreamFailed(false);
@@ -309,6 +316,7 @@ export function AiChatPage(props: Props) {
 		sendingRef.current = true;
 		setBusy(true);
 		setStreaming("");
+		setSearchPhase("");
 		setStreamFailed(false);
 		followOutputRef.current = true;
 		showMessage("模型正在回复…");
@@ -321,6 +329,8 @@ export function AiChatPage(props: Props) {
 			const form = new FormData();
 			form.set("requestId", requestId);
 			form.set("message", content);
+			form.set("webSearch", String(webSearch));
+			if (searchQuery.trim()) form.set("searchQuery", searchQuery.trim());
 			form.set("profileId", selectedProfileId);
 			if (attachProject && props.projectSnapshot) form.set("contextSnapshot", props.projectSnapshot);
 			for (const image of images) {
@@ -354,7 +364,10 @@ export function AiChatPage(props: Props) {
 			const handleEvent = (event: ChatStreamEvent, sequence?: number) => {
 				if (sequence !== undefined && sequence <= after) return;
 				if (sequence !== undefined) after = sequence;
-				if (event.type === "start") {
+				if (event.type === "search") {
+					setSearchPhase(event.phase);
+					if (event.message) showMessage(event.message);
+				} else if (event.type === "start") {
 					activeChat = event.chat;
 					setChat(event.chat);
 					setSelectedProfileId(event.chat.profileId ?? selectedProfileId);
@@ -451,7 +464,10 @@ export function AiChatPage(props: Props) {
 					await readChatStream(response.body, (event, sequence) => {
 						if (sequence !== undefined && sequence <= after) return;
 						if (sequence !== undefined) after = sequence;
-						if (event.type === "start") setChat(event.chat);
+						if (event.type === "search") {
+							setSearchPhase(event.phase);
+							if (event.message) showMessage(event.message);
+						} else if (event.type === "start") setChat(event.chat);
 						else if (event.type === "delta") setStreaming((current) => current + event.delta);
 						else if (event.type === "done") {
 							setChat(event.chat);
@@ -605,6 +621,25 @@ export function AiChatPage(props: Props) {
 										)}
 									</div>
 									{item.content && <ChatMarkdown content={item.content} />}
+									{item.search && (
+										<details className="chat-search-sources">
+											<summary>
+												{t("网络来源")} · {item.search.results.length}
+											</summary>
+											<p>{item.search.query}</p>
+											<ol>
+												{item.search.results.map((source) => (
+													<li key={source.id}>
+														<a href={source.url} target="_blank" rel="noopener noreferrer">
+															[{source.id}] {source.title}
+														</a>
+														<p>{source.snippet}</p>
+													</li>
+												))}
+											</ol>
+										</details>
+									)}
+									{item.searchError && <small className="chat-search-warning">{t(item.searchError)}</small>}
 									{item.images && item.images.length > 0 && (
 										<div className="manual-chat-message-images">
 											{item.images.map((image) => (
@@ -664,7 +699,7 @@ export function AiChatPage(props: Props) {
 											<i />
 											<i />
 										</span>
-										<span>{t("正在等待模型输出…")}</span>
+										<span>{t(searchPhase === "searching" ? "正在搜索网络资料…" : "正在等待模型输出…")}</span>
 									</output>
 								)}
 								{busy && streaming && <output className="streaming-indicator" aria-label={t("生成中")} />}
@@ -730,7 +765,28 @@ export function AiChatPage(props: Props) {
 									))}
 								</div>
 							)}
+							{webSearch && (
+								<label className="chat-search-query">
+									<span>{t("搜索关键词")}</span>
+									<input
+										value={searchQuery}
+										maxLength={500}
+										disabled={busy}
+										onChange={(event) => setSearchQuery(event.target.value)}
+										placeholder={t("留空使用本条消息前 500 字；不会发送题目和附件")}
+									/>
+								</label>
+							)}
 							<div className="manual-chat-actions">
+								<label className="manual-context-toggle">
+									<input
+										type="checkbox"
+										checked={webSearch}
+										disabled={busy}
+										onChange={(event) => setWebSearch(event.target.checked)}
+									/>
+									{t("联网搜索")}
+								</label>
 								<label className="manual-context-toggle">
 									<input
 										type="checkbox"

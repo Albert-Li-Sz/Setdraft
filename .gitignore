@@ -28,7 +28,7 @@ coverage/
 .nyc_output/
 .setdraft/
 
-# Legacy workspace, retained only for migration
+# Exclude any leftover workspace from older installations
 .hydro-problem-make/
 
 .env.compose
