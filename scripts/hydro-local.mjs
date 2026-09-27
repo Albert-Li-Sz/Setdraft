@@ -58,7 +58,10 @@ function usage() {
   ./install.ps1 / ./upgrade.ps1 / ./uninstall.ps1
                                           Windows PowerShell 等价入口
   部署参数（install / upgrade / start）：
-    --domain <域名> [--email <证书邮箱>]     自动配置同机 Caddy HTTPS
+    --domain <域名或IP>                    配置同机反向代理；默认 HTTP
+    --https --ssl-cert <证书> --ssl-key <私钥>
+                                          域名可选 HTTPS；先上传 PEM 证书链和私钥
+    --http                                切换回 HTTP
     --proxy-mode off|external|caddy         本机 / 已有代理 / 托管 Caddy
     --network cn|global                    国内或国际网络；默认 cn
     --registry <HTTPS npm 源>              自定义 npm 源
@@ -262,7 +265,7 @@ async function checkPorts() {
 		}
 	}
 	if (deployment.domain && !(await readManagedPid("caddy"))) {
-		for (const port of [80, 443]) if (await portInUse(port))
+		for (const port of deployment.ports) if (await portInUse(port))
 			throw new Error(`端口 ${port} 已被占用。已有反向代理请使用 --proxy-mode external；脚本不会覆盖系统代理配置。`);
 	}
 }
@@ -279,7 +282,7 @@ async function startAll() {
 		throw error;
 	}
 	console.log(`打开 ${process.env.HYDRO_PUBLIC_ORIGIN ?? `http://127.0.0.1:${currentMode === "dev" ? "5173" : "4321"}`} 使用制题工作台。`);
-	if (deployment.domain) console.log(`Caddy 本机转发已就绪；公网 DNS、80/443 入站和证书签发请用浏览器确认。证书日志：${join(runtimeRoot, "caddy.log")}。`);
+	if (deployment.domain) console.log(`Caddy 本机转发已就绪；请确认访问地址和 ${deployment.ports.join("/")} 入站端口${deployment.https ? "，HTTPS 使用已提供的 SSL 证书" : "，当前使用 HTTP"}。日志：${join(runtimeRoot, "caddy.log")}。`);
 	try {
 		const session = await fetch("http://127.0.0.1:4321/api/auth/session").then((response) => response.json());
 		if (session.setupRequired) await account(["setup-code"]);
@@ -333,7 +336,7 @@ function printDryRun(command, options) {
 		console.log(`将写入 ${deployment.path}（仅项目配置），网络 ${deployment.values.HYDRO_NETWORK}，代理模式 ${deployment.values.HYDRO_PROXY_MODE}。`);
 		console.log(`Debian 软件源：${deployment.debianMirror}；Docker 镜像仓库：${deployment.values.HYDRO_DOCKER_REGISTRY || "Docker Hub（可自定义可信镜像）"}。`);
 		if (deployment.values.HYDRO_DOWNLOAD_PROXY) console.log("下载代理：已配置（地址不显示）。");
-		if (deployment.domain) console.log(`将安装并校验 Caddy、生成反向代理配置，使用 https://${deployment.domain}，托管 80/443 端口；证书持久化保存在 deployment/data。`);
+		if (deployment.domain) console.log(`将安装并校验 Caddy、生成反向代理配置，使用 ${deployment.values.HYDRO_PUBLIC_ORIGIN}，托管 ${deployment.ports.join("/")} 端口${deployment.https ? "；校验并保存上传的 SSL 证书和私钥" : "；无需 SSL 证书"}。`);
 		if (deployment.values.HYDRO_PROXY_MODE === "external") console.log("沿用外部反向代理；不会启动或修改系统 Caddy。");
 	}
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
@@ -406,7 +409,7 @@ async function main() {
 	}
 	currentMode = requestedMode ?? (command === "install" ? "production" : await readMode());
 	if (["install", "upgrade", "start"].includes(command) && currentMode === "dev" && deployment.values.HYDRO_PROXY_MODE !== "off")
-		throw new Error("反向代理仅支持 production 模式；开发环境请使用独立检出并清空 HTTPS 配置。");
+		throw new Error("反向代理仅支持 production 模式；开发环境请使用独立检出并清空公开站点配置。");
 	const options = new Set(argumentsList);
 	const allowed =
 		command === "uninstall"
@@ -510,8 +513,8 @@ async function doctor() {
 	console.log(`配置：${deployment.path} · 网络 ${deployment.values.HYDRO_NETWORK} · npm ${npmRegistry}`);
 	console.log(`站点来源：${deployment.values.HYDRO_PUBLIC_ORIGIN || "本机"} · 代理 ${deployment.values.HYDRO_PROXY_MODE}`);
 	if (deployment.domain) {
-		console.log(`Caddy 配置：${caddyPaths(deployment).file}；证书位于 deployment/data，日志位于 runtime/caddy.log。`);
-		console.log(`公网 HTTPS：${await ready(`${deployment.values.HYDRO_PUBLIC_ORIGIN}/api/health`) ? "可访问" : "未确认，请检查 DNS、80/443、防火墙和证书日志"}`);
+		console.log(`Caddy 配置：${caddyPaths(deployment).file}；${deployment.https ? "SSL 证书位于 deployment/tls，" : ""}日志位于 runtime/caddy.log。`);
+		console.log(`站点 ${deployment.https ? "HTTPS" : "HTTP"}：${await ready(`${deployment.values.HYDRO_PUBLIC_ORIGIN}/api/health`) ? "可访问" : `未确认，请检查访问地址、${deployment.ports.join("/")} 端口和日志`}`);
 	}
 	try { console.log(`npm ${output(npm, [...npmPrefix, "--version"])}`); } catch (error) { console.log(`npm 不可用：${error}`); }
 	try {

@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { copyText } from "./browser-capabilities.ts";
 import { highlightCode } from "./code-language.ts";
 import { Icon } from "./Icon.tsx";
 import { useLocale } from "./i18n.tsx";
@@ -32,7 +33,7 @@ function ChatCodeBlock({
 						setFailed(false);
 						void (async () => {
 							try {
-								await navigator.clipboard.writeText(code);
+								await copyText(code);
 								setCopied(code);
 							} catch {
 								setFailed(true);

@@ -34,14 +34,8 @@ export class AuthHttp {
 		this.registry = registry;
 		if (publicOrigin) {
 			const url = new URL(publicOrigin);
-			if (
-				url.origin !== publicOrigin ||
-				url.username ||
-				url.password ||
-				(url.protocol !== "https:" &&
-					!(url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)))
-			)
-				throw new Error("HYDRO_PUBLIC_ORIGIN 须为 HTTPS 站点来源；仅本机开发允许 HTTP。");
+			if (url.origin !== publicOrigin || url.username || url.password || !["http:", "https:"].includes(url.protocol))
+				throw new Error("HYDRO_PUBLIC_ORIGIN 须为完整 HTTP(S) 站点来源，不含路径或末尾斜杠。");
 		}
 		this.publicOrigin = publicOrigin;
 		this.secure = publicOrigin?.startsWith("https://") ?? false;
@@ -88,7 +82,7 @@ export class AuthHttp {
 	private ip(request: IncomingMessage): string {
 		const remote = request.socket.remoteAddress ?? "unknown";
 		// The deployment contract is a same-host reverse proxy. Never trust a remote peer's forwarding headers.
-		if (this.secure && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remote)) {
+		if (this.publicOrigin && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remote)) {
 			const forwarded = request.headers["x-forwarded-for"];
 			if (typeof forwarded === "string") return forwarded.split(",").at(-1)?.trim().slice(0, 64) || remote;
 		}

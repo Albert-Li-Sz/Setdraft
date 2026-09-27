@@ -8,7 +8,7 @@ Web 界面采用黑白配色、可收起侧栏与简洁工具栏，右上角支�
 
 ## 安装
 
-环境要求：Node.js 22.19+、npm、Git。托管 HTTPS 还需要 `curl` 和 `tar`（Windows 10/11 自带）。
+环境要求：Node.js 22.19+、npm、Git。托管反向代理还需要 `curl` 和 `tar`（Windows 10/11 自带）。
 Docker 用于生成、验证和打包；Docker 未启动时仍可安装并编辑题目。脚本不会自动安装 Node.js / Docker 或改动系统软件源。
 
 ```bash
@@ -42,7 +42,7 @@ node scripts/hydro-local.mjs prune --older-than-days 90 --dry-run
 ```
 
 Windows PowerShell 使用 `./install.ps1`、`./upgrade.ps1` 和 `./uninstall.ps1`；前两个支持 `-Mode dev`、
-`-Domain`、`-Email`、`-Network cn|global`、`-ProxyMode`、`-Registry`、`-DockerRegistry`、`-DownloadProxy` 和 `-CaddyArchive`。
+`-Domain`、`-Https`、`-Http`、`-SslCert`、`-SslKey`、`-Network cn|global`、`-ProxyMode`、`-Registry`、`-DockerRegistry`、`-DownloadProxy` 和 `-CaddyArchive`。
 三个 Unix 脚本和三个 PowerShell 脚本都支持 dry-run。默认数据目录是 `.hydro-problem-make/`，也可用
 `HYDRO_WORKSPACE_ROOT` 指定其他目录。
 
@@ -70,36 +70,64 @@ node scripts/hydro-local.mjs account reset-password admin     # 为指定账号�
 
 首版不提供开放注册、邮件找回、第三方登录、协作或计费。终端恢复命令需要服务器文件访问权限。
 
-## 团队 HTTPS 部署
+## 团队部署（默认 HTTP）
 
-先将域名的 A / AAAA 记录指向服务器，开放 TCP 80/443；如保留 AAAA，IPv6 也必须能访问。
-然后运行：
+`--domain` 接受域名、IPv4 或 IPv6。**新部署默认 HTTP，IP 部署无需 SSL 证书。**
+填写服务器实际可访问的 IP；使用域名时先配置 DNS。HTTP 需要开放 TCP 80。
 
 ```bash
-./install.sh --domain setdraft.example.com --email admin@example.com --network cn
+./install.sh --domain 192.168.1.20 --network cn
+./install.sh --domain setdraft.example.com --network cn
+./install.sh --domain '2001:db8::20' --network cn   # IPv6 示例，请换成自己的地址
 # 预览操作，不写文件、不下载、不启动服务：
-./install.sh --domain setdraft.example.com --network cn --dry-run
+./install.sh --domain 192.168.1.20 --dry-run
 ```
 
-将示例域名、邮箱替换为自己的。脚本会保存 `HYDRO_PUBLIC_ORIGIN=https://你的域名`，下载并校验固定版本 Caddy，
-生成反向代理配置，依次启动 API 和 Caddy。Caddy 提供 HTTPS、HTTP 跳转和证书自动续期，API 仍仅监听 `127.0.0.1:4321`。
+脚本保存对应的 `http://域名或IP` 来源，下载并校验固定版本 Caddy，生成反向代理配置；
+API 保持监听 `127.0.0.1:4321`。IPv6 地址会自动规范为 `http://[IPv6]`。
+登录、Cookie、Origin 和 CSRF 校验同时支持 HTTP / HTTPS；只有 HTTPS 会设置 Secure Cookie。
+
+域名部署可显式选择 HTTPS。先通过 SCP / SFTP 等方式将 **PEM 格式的完整证书链和匹配的未加密私钥**
+上传到服务器，再传入文件路径（路径有空格时加引号）：
+
+```bash
+./install.sh --domain setdraft.example.com --https \
+  --ssl-cert /opt/setdraft-certs/fullchain.pem \
+  --ssl-key /opt/setdraft-certs/privkey.pem --network cn
+```
+
+HTTPS 模式会校验证书格式、有效期、适用域名和私钥匹配关系，缺少文件或校验失败会停止安装。
+校验通过后复制到工作区的 `deployment/tls/`，私钥文件权限为 `0600`，并将托管路径写入 `.env`；
+后续启动不再依赖最初上传的临时文件。Caddy 使用提供的证书，**不会自动申请或续签证书**。
+HTTPS 需要开放 TCP 80/443，HTTP 请求会跳转到 HTTPS；证书配置见 [Caddy TLS 文档](https://caddyserver.com/docs/caddyfile/directives/tls)。
+
+升级自动沿用 `.env` 中的协议配置。证书到期前，上传新文件并运行：
+
+```bash
+node scripts/hydro-local.mjs start --https \
+  --ssl-cert /opt/setdraft-certs/new-fullchain.pem \
+  --ssl-key /opt/setdraft-certs/new-privkey.pem
+node scripts/hydro-local.mjs start --http       # 切换回 HTTP
+```
+
+已有旧版自动 HTTPS 配置的安装，升级前需在 `.env` 补充 `HYDRO_SSL_CERT` / `HYDRO_SSL_KEY`，
+再运行 `./upgrade.sh`。若要改用 HTTP，先停止服务、用 `git pull --ff-only` 更新脚本，
+再运行 `./install.sh --http`；旧版脚本尚不支持 `--http` 参数。
+
 Linux 普通用户可能需要授权 Caddy 绑定低端口：交互终端中脚本仅通过 `sudo setcap` 为 Caddy 可执行文件授权；
 非交互安装会给出准确的授权命令后退出。无需以 root 运行整个项目；缺少 `setcap` 时安装发行版的 libcap 工具包。
-
-Caddy 的二进制、配置和证书保存在工作区的 `deployment/`，日志在 `runtime/caddy.log`；本机健康检查使用
-`127.0.0.1:4322`。升级会沿用域名和证书，普通卸载保留它们；`--purge-data` 才删除全部数据。
-脚本的启动成功表示本机 API / 转发已就绪，**不表示公网证书已签发**。可运行 `doctor` 并在浏览器访问域名确认；
-签发失败时检查 DNS、防火墙、80/443 占用和 ACME 出站网络。
-证书前提和网络要求见 [Caddy 自动 HTTPS 文档](https://caddyserver.com/docs/automatic-https)。
+Caddy 的二进制、配置和证书保存在工作区的 `deployment/`，日志在 `runtime/caddy.log`；
+本机健康检查使用 `127.0.0.1:4322`。普通卸载保留配置与证书，`--purge-data` 才删除全部数据。
+启动成功表示本机 API / 转发已就绪，外部可达性可通过 `doctor` 和浏览器检查。
 
 已有同机 Caddy / nginx 时，将 `.env` 设为 `HYDRO_PROXY_MODE="external"` 和准确的 `HYDRO_PUBLIC_ORIGIN`，
 使用 [`deploy/Caddyfile.example`](deploy/Caddyfile.example) 配置现有代理，再运行
-`node scripts/hydro-local.mjs start --mode production`。脚本不会覆盖 `/etc/caddy`、停止系统代理或抢占其端口。
+`node scripts/hydro-local.mjs start --mode production`。外部代理自行管理 SSL 证书。
+脚本不会覆盖 `/etc/caddy`、停止系统代理或抢占其端口。
 来源不含路径或末尾斜杠；代理保留原始 Host，覆盖转发 IP，并即时转发 SSE。
-应用只在同机 HTTPS 代理场景信任转发信息，不支持把 Vite 开发服务器用于团队公网部署。
 
 修改 `.env` 后运行 `node scripts/hydro-local.mjs start` 会重启托管服务并应用新配置。
-回到本机模式时将 `HYDRO_PROXY_MODE="off"`、`HYDRO_PUBLIC_ORIGIN=""`，再启动。
+回到仅本机访问时将 `HYDRO_PROXY_MODE="off"`、`HYDRO_PUBLIC_ORIGIN=""`，再启动。
 脚本托管的进程可在终端关闭后继续运行；目前不会注册开机自启，服务器重启后需执行 `start`。
 不要直接暴露 4321/4322、启用多个 API 进程或把工作区放到网络共享盘。
 匿名健康检查仅返回服务存活状态；沙箱状态需要登录。
@@ -115,7 +143,7 @@ Caddy 的二进制、配置和证书保存在工作区的 `deployment/`，日志
 | `--registry` / `HYDRO_NPM_REGISTRY` | 自定义 HTTPS npm 源 |
 | `HYDRO_DEBIAN_MIRROR` | 沙箱的 Debian 镜像站根地址，如 `https://mirrors.tuna.tsinghua.edu.cn` |
 | `--docker-registry` / `HYDRO_DOCKER_REGISTRY` | 可访问的可信 Docker Hub 镜像仓库；填主机名和可选命名空间，不含协议、凭据或 `/library` |
-| `--download-proxy` / `HYDRO_DOWNLOAD_PROXY` | npm、Git、Caddy 下载和 ACME 使用的 HTTP(S) 代理；回环地址绕过代理 |
+| `--download-proxy` / `HYDRO_DOWNLOAD_PROXY` | npm、Git、Caddy 下载使用的 HTTP(S) 代理；回环地址绕过代理 |
 | `HYDRO_CADDY_DOWNLOAD_BASE` | 官方 Caddy 发布包的 HTTPS 镜像目录，脚本追加完整文件名 |
 | `--caddy-archive` / `HYDRO_CADDY_ARCHIVE` | 事先下载的官方 Caddy 压缩包路径 |
 | `HYDRO_CADDY_BIN` | 已自行安装的 Caddy 2 可执行文件路径，跳过下载 |

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -419,27 +420,87 @@ describe("authenticated personal workspaces", () => {
 		).toBe(404);
 	}, 15000);
 
-	it("uses Secure host cookies behind the configured HTTPS origin", async () => {
-		server.closeAllConnections();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
-		await server.closeWorkspaces();
-		server = createHydroServer({
-			identity,
-			projects,
-			publicOrigin: "https://team.example",
-			chat: new ChatService({ root, database: projects.database, configPath: join(root, "ai-config.json") }),
-		});
-		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-		origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-		const response = await fetch(`${origin}/api/auth/setup`, {
-			method: "POST",
-			headers: { origin: "https://team.example", host: "team.example", "content-type": "application/json" },
-			body: JSON.stringify({ username: "administrator", password, setupToken: setupCode }),
-		});
-		expect(response.status).toBe(200);
-		expect(response.headers.get("set-cookie")).toMatch(/^__Host-setdraft-session=.*; Secure$/u);
-		expect((await fetch(`${origin}/api/auth/login`, { method: "POST", headers: { origin } })).status).toBe(403);
-	});
+	it.each(["https://team.example", "http://team.example", "http://192.168.1.20", "http://[2001:db8::20]"])(
+		"authenticates through %s while enforcing Host, Origin and CSRF",
+		async (publicOrigin) => {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await server.closeWorkspaces();
+			server = createHydroServer({
+				identity,
+				projects,
+				publicOrigin,
+				chat: new ChatService({ root, database: projects.database, configPath: join(root, "ai-config.json") }),
+			});
+			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+			origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+			const request = (path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) =>
+				new Promise<{ status: number | undefined; cookie: string; text: string }>((resolve, reject) => {
+					const connection = httpRequest(
+						`${origin}/api${path}`,
+						{
+							method,
+							headers: {
+								origin: publicOrigin,
+								host: new URL(publicOrigin).host,
+								"content-type": "application/json",
+								...headers,
+							},
+						},
+						(response) => {
+							let text = "";
+							response.setEncoding("utf8");
+							response.on("data", (chunk: string) => {
+								text += chunk;
+							});
+							response.on("error", reject);
+							response.on("end", () =>
+								resolve({
+									status: response.statusCode,
+									cookie: response.headers["set-cookie"]?.[0] ?? "",
+									text,
+								}),
+							);
+						},
+					);
+					connection.on("error", reject);
+					connection.end(body === undefined ? undefined : JSON.stringify(body));
+				});
+			const setup = vi.spyOn(identity, "setup");
+			const credentials = { username: "administrator", password, setupToken: setupCode };
+			const response = await request("/auth/setup", "POST", credentials, { "x-forwarded-for": "192.0.2.20" });
+			expect(response.status).toBe(200);
+			expect(setup).toHaveBeenCalledWith(credentials, "192.0.2.20");
+			if (publicOrigin.startsWith("https:"))
+				expect(response.cookie).toMatch(/^__Host-setdraft-session=.*; Secure$/u);
+			else {
+				expect(response.cookie).toMatch(/^setdraft-session=.*; Path=\/; HttpOnly; SameSite=Lax;/u);
+				expect(response.cookie).not.toContain("Secure");
+			}
+			const cookie = response.cookie.split(";", 1)[0];
+			const session = JSON.parse(response.text) as AuthSession;
+			expect((await request("/projects", "GET", undefined, { cookie })).status).toBe(200);
+			expect((await request("/projects", "POST", { scoringMode: "acm" }, { cookie })).status).toBe(403);
+			expect(
+				(
+					await request(
+						"/projects",
+						"POST",
+						{ scoringMode: "acm" },
+						{ cookie, "x-csrf-token": session.csrfToken ?? "" },
+					)
+				).status,
+			).toBe(201);
+			expect((await request("/auth/login", "POST", credentials, { origin })).status).toBe(403);
+			expect((await request("/auth/session", "GET", undefined, { host: "untrusted.example" })).status).toBe(403);
+			expect(
+				(await request("/auth/logout", "POST", undefined, { cookie, "x-csrf-token": session.csrfToken ?? "" }))
+					.status,
+			).toBe(200);
+			expect((await request("/projects", "GET", undefined, { cookie })).status).toBe(401);
+			expect((await request("/auth/login", "POST", credentials)).status).toBe(200);
+		},
+	);
 	it("shares four AI slots across users, limits each user to one and keeps jobs on logout", async () => {
 		const admin = new BrowserClient();
 		await admin.authenticate("setup");

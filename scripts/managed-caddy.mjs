@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, X509Certificate } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import release from "./caddy-release.json" with { type: "json" };
 import { caddyfile, networkEnvironment, redact } from "./deployment-config.mjs";
 
@@ -119,7 +119,7 @@ async function checkBinding(config) {
 		const existing = spawnSync("getcap", [binary], { encoding: "utf8" });
 		if (/cap_net_bind_service[=+][a-z]*ep/u.test(existing.stdout ?? "")) return;
 		if (process.stdin.isTTY) {
-			console.log("Caddy 绑定 80/443 需要权限；仅为 Caddy 可执行文件授权，可能需要 sudo 密码。");
+			console.log(`Caddy 绑定 ${config.ports.join("/")} 需要权限；仅为 Caddy 可执行文件授权，可能需要 sudo 密码。`);
 			execute("sudo", ["setcap", "cap_net_bind_service=+ep", binary], config);
 			return;
 		}
@@ -130,16 +130,69 @@ async function checkBinding(config) {
 
 export async function prepareCaddy(config) {
 	if (!config.domain) return;
+	const certificates = await validateTlsCertificate(config);
 	const { directory, binary, file } = caddyPaths(config);
 	await mkdir(directory, { recursive: true, mode: 0o700 });
 	await chmod(directory, 0o700);
 	await installBinary(config);
 	await checkBinding(config);
 	const temporary = `${file}.${process.pid}.tmp`;
+	const stagedTls = config.tls ? {
+		certificate: `${config.tls.certificate}.${process.pid}.tmp`,
+		privateKey: `${config.tls.privateKey}.${process.pid}.tmp`,
+	} : undefined;
 	try {
-		await writeFile(temporary, caddyfile(config), { mode: 0o600 });
+		if (certificates) {
+			await mkdir(dirname(config.tls.privateKey), { recursive: true, mode: 0o700 });
+			for (const [staged, bytes] of [[stagedTls.certificate, certificates.certificate], [stagedTls.privateKey, certificates.privateKey]]) {
+				await writeFile(staged, bytes, { mode: 0o600 });
+				await chmod(staged, 0o600);
+			}
+		}
+		// Let Caddy validate the staged pair before replacing any working certificate files.
+		await writeFile(temporary, caddyfile({ ...config, tls: stagedTls }), { mode: 0o600 });
 		execute(binary, ["validate", "--config", temporary, "--adapter", "caddyfile"], config, { quiet: true });
+		if (stagedTls) {
+			await rename(stagedTls.certificate, config.tls.certificate);
+			await rename(stagedTls.privateKey, config.tls.privateKey);
+			await writeFile(temporary, caddyfile(config), { mode: 0o600 });
+		}
 		if (await stat(file).catch(() => undefined)) await copyFile(file, `${file}.previous`);
 		await rename(temporary, file);
-	} finally { await rm(temporary, { force: true }); }
+		if (config.tls) {
+			// Subsequent starts no longer depend on the originally uploaded files.
+			config.values.HYDRO_SSL_CERT = config.tls.certificate;
+			config.values.HYDRO_SSL_KEY = config.tls.privateKey;
+		}
+	} finally {
+		for (const path of [temporary, ...Object.values(stagedTls ?? {})]) await rm(path, { force: true });
+	}
+}
+
+export async function validateTlsCertificate(config) {
+	if (!config.tls) return undefined;
+	let certificate, privateKey;
+	try {
+		[certificate, privateKey] = await Promise.all([
+			readFile(resolve(config.root, config.values.HYDRO_SSL_CERT)),
+			readFile(resolve(config.root, config.values.HYDRO_SSL_KEY)),
+		]);
+	} catch { throw new Error("无法读取 SSL 证书或私钥。请先上传文件到服务器，再指定 --ssl-cert 和 --ssl-key 路径。"); }
+	let leaf, key;
+	try {
+		const pem = certificate.toString("utf8");
+		const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu);
+		if (!blocks?.length || blocks.length !== pem.match(/-----BEGIN CERTIFICATE-----/gu)?.length ||
+			blocks.length !== pem.match(/-----END CERTIFICATE-----/gu)?.length) throw new Error("Incomplete certificate chain");
+		// Node and Caddy can accept the leaf while ignoring malformed trailing certificates.
+		const chain = blocks.map((block) => new X509Certificate(block));
+		leaf = chain[0];
+		key = createPrivateKey(privateKey);
+	}
+	catch { throw new Error("SSL 文件格式无效：需要 PEM 证书链及未加密的 PEM 私钥。"); }
+	if (!leaf.checkPrivateKey(key)) throw new Error("SSL 证书与私钥不匹配。");
+	if (!leaf.checkHost(config.domain)) throw new Error("SSL 证书不适用于当前域名。");
+	if (Date.parse(leaf.validFrom) > Date.now() || Date.parse(leaf.validTo) <= Date.now())
+		throw new Error("SSL 证书尚未生效或已经过期，请上传有效证书。");
+	return { certificate, privateKey };
 }

@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useAppSidebar } from "./AppShell.tsx";
 import { requestJson as jsonRequest } from "./api-client.ts";
 import { authFetch } from "./auth-client.ts";
+import { copyText, createClientId } from "./browser-capabilities.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
@@ -57,7 +58,7 @@ async function readImage(file: File): Promise<PendingImage> {
 		reader.onerror = () => reject(new Error("无法读取图片。"));
 		reader.readAsDataURL(file);
 	});
-	return { localId: crypto.randomUUID(), name, mimeType: file.type, data, bytes: file.size };
+	return { localId: createClientId(), name, mimeType: file.type, data, bytes: file.size };
 }
 
 function profileForChat(configuration: AiConfiguration, chat?: ChatConversation): string {
@@ -267,7 +268,7 @@ export function AiChatPage(props: Props) {
 
 	async function copyMessage(id: string, content: string): Promise<void> {
 		try {
-			await navigator.clipboard.writeText(content);
+			await copyText(content);
 			setCopiedMessageId(id);
 			showMessage("消息文字已复制。", "passed");
 		} catch {
@@ -285,7 +286,7 @@ export function AiChatPage(props: Props) {
 		let activeChat = chat;
 		let previousMessageCount = chat?.messages.length ?? 0;
 		let partialText = "";
-		const requestId = crypto.randomUUID();
+		const requestId = createClientId();
 		sendingRef.current = true;
 		setBusy(true);
 		setStreaming("");

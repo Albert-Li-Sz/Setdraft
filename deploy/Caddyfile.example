@@ -1,11 +1,13 @@
 # For an existing Caddy installation. The one-click installer generates its own file.
-# Set HYDRO_PROXY_MODE=external and HYDRO_PUBLIC_ORIGIN=https://setdraft.example.com in .env.
+# Set HYDRO_PROXY_MODE=external and HYDRO_PUBLIC_ORIGIN=http://setdraft.example.com in .env.
 # Run Caddy on the same host; Setdraft remains bound to 127.0.0.1:4321.
-setdraft.example.com {
+http://setdraft.example.com {
     reverse_proxy 127.0.0.1:4321 {
         header_up Host {hostport}
         header_up X-Forwarded-For {remote_host}
         flush_interval -1
     }
 }
+# For HTTPS, change the site and HYDRO_PUBLIC_ORIGIN to https:// and add inside the site:
+# tls /absolute/path/fullchain.pem /absolute/path/privkey.pem
 # Caddy reference: https://caddyserver.com/docs/caddyfile/directives/reverse_proxy

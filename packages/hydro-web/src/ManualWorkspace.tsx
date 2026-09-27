@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { authFetch } from "./auth-client.ts";
+import { createClientId } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
@@ -262,7 +263,7 @@ export function ManualWorkspace(props: Props) {
 		: (project.subtasks[0]?.id ?? 1);
 	const sampleKeys = useRef<{ projectId: string; keys: string[] }>({ projectId: project.id, keys: [] });
 	if (sampleKeys.current.projectId !== project.id) sampleKeys.current = { projectId: project.id, keys: [] };
-	while (sampleKeys.current.keys.length < project.samples.length) sampleKeys.current.keys.push(crypto.randomUUID());
+	while (sampleKeys.current.keys.length < project.samples.length) sampleKeys.current.keys.push(createClientId());
 	if (sampleKeys.current.keys.length > project.samples.length) sampleKeys.current.keys.length = project.samples.length;
 	const currentRelease =
 		props.release?.projectHash === props.report?.projectHash && props.report?.revision === project.revision;
