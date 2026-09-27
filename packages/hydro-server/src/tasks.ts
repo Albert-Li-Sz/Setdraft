@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@hydro-problem-make/contracts";
+import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import type { ExecutionScheduler } from "./execution-scheduler.ts";
@@ -369,7 +370,13 @@ export class TaskQueue {
 		return new Promise((resolve, reject) => {
 			const child = spawn(
 				"docker",
-				["build", "-t", this.projects.image, fileURLToPath(new URL("../sandbox", import.meta.url))],
+				[
+					"build",
+					"-t",
+					this.projects.image,
+					...sandboxBuildArgs(process.env),
+					fileURLToPath(new URL("../sandbox", import.meta.url)),
+				],
 				{
 					signal: context.signal,
 					stdio: ["ignore", "pipe", "pipe"],

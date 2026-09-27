@@ -1,8 +1,9 @@
-# Replace this domain and set HYDRO_PUBLIC_ORIGIN=https://setdraft.example.com
+# For an existing Caddy installation. The one-click installer generates its own file.
+# Set HYDRO_PROXY_MODE=external and HYDRO_PUBLIC_ORIGIN=https://setdraft.example.com in .env.
 # Run Caddy on the same host; Setdraft remains bound to 127.0.0.1:4321.
 setdraft.example.com {
     reverse_proxy 127.0.0.1:4321 {
-        header_up Host {host}
+        header_up Host {hostport}
         header_up X-Forwarded-For {remote_host}
         flush_interval -1
     }

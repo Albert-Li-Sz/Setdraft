@@ -12,6 +12,7 @@ packages/ai/src/providers/.model-generation-*/
 
 # Environment
 .env
+.env.*.tmp
 
 # Editor files
 .vscode/

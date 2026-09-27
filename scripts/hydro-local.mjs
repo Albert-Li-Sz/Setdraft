@@ -8,18 +8,25 @@ import { connect } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
+import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
+import { caddyEnvironment, caddyPaths, prepareCaddy } from "./managed-caddy.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(scriptPath), "..");
-const dataRoot = resolve(root, process.env.HYDRO_WORKSPACE_ROOT ?? ".hydro-problem-make");
-const runtimeRoot = join(dataRoot, "runtime");
-const modePath = join(dataRoot, "mode.json");
-const image = "hydro-problem-make/sandbox:local";
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const npmRegistry = process.env.HYDRO_NPM_REGISTRY?.trim() || "https://registry.npmmirror.com";
+let deployment;
+let dataRoot;
+let runtimeRoot;
+let modePath;
+let image;
+// .cmd files cannot be spawned directly without a shell on Windows. Invoke npm's JS entry instead.
+const npm = process.platform === "win32" ? process.execPath : "npm";
+const npmPrefix = process.platform === "win32" ? [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")] : [];
+let npmRegistry;
 const services = {
 	api: { script: "dev:hydro-api", port: 4321, url: "http://127.0.0.1:4321/api/health" },
 	web: { script: "dev:hydro-web", port: 5173, url: "http://127.0.0.1:5173/" },
+	caddy: { port: 4322, url: "http://127.0.0.1:4322/api/health" },
 };
 let currentMode = "production";
 
@@ -36,7 +43,7 @@ async function saveMode(mode) {
 }
 
 function activeServices() {
-	return currentMode === "dev" ? ["api", "web"] : ["api"];
+	return currentMode === "dev" ? ["api", "web"] : deployment.domain ? ["api", "caddy"] : ["api"];
 }
 
 function usage() {
@@ -50,12 +57,21 @@ function usage() {
                                           停止服务并移除沙箱镜像
   ./install.ps1 / ./upgrade.ps1 / ./uninstall.ps1
                                           Windows PowerShell 等价入口
+  部署参数（install / upgrade / start）：
+    --domain <域名> [--email <证书邮箱>]     自动配置同机 Caddy HTTPS
+    --proxy-mode off|external|caddy         本机 / 已有代理 / 托管 Caddy
+    --network cn|global                    国内或国际网络；默认 cn
+    --registry <HTTPS npm 源>              自定义 npm 源
+    --docker-registry <镜像仓库>            Docker Hub 镜像，不含协议
+    --download-proxy <HTTP(S) 代理>         npm、Git、Caddy 下载代理
+    --caddy-archive <官方安装包>            校验后离线安装 Caddy
   node scripts/hydro-local.mjs start [--mode production|dev]|stop|status|doctor
   node scripts/hydro-local.mjs backup <目录>|restore <目录>
   node scripts/hydro-local.mjs prune --older-than-days <天数> [--dry-run]
   node scripts/hydro-local.mjs account setup-code|reset-password <用户名>
 
-卸载默认保留 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
+部署参数保存到仓库 .env；升级和启动自动加载，命令行 > 环境变量 > .env。
+卸载默认保留 .env、证书以及 .hydro-problem-make 中的题目、发布包、对话和 API 配置。
 --purge-data 会永久删除这些数据；--remove-deps 额外删除根目录 node_modules。`);
 }
 
@@ -64,19 +80,19 @@ function requireRuntime() {
 	if (major < 22 || (major === 22 && minor < 19)) throw new Error("需要 Node.js 22.19 或更新版本。");
 }
 
-function run(command, args) {
-	console.log(`$ ${command} ${args.join(" ")}`);
-	const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
+function run(command, args, environment = process.env) {
+	console.log(redact(`$ ${command} ${args.join(" ")}`));
+	const result = spawnSync(command, args, { cwd: root, stdio: "inherit", env: environment });
 	if (result.error) throw result.error;
 	if (result.status !== 0) throw new Error(`${command} 退出码 ${result.status ?? "未知"}。`);
 }
 
 function npmArgs(args) {
-	return ["--registry", npmRegistry, ...args];
+	return [...npmPrefix, "--registry", npmRegistry, "--fetch-retries=2", "--fetch-timeout=60000", "--fetch-retry-mintimeout=2000", "--fetch-retry-maxtimeout=10000", ...args];
 }
 
 function runNpm(args) {
-	run(npm, npmArgs(args));
+	run(npm, npmArgs(args), networkEnvironment(deployment));
 }
 
 function hasValidModelData() {
@@ -97,7 +113,7 @@ function output(command, args) {
 }
 
 function checkDependencies() {
-	output(npm, ["--version"]);
+	output(npm, [...npmPrefix, "--version"]);
 	try {
 		output("docker", ["info", "--format", "{{.ServerVersion}}"]);
 	} catch (error) {
@@ -191,11 +207,7 @@ async function startService(name) {
 	try {
 		await waitForService(name);
 	} catch (error) {
-		try {
-			process.kill(-child.pid, "SIGTERM");
-		} catch (signalError) {
-			if (signalError?.code !== "ESRCH") throw signalError;
-		}
+		stopPid(child.pid, true);
 		await rm(target, { force: true });
 		throw error;
 	}
@@ -239,7 +251,7 @@ function stopPid(pid, force) {
 }
 
 async function stopAll() {
-	for (const name of Object.keys(services)) await stopService(name);
+	for (const name of Object.keys(services).reverse()) await stopService(name);
 }
 
 async function checkPorts() {
@@ -248,6 +260,10 @@ async function checkPorts() {
 		if (!(await readManagedPid(name)) && (await portInUse(config.port))) {
 			throw new Error(`端口 ${config.port} 已被其他进程占用；请先停止该进程。`);
 		}
+	}
+	if (deployment.domain && !(await readManagedPid("caddy"))) {
+		for (const port of [80, 443]) if (await portInUse(port))
+			throw new Error(`端口 ${port} 已被占用。已有反向代理请使用 --proxy-mode external；脚本不会覆盖系统代理配置。`);
 	}
 }
 
@@ -263,6 +279,7 @@ async function startAll() {
 		throw error;
 	}
 	console.log(`打开 ${process.env.HYDRO_PUBLIC_ORIGIN ?? `http://127.0.0.1:${currentMode === "dev" ? "5173" : "4321"}`} 使用制题工作台。`);
+	if (deployment.domain) console.log(`Caddy 本机转发已就绪；公网 DNS、80/443 入站和证书签发请用浏览器确认。证书日志：${join(runtimeRoot, "caddy.log")}。`);
 	try {
 		const session = await fetch("http://127.0.0.1:4321/api/auth/session").then((response) => response.json());
 		if (session.setupRequired) await account(["setup-code"]);
@@ -283,8 +300,22 @@ function installDependencies() {
 		"@hydro-problem-make/server",
 		"@hydro-problem-make/web",
 	]) runNpm(["run", "build", `--workspace=${workspace}`]);
-	try { run("docker", ["build", "-t", image, "packages/hydro-server/sandbox"]); }
-	catch (error) { console.warn(`沙盒镜像未能构建，稍后可在设置页重试：${error instanceof Error ? error.message : String(error)}`); }
+	try { run("docker", ["build", "-t", image, ...sandboxBuildArgs(process.env), "packages/hydro-server/sandbox"]); }
+	catch (error) { console.warn(`沙盒镜像未能构建，网页可继续使用；请检查 Docker Hub 访问或配置 HYDRO_DOCKER_REGISTRY，稍后在管理员设置页重试：${redact(error instanceof Error ? error.message : String(error))}`); }
+}
+
+function selectRegistry() {
+	const available = (registry) => spawnSync(npm, [...npmPrefix, "ping", "--registry", registry, "--fetch-timeout=15000", "--fetch-retries=1"], {
+		cwd: root, env: networkEnvironment(deployment), stdio: "ignore", timeout: 40_000,
+	}).status === 0;
+	if (available(npmRegistry)) return;
+	const fallback = "https://registry.npmjs.org";
+	if (!deployment.values.HYDRO_NPM_REGISTRY && npmRegistry !== fallback && available(fallback)) {
+		console.warn("默认 npm 镜像不可达，本次安装回退到 npm 官方源；继续保留锁文件完整性校验。");
+		npmRegistry = fallback;
+		return;
+	}
+	throw new Error("npm 源不可达。请检查网络，配置 --registry 或 --download-proxy 后重试；不会禁用 TLS 或完整性校验。");
 }
 
 function checkUpgrade() {
@@ -298,6 +329,13 @@ function checkUpgrade() {
 }
 
 function printDryRun(command, options) {
+	if (["install", "upgrade", "start"].includes(command)) {
+		console.log(`将写入 ${deployment.path}（仅项目配置），网络 ${deployment.values.HYDRO_NETWORK}，代理模式 ${deployment.values.HYDRO_PROXY_MODE}。`);
+		console.log(`Debian 软件源：${deployment.debianMirror}；Docker 镜像仓库：${deployment.values.HYDRO_DOCKER_REGISTRY || "Docker Hub（可自定义可信镜像）"}。`);
+		if (deployment.values.HYDRO_DOWNLOAD_PROXY) console.log("下载代理：已配置（地址不显示）。");
+		if (deployment.domain) console.log(`将安装并校验 Caddy、生成反向代理配置，使用 https://${deployment.domain}，托管 80/443 端口；证书持久化保存在 deployment/data。`);
+		if (deployment.values.HYDRO_PROXY_MODE === "external") console.log("沿用外部反向代理；不会启动或修改系统 Caddy。");
+	}
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
 		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再执行 pi-ai 离线构建、其余工作区构建、docker build -t ${image} packages/hydro-server/sandbox，然后以 ${currentMode} 模式启动。Docker 故障只告警。`);
@@ -305,15 +343,19 @@ function printDryRun(command, options) {
 		console.log(`将停止托管服务、删除 ${image} 镜像及 ${runtimeRoot}。`);
 		if (options.has("--purge-data")) console.log(`还将永久删除 ${dataRoot}。`);
 		if (options.has("--remove-deps")) console.log(`还将删除 ${join(root, "node_modules")}。`);
-	} else console.log(`将${command === "start" ? "启动" : "停止"} API 与网页。`);
+	} else console.log(`将${command === "start" ? "启动" : "停止"} API、网页和已配置的托管反向代理。`);
 }
 
 function runService(name, mode) {
 	const production = name === "api" && mode === "production";
-	const child = spawn(production ? process.execPath : npm, production ? [join(root, "packages", "hydro-server", "dist", "cli.js")] : ["run", services[name].script], {
+	const proxy = name === "caddy";
+	const paths = caddyPaths(deployment);
+	const executable = proxy ? paths.binary : production ? process.execPath : npm;
+	const args = proxy ? ["run", "--config", paths.file, "--adapter", "caddyfile"] : production ? [join(root, "packages", "hydro-server", "dist", "cli.js")] : [...npmPrefix, "run", services[name].script];
+	const child = spawn(executable, args, {
 		cwd: root,
 		stdio: "inherit",
-		env: production ? { ...process.env, HYDRO_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : process.env,
+		env: proxy ? caddyEnvironment(deployment) : production ? { ...process.env, HYDRO_WEB_ROOT: join(root, "packages", "hydro-web", "dist") } : process.env,
 	});
 	const forward = () => child.kill("SIGTERM");
 	process.on("SIGTERM", forward);
@@ -328,14 +370,19 @@ function runService(name, mode) {
 async function main() {
 	requireRuntime();
 	const [command = "help", ...argumentsList] = process.argv.slice(2);
+	if (["help", "--help", "-h"].includes(command) || argumentsList.includes("--help")) { usage(); return; }
+	const overrides = takeDeploymentOptions(argumentsList, command);
+	deployment = await loadDeployment(root, process.env, overrides);
+	process.env = deploymentEnvironment(deployment);
+	dataRoot = deployment.dataRoot;
+	runtimeRoot = join(dataRoot, "runtime");
+	modePath = join(dataRoot, "mode.json");
+	image = process.env.HYDRO_SANDBOX_IMAGE || "hydro-problem-make/sandbox:local";
+	npmRegistry = deployment.registry;
 	if (command === "service") {
 		if (argumentsList.length !== 2 || !Object.hasOwn(services, argumentsList[0]) || !["dev", "production"].includes(argumentsList[1]))
 			throw new Error("无效服务名。");
 		runService(argumentsList[0], argumentsList[1]);
-		return;
-	}
-	if (command === "help" || command === "--help" || command === "-h") {
-		usage();
 		return;
 	}
 	if (!["install", "upgrade", "uninstall", "start", "stop", "status", "doctor", "backup", "restore", "prune", "account"].includes(command)) {
@@ -358,6 +405,8 @@ async function main() {
 		if (!["dev", "production"].includes(requestedMode) || !["install", "upgrade", "start"].includes(command)) throw new Error("--mode 只能指定 dev 或 production。");
 	}
 	currentMode = requestedMode ?? (command === "install" ? "production" : await readMode());
+	if (["install", "upgrade", "start"].includes(command) && currentMode === "dev" && deployment.values.HYDRO_PROXY_MODE !== "off")
+		throw new Error("反向代理仅支持 production 模式；开发环境请使用独立检出并清空 HTTPS 配置。");
 	const options = new Set(argumentsList);
 	const allowed =
 		command === "uninstall"
@@ -393,8 +442,11 @@ async function main() {
 	}
 	if (command === "start") {
 		checkDependencies();
-		await stopService(currentMode === "production" ? "web" : "api");
 		if (currentMode === "production" && !(await stat(join(root, "packages", "hydro-web", "dist", "index.html")).catch(() => undefined))) throw new Error("生产网页尚未构建，请先运行 ./install.sh。");
+		await checkPorts();
+		await prepareCaddy(deployment);
+		await stopAll();
+		await saveDeployment(deployment);
 		await startAll();
 		await saveMode(currentMode);
 		return;
@@ -419,7 +471,7 @@ async function main() {
 		console.log(
 			process.exitCode
 				? "本地服务已停止，但沙箱镜像未能删除；请检查 Docker 后手动删除。"
-				: "本地服务已卸载。仓库源码保留；未指定 --purge-data 时制题数据与 AI 配置保留。",
+				: "本地服务已卸载。仓库源码及 .env 保留；未指定 --purge-data 时制题数据、AI 配置和 Caddy 证书保留。",
 		);
 		return;
 	}
@@ -427,12 +479,20 @@ async function main() {
 	if (command === "upgrade") checkUpgrade();
 	await checkPorts();
 	if (command === "upgrade") {
-		run("git", ["fetch", "origin", "main"]);
+		run("git", ["fetch", "origin", "main"], networkEnvironment(deployment));
 		const result = spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"], { cwd: root });
 		if (result.status !== 0) throw new Error("本地 main 与 origin/main 已分叉，无法快进升级。");
+		await stopAll();
+		run("git", ["merge", "--ff-only", "FETCH_HEAD"]);
+		await saveDeployment(deployment);
+		// Use the upgraded installer/manifest, including any newer pinned Caddy release.
+		run(process.execPath, [scriptPath, "install", "--mode", currentMode], { ...process.env, ...deployment.values });
+		return;
 	}
+	selectRegistry();
+	await prepareCaddy(deployment);
 	await stopAll();
-	if (command === "upgrade") run("git", ["merge", "--ff-only", "FETCH_HEAD"]);
+	await saveDeployment(deployment);
 	installDependencies();
 	await startAll();
 	await saveMode(currentMode);
@@ -447,7 +507,13 @@ async function account(args) {
 
 async function doctor() {
 	console.log(`Node.js ${process.version} · 模式 ${await readMode()}`);
-	try { console.log(`npm ${output(npm, ["--version"])}`); } catch (error) { console.log(`npm 不可用：${error}`); }
+	console.log(`配置：${deployment.path} · 网络 ${deployment.values.HYDRO_NETWORK} · npm ${npmRegistry}`);
+	console.log(`站点来源：${deployment.values.HYDRO_PUBLIC_ORIGIN || "本机"} · 代理 ${deployment.values.HYDRO_PROXY_MODE}`);
+	if (deployment.domain) {
+		console.log(`Caddy 配置：${caddyPaths(deployment).file}；证书位于 deployment/data，日志位于 runtime/caddy.log。`);
+		console.log(`公网 HTTPS：${await ready(`${deployment.values.HYDRO_PUBLIC_ORIGIN}/api/health`) ? "可访问" : "未确认，请检查 DNS、80/443、防火墙和证书日志"}`);
+	}
+	try { console.log(`npm ${output(npm, [...npmPrefix, "--version"])}`); } catch (error) { console.log(`npm 不可用：${error}`); }
 	try {
 		console.log(`Docker ${output("docker", ["info", "--format", "{{.ServerVersion}}"])}`);
 		try { output("docker", ["image", "inspect", image]); console.log("沙盒镜像已就绪。"); }
@@ -481,12 +547,13 @@ async function backup(destination) {
 	await assertOffline();
 	try {
 		await cp(dataRoot, destination, { recursive: true, filter: (source) => !source.includes(`${process.platform === "win32" ? "\\" : "/"}runtime${process.platform === "win32" ? "\\" : "/"}`) });
+		if (await stat(deployment.path).catch(() => undefined)) await cp(deployment.path, join(destination, "deployment.env"));
 		await validateWorkspaceDirectory(destination);
 	} catch (error) {
 		await rm(destination, { recursive: true, force: true });
 		throw error;
 	}
-	console.log(`备份完成：${destination}。服务已停止，可运行 start 重启。`);
+	console.log(`备份完成：${destination}，包含部署配置快照与托管 Caddy 证书。服务已停止，可运行 start 重启。`);
 }
 
 async function restore(source) {
@@ -506,7 +573,7 @@ async function restore(source) {
 		}
 	}
 	catch (error) { await rm(dataRoot, { recursive: true, force: true }); if (await stat(previous).catch(() => undefined)) await rename(previous, dataRoot); throw error; }
-	console.log(`恢复完成：${dataRoot}。旧数据保存在 ${previous}；运行 start 启动。`);
+	console.log(`恢复完成：${dataRoot}。旧数据保存在 ${previous}；本机 .env 保留，迁移时请核对备份中的 deployment.env。运行 start 启动。`);
 }
 
 async function workspaceDirectories(directory) {
@@ -588,6 +655,6 @@ async function pruneWorkspace(workspace, days, dryRun) {
 }
 
 main().catch((error) => {
-	console.error(`Setdraft：${error instanceof Error ? error.message : String(error)}`);
+	console.error(`Setdraft：${redact(error instanceof Error ? error.message : String(error))}`);
 	process.exitCode = 1;
 });
