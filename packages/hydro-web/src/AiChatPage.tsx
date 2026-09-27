@@ -27,6 +27,7 @@ interface ChatSummary {
 }
 
 interface Props {
+	active: boolean;
 	paused: boolean;
 	apiOrigin: string;
 	configured: boolean;
@@ -113,18 +114,18 @@ export function AiChatPage(props: Props) {
 
 	useEffect(() => {
 		const element = messagesRef.current;
-		if (element && followOutputRef.current) element.scrollTop = element.scrollHeight;
+		if (props.active && element && followOutputRef.current) element.scrollTop = element.scrollHeight;
 	});
 
 	useEffect(() => {
 		const element = messagesRef.current;
-		if (!element) return;
+		if (!element || !props.active) return;
 		const observer = new ResizeObserver(() => {
 			if (followOutputRef.current) element.scrollTop = element.scrollHeight;
 		});
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, []);
+	}, [props.active]);
 
 	useEffect(() => {
 		if (!chat?.id || busy || props.paused) return;
@@ -193,6 +194,29 @@ export function AiChatPage(props: Props) {
 			controllerRef.current?.abort();
 		};
 	}, [props.apiOrigin, showMessage, props.paused]);
+
+	useEffect(() => {
+		if (!props.active || props.paused || loading) return;
+		const controller = new AbortController();
+		// Settings can change while this page is hidden; refresh without touching the active stream.
+		void jsonRequest<unknown>(apiUrl(props.apiOrigin, "/ai/config"), { signal: controller.signal })
+			.then((value) => {
+				if (controller.signal.aborted) return;
+				const config = readAiConfiguration(value);
+				if (!config) throw new Error("AI 配置列表格式无效。");
+				setConfiguration(config);
+				setSelectedProfileId((current) =>
+					config.profiles.some((item) => item.id === current)
+						? current
+						: profileForChat(config, currentChatRef.current),
+				);
+			})
+			.catch((error: unknown) => {
+				if (!controller.signal.aborted)
+					showMessage(error instanceof Error ? error.message : "对话读取失败。", "failed");
+			});
+		return () => controller.abort();
+	}, [props.active, props.paused, props.apiOrigin, loading, showMessage]);
 
 	async function refreshList(): Promise<void> {
 		const list = await jsonRequest<{ chats: ChatSummary[] }>(apiUrl(props.apiOrigin, "/chats"));
@@ -527,9 +551,10 @@ export function AiChatPage(props: Props) {
 	}
 
 	return (
-		<main className="page manual-chat-page" id="chat">
+		<main className="page manual-chat-page" id="chat" hidden={!props.active}>
 			<h1 className="visually-hidden">{t("AI 对话")}</h1>
-			{sidebar.target &&
+			{props.active &&
+				sidebar.target &&
 				createPortal(
 					<section className="manual-chat-list" aria-label={t("对话记录")}>
 						<div className="manual-chat-list-heading">
@@ -603,6 +628,7 @@ export function AiChatPage(props: Props) {
 						className="manual-chat-messages"
 						ref={messagesRef}
 						onScroll={(event) => {
+							if (!props.active) return;
 							const element = event.currentTarget;
 							followOutputRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
 						}}

@@ -41,6 +41,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const currentProjectKey = `setdraft.project-id.${user.id}`;
 	const { t } = useLocale();
 	const [page, setPage] = useState<PageRoute>(() => pageFromHash(window.location.hash));
+	const [chatVisited, setChatVisited] = useState(page === "chat");
+	useEffect(() => {
+		if (page === "chat") setChatVisited(true);
+	}, [page]);
 	const apiOrigin = "";
 	const selection = useRef<AbortController | undefined>(undefined);
 	const [sandbox, setSandbox] = useState<SandboxStatus>();
@@ -709,6 +713,21 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				onNew={() => setChoosingScoringMode(true)}
 				onOpen={openProject}
 			>
+				{/* Keep the user-scoped chat and its stream alive across route changes. */}
+				<Suspense
+					fallback={page === "chat" ? <main className="page page-loading">{t("正在打开页面…")}</main> : null}
+				>
+					{(page === "chat" || chatVisited) && (
+						<AiChatPage
+							active={page === "chat"}
+							paused={paused}
+							apiOrigin={apiOrigin}
+							configured={aiConfigured}
+							administrator={user.role === "admin"}
+							projectSnapshot={project ? projectContextSnapshot(project) : undefined}
+						/>
+					)}
+				</Suspense>
 				<Suspense fallback={<main className="page page-loading">{t("正在打开页面…")}</main>}>
 					{page === "workspace" &&
 						(project ? (
@@ -750,15 +769,6 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								onOpen={openProject}
 							/>
 						))}
-					{page === "chat" && (
-						<AiChatPage
-							paused={paused}
-							apiOrigin={apiOrigin}
-							configured={aiConfigured}
-							administrator={user.role === "admin"}
-							projectSnapshot={project ? projectContextSnapshot(project) : undefined}
-						/>
-					)}
 					{page === "records" && (
 						<RecordsPage
 							busy={!!busy || !!deletingProjectId}

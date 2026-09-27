@@ -197,7 +197,7 @@
 	overscroll-behavior-y: contain;
 	background: var(--panel);
 }
-.shell-main:has(.manual-chat-page) {
+.shell-main:has(.manual-chat-page:not([hidden])) {
 	overflow: hidden;
 }
 .shell-toolbar {

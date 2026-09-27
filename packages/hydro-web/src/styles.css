@@ -1954,17 +1954,51 @@ a svg {
 	font-weight: 400;
 }
 .manual-attachment {
-	display: flex;
-	justify-content: space-between;
-	gap: 8px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
 	margin-top: 7px;
-	padding: 7px 8px;
+	padding: 5px 6px 5px 10px;
 	border: 1px solid var(--line);
 	font-size: 12px;
 }
-.manual-attachment span {
+.manual-attachment-list {
+	max-height: 240px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+}
+.manual-attachment-info {
+	min-width: 0;
+	display: grid;
+	gap: 2px;
+}
+.manual-attachment-size {
+	color: var(--muted);
+	font-size: 11px;
+}
+.manual-attachment-name {
+	display: block;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.manual-attachment-actions {
+	display: flex;
+	align-items: center;
+}
+.manual-attachment-actions .icon-button {
+	width: 30px;
+	height: 32px;
+	min-height: 32px;
+	padding: 6px;
+}
+.manual-attachment-actions svg {
+	width: 16px;
+	height: 16px;
 }
 .manual-muted,
 .manual-error {

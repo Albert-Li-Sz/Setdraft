@@ -5,6 +5,7 @@ import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
 import { readSourceFile } from "./file-transfer.ts";
+import { Icon } from "./Icon.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import { limitAmount } from "./limit-input.ts";
 import { PdfPreview } from "./PdfPreview.tsx";
@@ -1358,34 +1359,44 @@ export function ManualWorkspace(props: Props) {
 								}}
 							/>
 						</label>
-						{project.attachments.map((item) => (
-							<div className="manual-attachment" key={item.name}>
-								<span>{item.name}</span>
-								<button
-									type="button"
-									className="text-button"
-									onClick={() => {
-										void copyText(`file://${item.name}`)
-											.then(() => setAttachmentNotice("附件引用已复制。"))
-											.catch(() => setAttachmentNotice("复制失败，请检查浏览器剪贴板权限。"));
-									}}
-								>
-									{t("复制引用")}
-								</button>
-								<button
-									className="text-button danger"
-									type="button"
-									onClick={() =>
-										set(
-											"attachments",
-											project.attachments.filter((file) => file.name !== item.name),
-										)
-									}
-								>
-									{t("删除")}
-								</button>
-							</div>
-						))}
+						<div className="manual-attachment-list">
+							{project.attachments.map((item) => (
+								<div className="manual-attachment" key={item.name}>
+									<span className="manual-attachment-name" title={item.name}>
+										{item.name}
+									</span>
+									<div className="manual-attachment-actions">
+										<button
+											type="button"
+											className="icon-button"
+											title={t("复制引用")}
+											aria-label={`${t("复制引用")} ${item.name}`}
+											onClick={() => {
+												void copyText(`file://${item.name}`)
+													.then(() => setAttachmentNotice("附件引用已复制。"))
+													.catch(() => setAttachmentNotice("复制失败，请检查浏览器剪贴板权限。"));
+											}}
+										>
+											<Icon name="files" />
+										</button>
+										<button
+											className="icon-button danger"
+											type="button"
+											title={t("删除")}
+											aria-label={t("删除 {0}", item.name)}
+											onClick={() =>
+												set(
+													"attachments",
+													project.attachments.filter((file) => file.name !== item.name),
+												)
+											}
+										>
+											<Icon name="close" />
+										</button>
+									</div>
+								</div>
+							))}
+						</div>
 					</section>
 					{attachmentNotice && (
 						<output className="manual-muted" aria-live="polite">
@@ -1410,16 +1421,34 @@ export function ManualWorkspace(props: Props) {
 							</label>
 							{project.domjudgePdf && (
 								<div className="manual-attachment">
-									<button className="text-button" type="button" onClick={() => setPdfPreview(true)}>
-										problem.pdf · {(project.domjudgePdf.size / 1024).toFixed(1)} KiB · {t("预览")}
-									</button>
-									<button
-										className="text-button danger"
-										type="button"
-										onClick={() => void props.onDeleteDomjudgePdf()}
-									>
-										{t("删除")}
-									</button>
+									<div className="manual-attachment-info">
+										<span className="manual-attachment-name" title="problem.pdf">
+											problem.pdf
+										</span>
+										<small className="manual-attachment-size">
+											{(project.domjudgePdf.size / 1024).toFixed(1)} KiB
+										</small>
+									</div>
+									<div className="manual-attachment-actions">
+										<button
+											className="icon-button"
+											type="button"
+											title={t("预览")}
+											aria-label={`${t("预览")} problem.pdf`}
+											onClick={() => setPdfPreview(true)}
+										>
+											<Icon name="eye" />
+										</button>
+										<button
+											className="icon-button danger"
+											type="button"
+											title={t("删除")}
+											aria-label={t("删除 {0}", "problem.pdf")}
+											onClick={() => void props.onDeleteDomjudgePdf()}
+										>
+											<Icon name="close" />
+										</button>
+									</div>
 								</div>
 							)}
 						</section>

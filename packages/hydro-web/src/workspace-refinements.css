@@ -124,11 +124,8 @@
 	min-height: var(--control-height);
 	max-width: 100%;
 }
-.manual-attachment > span {
-	flex: 1;
-}
-.manual-attachment button {
-	flex-shrink: 0;
+.manual-chat-page[hidden] {
+	display: none;
 }
 @media (prefers-reduced-motion: reduce) {
 	.thinking-dots i,
