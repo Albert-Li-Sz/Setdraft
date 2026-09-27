@@ -1,4 +1,3 @@
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
 import type { ProjectSnapshot } from "./platform.ts";
 
 export function parseTags(value: string): string[] {
@@ -11,8 +10,6 @@ export function parseTags(value: string): string[] {
 		),
 	];
 }
-
-export const statementWithSamples = formatHydroStatement;
 
 export function editableProject(project: ProjectSnapshot) {
 	return {

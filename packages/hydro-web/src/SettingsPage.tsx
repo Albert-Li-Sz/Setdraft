@@ -2,6 +2,7 @@ import type { AuthUser } from "@hydro-problem-make/contracts";
 import { useRef, useState } from "react";
 import { authClient } from "./auth-client.ts";
 import { type Locale, useLocale } from "./i18n.tsx";
+import { PasswordSettings } from "./PasswordSettings.tsx";
 import { UserAvatar } from "./UserAvatar.tsx";
 
 async function avatarFromFile(file: File): Promise<string> {
@@ -37,7 +38,7 @@ export function SettingsPage({ user }: { user: AuthUser }) {
 			<section className="page-heading">
 				<div>
 					<h1>{t("个人设置")}</h1>
-					<p>{t("管理你的头像和语言偏好。")}</p>
+					<p>{t("管理你的头像、语言偏好和密码。")}</p>
 				</div>
 			</section>
 			<form
@@ -137,6 +138,7 @@ export function SettingsPage({ user }: { user: AuthUser }) {
 					</button>
 				</div>
 			</form>
+			<PasswordSettings />
 		</main>
 	);
 }

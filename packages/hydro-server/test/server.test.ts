@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatService } from "../src/chat.ts";
 import { IdentityStore } from "../src/identity.ts";
@@ -859,7 +858,7 @@ describe("manual project API", () => {
 				"a-plus-b/testdata/checker.cc",
 			);
 			expect(execFileSync("unzip", ["-p", hydroPath, "a-plus-b/problem_zh.md"]).toString("utf8")).toBe(
-				formatHydroStatement({ statement: "# A + B\n\n计算和。", samples: [{ input: "1 2\n", output: "3\n" }] }),
+				"# A + B\n\n计算和。\n",
 			);
 			const manifest = JSON.parse(
 				execFileSync("unzip", ["-p", sourcePath, "a-plus-b.authoring/manifest.json"]).toString("utf8"),
@@ -876,10 +875,28 @@ describe("manual project API", () => {
 				body: JSON.stringify({
 					statement: "# Modified",
 					reference: { language: "cpp17", code: "int main(){return 1;}" },
+					samples: [{ input: "99 99\n", output: "changed sample\n" }],
 				}),
 			});
 			expect((await authenticatedFetch(`${origin}/api/releases/${releaseId}/hydro`)).status).toBe(200);
 			expect(await store.releases.releaseReference(releaseId!)).toEqual({ language: "cpp23", code: referenceCode });
+			const exported = await json(`/releases/${releaseId}/exports/domjudge`, { method: "POST" });
+			expect(exported.status, JSON.stringify(exported.body)).toBe(200);
+			const domjudgePath = (await store.releases.releaseFile(releaseId!, "domjudge")).path;
+			for (const [name, content] of [
+				["data/sample/001.in", "1 2\n"],
+				["data/sample/001.ans", "3\n"],
+				["data/secret/001.in", "1 2\n"],
+				["data/secret/001.ans", "3\n"],
+			]) {
+				expect(execFileSync("unzip", ["-p", domjudgePath, name], { encoding: "utf8" })).toBe(content);
+			}
+			const qduoj = await json(`/releases/${releaseId}/exports/qduoj`, { method: "POST" });
+			expect(qduoj.status).toBe(200);
+			const qduojPath = (await store.releases.releaseFile(releaseId!, "qduoj")).path;
+			const document = JSON.parse(execFileSync("unzip", ["-p", qduojPath, "1/problem.json"], { encoding: "utf8" }));
+			expect(document.description.value).toBe("# A + B\n\n计算和。\n");
+			expect(document.samples).toEqual([{ input: "1 2\n", output: "3\n" }]);
 		},
 		120_000,
 	);

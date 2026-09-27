@@ -1,9 +1,9 @@
+import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import type { ProjectSnapshot } from "./platform.ts";
-import { statementWithSamples } from "./problem.ts";
 
 type PreviewProject = Pick<ProjectSnapshot, "statement" | "samples" | "attachments">;
 
@@ -39,7 +39,7 @@ export function ProblemPreview({ project }: { project: PreviewProject }) {
 					return `data:${mimeType};base64,${content}`;
 				}}
 			>
-				{statementWithSamples(project)}
+				{formatHydroStatement(project)}
 			</ReactMarkdown>
 		</div>
 	);

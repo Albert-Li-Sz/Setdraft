@@ -1,6 +1,7 @@
+import { formatHydroStatement } from "@hydro-problem-make/authoring/statement";
 import { describe, expect, it } from "vitest";
 import type { ProjectSnapshot } from "../src/platform.ts";
-import { editableProject, parseTags, projectContextSnapshot, statementWithSamples } from "../src/problem.ts";
+import { editableProject, parseTags, projectContextSnapshot } from "../src/problem.ts";
 
 const project: ProjectSnapshot = {
 	id: "project",
@@ -32,8 +33,9 @@ const project: ProjectSnapshot = {
 
 describe("manual problem editor helpers", () => {
 	it("keeps public samples separate from private data", () => {
-		expect(statementWithSamples(project)).toContain("```input1\n1 2\n```");
-		expect(statementWithSamples({ ...project, samples: [] })).not.toContain("## 样例");
+		expect(formatHydroStatement(project)).toBe(`${project.statement}\n`);
+		expect(editableProject(project).samples).toEqual(project.samples);
+		expect(formatHydroStatement(project)).not.toContain("## 样例");
 		expect(editableProject(project)).not.toHaveProperty("cases");
 		expect(editableProject(project)).toMatchObject({
 			generatorStandard: "cpp17",

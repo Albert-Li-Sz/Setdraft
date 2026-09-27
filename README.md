@@ -50,7 +50,7 @@ Setdraft 沿用原有的 `HYDRO_*` 环境变量、数据目录和内部包名，
 忽略大小写；密码为 15–128 个字符。系统始终保留至少一名启用的管理员。
 “个人设置”保存账号语言偏好，登录后自动应用，并支持上传、预览和移除头像（PNG / JPEG / WebP，最大 5 MiB，居中裁剪）。
 团队 AI、沙箱和用户管理集中在独立的“管理员设置”，普通成员无此入口。
-侧栏底部提供修改密码和退出；账号内容彼此独立，管理员也没有跨账号浏览内容的入口。
+修改密码位于“个人设置 → 账号安全”，侧栏底部提供退出登录；账号内容彼此独立，管理员也没有跨账号浏览内容的入口。
 
 登录过期会锁定工作台并暂停保存、轮询和订阅；使用同一账号重新登录可恢复当前页面未保存的编辑。
 退出或换号会清理页面中的业务数据，多标签页同步退出。尚未保存的编辑只保留在当前页面内存中，刷新页面会丢失。
@@ -80,9 +80,10 @@ node scripts/hydro-local.mjs start --mode production
 
 ## 制题流程
 
-1. 新建题目时选择 ACM 或 OI 赛制，然后编辑 Markdown 题面、样例和附件。
+1. 新建题目时选择 ACM 或 OI 赛制，然后编辑 Markdown 题面和附件。
 2. 手动填写或上传 `.in/.out/.ans` 测试点，或上传 C++ Gen 和逐行 `gen ...` 脚本。
    缺少输出时由标准程序生成，生成数据会排在手动数据之后。
+   公开样例在“测试数据”中独立配置，不自动拼入 Markdown 题面；DOMjudge 导出到 `data/sample`，私有测试点导出到 `data/secret`。
 3. 编写标准程序；可选第二标准程序、testlib Validator 和 C++ testlib Checker。默认
    Checker 是文本比较，支持 C++11/14/17/20/23/26。
 4. 点击“验证并打包”，为发布包命名。后台任务记录阶段、测试点和日志；离开页面仍可在“任务”查看、
@@ -104,7 +105,7 @@ node scripts/hydro-local.mjs start --mode production
 
 管理员在管理员设置页统一提供团队 AI，普通成员只选择和使用模型，API Key 不会返回浏览器。支持三种协议：OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。
 每套配置可保存模型名、API Key、Base URL、上下文长度和最大输出长度。对话支持 SSE
-流式 Markdown、GFM、LaTeX、图片粘贴和上传；Enter 发送，Shift+Enter 换行。聊天记录
+流式 Markdown、GFM、LaTeX、图片粘贴和上传；代码块可单独复制，保留缩进与换行。Enter 发送，Shift+Enter 换行。聊天记录
 只保存在本地。图片通过 multipart 上传；模型请求和 SSE 订阅分离，断线可续接且不会重复发送。
 
 ## 数据与维护

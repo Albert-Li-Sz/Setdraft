@@ -273,8 +273,8 @@ export function ManualWorkspace(props: Props) {
 		report?.revision === project.revision &&
 		props.saveStatus === "已保存";
 	const tabItems: Array<{ id: Tab; label: string; count?: number }> = [
-		{ id: "statement", label: "题面与样例" },
-		{ id: "data", label: "测试数据", count: project.cases.length },
+		{ id: "statement", label: "题面" },
+		{ id: "data", label: "测试数据", count: project.cases.length + project.samples.length },
 		{ id: "generator", label: "Gen 生成" },
 		{ id: "programs", label: "程序与 SPJ" },
 		{ id: "validation", label: "验证" },
@@ -431,7 +431,7 @@ export function ManualWorkspace(props: Props) {
 								<div className="editor-pane">
 									<div className="pane-heading">
 										<strong>{t("Markdown 题面")}</strong>
-										<span>{t("样例单独管理，不写入私有测试点")}</span>
+										<span>{t("公开样例在“测试数据”中配置")}</span>
 									</div>
 									<textarea
 										className="statement-editor"
@@ -449,15 +449,25 @@ export function ManualWorkspace(props: Props) {
 									<ProblemPreview project={project} />
 								</div>
 							</div>
+						</div>
+					)}
+					{tab === "data" && (
+						<div
+							className="tab-body manual-tab-body"
+							role="tabpanel"
+							id="authoring-panel-data"
+							aria-labelledby="authoring-tab-data"
+						>
 							<div className="manual-section">
 								<div className="manual-section-heading">
 									<div>
 										<h2>{t("公开样例")}</h2>
-										<p>{t("只会出现在题面中，不会自动作为私有测试数据。")}</p>
+										<p>{t("独立保存输入与输出，不自动拼入 Markdown；导出 DOMjudge 时作为公开测试数据。")}</p>
 									</div>
 									<button
 										className="button secondary"
 										type="button"
+										disabled={project.samples.length >= 20}
 										onClick={() => set("samples", [...project.samples, { input: "", output: "" }])}
 									>
 										{t("添加样例")}
@@ -488,6 +498,8 @@ export function ManualWorkspace(props: Props) {
 											<label>
 												<span>{t("输入")}</span>
 												<textarea
+													aria-label={t("样例 {0} 输入", index + 1)}
+													spellCheck={false}
 													value={sample.input}
 													onChange={(event) =>
 														set(
@@ -502,6 +514,8 @@ export function ManualWorkspace(props: Props) {
 											<label>
 												<span>{t("输出")}</span>
 												<textarea
+													aria-label={t("样例 {0} 输出", index + 1)}
+													spellCheck={false}
 													value={sample.output}
 													onChange={(event) =>
 														set(
@@ -517,15 +531,6 @@ export function ManualWorkspace(props: Props) {
 									</div>
 								))}
 							</div>
-						</div>
-					)}
-					{tab === "data" && (
-						<div
-							className="tab-body manual-tab-body"
-							role="tabpanel"
-							id="authoring-panel-data"
-							aria-labelledby="authoring-tab-data"
-						>
 							<div className="info-strip">
 								{t(
 									"一次选择多个 .in、.out、.ans 文件，按同名主干配对。.in 必需；未提供输出时由标程生成，已提供输出时由标程核对。单文件上限 64 MiB，项目默认上限 512 MiB。",
@@ -648,7 +653,7 @@ export function ManualWorkspace(props: Props) {
 							</form>
 							<div className="manual-section-heading">
 								<div>
-									<h2>{t("测试点")}</h2>
+									<h2>{t("私有测试点")}</h2>
 									<p>{t("生成点排在手动点后；重跑 Gen 原子替换上一批生成点。")}</p>
 								</div>
 								<div className="heading-actions">
