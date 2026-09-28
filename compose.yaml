@@ -1,16 +1,7 @@
 name: setdraft
 services:
   web:
-    image: ${SETDRAFT_WEB_IMAGE:-setdraft/web:local}
-    build:
-      context: .
-      target: web
-      args:
-        NODE_IMAGE: ${SETDRAFT_NODE_IMAGE:-node:24.18.0-bookworm-slim}
-        DOCKER_CLI_IMAGE: ${SETDRAFT_DOCKER_CLI_IMAGE:-docker:29-cli}
-        NPM_REGISTRY: ${SETDRAFT_NPM_REGISTRY:-https://registry.npmmirror.com}
-        HTTP_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
-        HTTPS_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
+    image: ${SETDRAFT_WEB_IMAGE:-ghcr.io/albert-li-sz/setdraft:latest}
     depends_on:
       database:
         condition: service_healthy
@@ -29,7 +20,7 @@ services:
       PORT: ${SETDRAFT_PORT:-4321}
       SETDRAFT_WORKSPACE_ROOT: ${SETDRAFT_DATA_PATH:?Run ./install.sh first to generate .env.compose}
       SETDRAFT_PUBLIC_ORIGIN: ${SETDRAFT_PUBLIC_ORIGIN:-}
-      SETDRAFT_SANDBOX_IMAGE: ${SETDRAFT_SANDBOX_IMAGE:-setdraft/sandbox:local}
+      SETDRAFT_SANDBOX_IMAGE: ${SETDRAFT_SANDBOX_IMAGE:-ghcr.io/albert-li-sz/setdraft-sandbox:latest}
       SETDRAFT_DOCKER_REGISTRY: ${SETDRAFT_DOCKER_REGISTRY:-}
       SETDRAFT_DEBIAN_MIRROR: ${SETDRAFT_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}
       SETDRAFT_TESTCASES_MAX: ${SETDRAFT_TESTCASES_MAX:-100}
@@ -72,7 +63,7 @@ services:
       timeout: 5s
       retries: 12
   migrate:
-    image: ${SETDRAFT_WEB_IMAGE:-setdraft/web:local}
+    image: ${SETDRAFT_WEB_IMAGE:-ghcr.io/albert-li-sz/setdraft:latest}
     entrypoint: ["node", "packages/hydro-server/dist/migrate-cli.js"]
     environment:
       SETDRAFT_DB_APP_PASSWORD: ${SETDRAFT_DB_APP_PASSWORD:?Run ./install.sh}
@@ -90,18 +81,8 @@ services:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
       - search-cache:/var/cache/searxng
   maintenance:
-    image: ${SETDRAFT_MAINTENANCE_IMAGE:-setdraft/maintenance:local}
+    image: ${SETDRAFT_MAINTENANCE_IMAGE:-ghcr.io/albert-li-sz/setdraft-maintenance:latest}
     profiles: ["maintenance"]
-    build:
-      context: .
-      target: maintenance
-      args:
-        NODE_IMAGE: ${SETDRAFT_NODE_IMAGE:-node:24.18.0-bookworm-slim}
-        DOCKER_CLI_IMAGE: ${SETDRAFT_DOCKER_CLI_IMAGE:-docker:29-cli}
-        POSTGRES_IMAGE: ${SETDRAFT_POSTGRES_IMAGE:-postgres:18-bookworm@sha256:3725f4e2499eef5134592b3b4ab79a543ed7f8e533b05b5b637af926630f6650}
-        NPM_REGISTRY: ${SETDRAFT_NPM_REGISTRY:-https://registry.npmmirror.com}
-        HTTP_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
-        HTTPS_PROXY: ${SETDRAFT_DOWNLOAD_PROXY:-}
     environment:
       SETDRAFT_DATABASE_ADMIN_URL: postgresql://postgres:${SETDRAFT_DB_ADMIN_PASSWORD:?Run ./install.sh}@database:5432/setdraft
       SETDRAFT_WORKSPACE_ROOT: ${SETDRAFT_DATA_PATH}
@@ -111,14 +92,8 @@ services:
         target: ${SETDRAFT_DATA_PATH}
     restart: "no"
   sandbox:
-    image: ${SETDRAFT_SANDBOX_IMAGE:-setdraft/sandbox:local}
+    image: ${SETDRAFT_SANDBOX_IMAGE:-ghcr.io/albert-li-sz/setdraft-sandbox:latest}
     profiles: ["build"]
-    build:
-      context: packages/hydro-server/sandbox
-      args:
-        PYTHON_IMAGE: ${SETDRAFT_PYTHON_IMAGE:-python:3.14-slim-trixie}
-        GCC_IMAGE: ${SETDRAFT_GCC_IMAGE:-gcc:16.2.0-trixie@sha256:28365a1efe31883fd29f9fce27811b731e815f9f9b2db16b0e1f0d99fcb3dae5}
-        DEBIAN_MIRROR: ${SETDRAFT_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}
     entrypoint: ["/bin/true"]
     restart: "no"
 

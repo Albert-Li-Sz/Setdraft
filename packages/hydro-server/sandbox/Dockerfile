@@ -3,6 +3,9 @@ ARG GCC_IMAGE=gcc:16.2.0-trixie@sha256:28365a1efe31883fd29f9fce27811b731e815f9f9
 FROM ${PYTHON_IMAGE} AS python-runtime
 
 FROM ${GCC_IMAGE}
+LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/setdraft" \
+      org.opencontainers.image.title="Setdraft sandbox" \
+      org.opencontainers.image.description="GCC, Python, Java and testlib execution environment"
 COPY --from=python-runtime /usr/local /usr/local
 ARG DEBIAN_MIRROR=https://deb.debian.org
 RUN python3 -c 'import os,pathlib; p=pathlib.Path("/etc/apt/sources.list.d/debian.sources"); mirror=os.environ["DEBIAN_MIRROR"].rstrip("/"); p.write_text(p.read_text().replace("http://deb.debian.org",mirror).replace("http://security.debian.org",mirror))' \

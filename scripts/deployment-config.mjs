@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseEnv } from "node:util";
 
 const fields = [
+	"SETDRAFT_IMAGE_MODE", "SETDRAFT_IMAGE_NAMESPACE", "SETDRAFT_IMAGE_TAG", "SETDRAFT_WEB_IMAGE", "SETDRAFT_MAINTENANCE_IMAGE",
 	"SETDRAFT_DATABASE_URL", "SETDRAFT_SEARCH_URL", "SETDRAFT_SEARCH_IMAGE", "SETDRAFT_POSTGRES_IMAGE", "SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
 	"SETDRAFT_NETWORK", "SETDRAFT_NPM_REGISTRY", "SETDRAFT_DOWNLOAD_PROXY",
 	"SETDRAFT_DOCKER_REGISTRY", "SETDRAFT_DEBIAN_MIRROR",
@@ -65,6 +66,12 @@ export async function loadDeployment(root, environment = process.env, overrides 
 		const legacy = key.replace(/^SETDRAFT_/u, "HYDRO_");
 		values[key] = overrides[key] ?? environment[key] ?? environment[legacy] ?? saved[key] ?? saved[legacy] ?? "";
 	}
+	values.SETDRAFT_IMAGE_MODE ||= "prebuilt";
+	if (!["prebuilt", "source"].includes(values.SETDRAFT_IMAGE_MODE)) throw new Error("SETDRAFT_IMAGE_MODE 需要 prebuilt 或 source。");
+	if (values.SETDRAFT_IMAGE_TAG && !/^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$/u.test(values.SETDRAFT_IMAGE_TAG))
+		throw new Error("SETDRAFT_IMAGE_TAG 不是有效的镜像标签。");
+	if (values.SETDRAFT_IMAGE_NAMESPACE && !/^[a-z0-9.-]+(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/u.test(values.SETDRAFT_IMAGE_NAMESPACE))
+		throw new Error("SETDRAFT_IMAGE_NAMESPACE 需要小写的仓库主机/命名空间，不含协议或末尾斜杠。");
 	values.SETDRAFT_HOST ||= "0.0.0.0";
 	if (!["0.0.0.0", "127.0.0.1"].includes(values.SETDRAFT_HOST)) throw new Error("--host 只能是 0.0.0.0 或 127.0.0.1。");
 	const network = values.SETDRAFT_NETWORK || "cn";

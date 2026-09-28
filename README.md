@@ -8,7 +8,7 @@ Web 界面采用黑白配色、可收起侧栏与简洁工具栏，右上角支�
 
 ## 安装（Docker Compose）
 
-服务器需要 Docker Engine、Docker Compose 插件和 Git。默认安装无需宿主机 Node.js；支持 Linux 和 macOS Docker Desktop。Windows 请在启用 Docker Desktop WSL 集成的 Linux 工作区内执行下列命令。
+服务器需要 Docker Engine、Docker Compose 插件和 Git。默认安装无需宿主机 Node.js；支持 Linux 和 macOS Docker Desktop，镜像支持 Linux amd64 / arm64。Windows 安装、升级和卸载脚本已移除。
 
 ```bash
 git clone https://github.com/Albert-Li-Sz/setdraft.git
@@ -16,13 +16,23 @@ cd setdraft
 ./install.sh
 ```
 
-安装器生成 `.env` 与 `.env.compose`，构建 Web、沙箱和备份维护镜像，启动 Web/API、PostgreSQL 18 和 SearXNG；迁移容器负责初始化数据库表和权限。数据库及搜索端口不对宿主机开放。默认通过 `http://服务器IP:4321/` 访问，监听 `0.0.0.0:4321`，不安装反向代理、不配置 HTTPS。服务有健康检查和自动重启策略。首次安装码显示在终端及服务日志中，24 小时有效。
+安装器生成 `.env` 与 `.env.compose`，拉取官方 Web、沙箱和备份维护镜像，启动 Web/API、PostgreSQL 18 和 SearXNG；迁移容器负责初始化数据库表和权限。数据库及搜索端口不对宿主机开放。默认通过 `http://服务器IP:4321/` 访问，监听 `0.0.0.0:4321`，不安装反向代理、不配置 HTTPS。服务有健康检查和自动重启策略。首次安装码显示在终端及服务日志中，24 小时有效。
 
-默认国内网络配置使用 npmmirror 和清华 Debian 源；支持 `--network global`、`--registry`、`--docker-registry`、`--download-proxy`。构建保留锁文件校验和重试，不关闭 TLS。仓库自带模型数据，构建先 telemetry 后 AI，完全使用离线模型快照。镜像构建失败会停止安装并报告错误。
+默认安装不在服务器上编译源码。镜像发布在本项目的 [GitHub Packages](https://github.com/Albert-Li-Sz?tab=packages&repo_name=setdraft)：
+
+| 镜像 | 用途 |
+| --- | --- |
+| `ghcr.io/albert-li-sz/setdraft:latest` | Web、API 与数据库迁移 |
+| `ghcr.io/albert-li-sz/setdraft-sandbox:latest` | GCC 16、Python、Java、testlib 沙箱 |
+| `ghcr.io/albert-li-sz/setdraft-maintenance:latest` | PostgreSQL 与个人工作区备份、恢复 |
+
+`latest` 跟随通过两种架构镜像检查的 `main` 提交；`sha-<完整提交哈希>` 固定到具体版本，`v1.2.3` Git 标签对应镜像 `1.2.3`。三个镜像使用同一版本标签。首次公开发布需要在 GitHub Packages 中把三个包的可见性设为 Public，之后无需登录即可拉取。[发布流程](.github/workflows/docker-publish.yml) 使用仓库的 `GITHUB_TOKEN`，不需要另存仓库密钥。
+
+全部镜像成功准备后安装器才停止原 Web 服务；拉取或构建失败会直接退出，不停止当前运行的容器。
 
 ```bash
 ./install.sh --dry-run
-./upgrade.sh                  # 干净的 main 分支快进更新、构建并更新容器
+./upgrade.sh                  # 干净的 main 分支快进更新、拉取并更新容器
 ./uninstall.sh                # 移除容器和网络，保留数据、配置及镜像
 ./scripts/setdraft-compose.sh status
 ./scripts/setdraft-compose.sh logs
@@ -40,7 +50,7 @@ cd setdraft
 
 容器通过 Docker socket 启动独立沙箱任务，数据目录以相同绝对路径映射到容器，确保兄弟沙箱容器能读取任务文件。Docker daemon 必须位于同一宿主机；不要连接远端 Docker context。Docker socket 权限很高，仅在受信任的自部署服务器使用该部署模式。工作区应在本地磁盘上，不放网络共享盘。默认只运行一个 Web 实例，文件锁和 PostgreSQL 会话锁阻止第二个服务同时操作同一数据集。[Docker 挂载路径说明](https://docs.docker.com/engine/storage/bind-mounts/)
 
-需要原生开发时，先准备 PostgreSQL 并在 `.env` 设置受限账号的 `SETDRAFT_DATABASE_URL`（表结构由 `migrate-cli` 使用维护账号初始化），安装 Node.js 24+ 后运行 `./install.sh --native --mode dev`；Vite 在 `127.0.0.1:5173`。原生维护工具仍为 `node scripts/hydro-local.mjs`；PowerShell 原生入口须显式使用 `-Native`。容器镜像也可通过 `docker save` / `docker load` 搬运到离线服务器；准备 `.env.compose` 后运行 `./scripts/setdraft-compose.sh start`，不会重新拉取构建依赖。
+需要原生开发时，先准备 PostgreSQL 并在 `.env` 设置受限账号的 `SETDRAFT_DATABASE_URL`（表结构由 `migrate-cli` 使用维护账号初始化），安装 Node.js 24+ 后运行 `./install.sh --native --mode dev`；Vite 在 `127.0.0.1:5173`。原生维护工具仍为 `node scripts/hydro-local.mjs`。容器镜像也可通过 `docker save` / `docker load` 搬运到离线服务器；准备 `.env.compose` 后运行 `./scripts/setdraft-compose.sh start`，不会重新拉取构建依赖。
 
 ## 登录与账号
 
@@ -97,6 +107,8 @@ Vite 开发模式仅在本机开放，使用 `http://127.0.0.1:5173`，不用于
 
 ## 国内网络与离线部署
 
+预构建镜像从 GHCR 拉取，PostgreSQL 和 SearXNG 从 Docker Hub 拉取。`--docker-registry` 仅替换 Docker Hub 来源；GHCR 受限时可在 `.env` 设置 `SETDRAFT_IMAGE_NAMESPACE` 指向已同步三个镜像的可信仓库，或通过 `SETDRAFT_WEB_IMAGE`、`SETDRAFT_SANDBOX_IMAGE`、`SETDRAFT_MAINTENANCE_IMAGE` 指定完整镜像引用。镜像拉取代理需要配置在 Docker daemon，`--download-proxy` 仅影响源码构建。
+
 网络配置只作用于本项目，不修改全局 npm / Git 配置、宿主机 APT 源或 Docker 的 `daemon.json`：
 
 | 参数 / 环境变量 | 用途 |
@@ -108,14 +120,20 @@ Vite 开发模式仅在本机开放，使用 `http://127.0.0.1:5173`，不用于
 | `--docker-registry` / `SETDRAFT_DOCKER_REGISTRY` | 可访问的可信 Docker Hub 镜像仓库；填主机名和可选命名空间，不含协议、凭据或 `/library` |
 | `--download-proxy` / `SETDRAFT_DOWNLOAD_PROXY` | 镜像构建中的 npm 下载代理；不自动配置 Git 或 Docker daemon |
 
-示例（代理地址按自己的网络调整）：
+需要修改源码或自行构建时，使用以下命令（模式保存到 `.env`，升级自动沿用）：
 
 ```bash
-./install.sh --network cn \
+./install.sh --build --network cn \
   --download-proxy http://host.docker.internal:7890
 ./upgrade.sh                          # 自动沿用 .env 中的配置
 ./upgrade.sh --network global         # 切换默认网络配置
+./install.sh --prebuilt               # 切回预构建镜像
 ```
+
+源码构建通过 `compose.build.yaml` 显式启用，默认 `compose.yaml` 不含构建步骤。构建先 telemetry、再 AI，使用仓库中的离线模型快照；保留锁文件校验和重试，不关闭 TLS。
+
+需要固定版本时，在 `.env` 设置 `SETDRAFT_IMAGE_TAG="sha-<完整提交哈希>"`，再执行 `./install.sh`。升级前建议备份；回退镜像不等于回退数据库，需要不兼容版本回退时使用匹配的备份。
+离线服务器可提前导入三个 Setdraft 镜像及 PostgreSQL、SearXNG（没有 Node.js 时还需 Node 引导镜像），生成 `.env.compose` 后运行 `./scripts/setdraft-compose.sh start`；启动命令不拉取或构建镜像。
 
 GitHub 首次克隆发生在安装脚本运行之前；如需要代理，可使用
 `git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/Albert-Li-Sz/setdraft.git`。

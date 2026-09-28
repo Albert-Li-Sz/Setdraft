@@ -1,0 +1,136 @@
+name: Publish Docker images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.repository == 'Albert-Li-Sz/setdraft'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build local type dependencies
+        run: |
+          npm run build --workspace=@earendil-works/pi-telemetry
+          npm run build:offline --workspace=@earendil-works/pi-ai
+          npm run build --workspace=@setdraft/authoring
+      - run: npm run check
+      - run: node --test scripts/compose-config.test.mjs scripts/compose-installer.test.mjs
+
+  build:
+    if: github.repository == 'Albert-Li-Sz/setdraft'
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [web, maintenance, sandbox]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name
+        id: image
+        env:
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          name=ghcr.io/albert-li-sz/setdraft
+          if [ "$COMPONENT" != web ]; then name="$name-$COMPONENT"; fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "tag=$name:sha-$GITHUB_SHA-$ARCH" >> "$GITHUB_OUTPUT"
+      - name: Build native image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.component == 'sandbox' && 'packages/hydro-server/sandbox' || '.' }}
+          target: ${{ matrix.component != 'sandbox' && matrix.component || '' }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: ${{ steps.image.outputs.tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/Albert-Li-Sz/setdraft
+          build-args: |
+            NPM_REGISTRY=https://registry.npmjs.org
+            DEBIAN_MIRROR=https://deb.debian.org
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.arch }}
+      - name: Test the built image
+        env:
+          COMPONENT: ${{ matrix.component }}
+          IMAGE: ${{ steps.image.outputs.tag }}
+        run: sh scripts/smoke-image.sh "$COMPONENT" "$IMAGE"
+      - name: Push tested image
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker push "$IMAGE"
+          mkdir -p digests
+          docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}' > "digests/$COMPONENT-$ARCH"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.component }}-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+      - name: Publish multi-platform manifests
+        run: |
+          for component in web maintenance sandbox; do
+            image=ghcr.io/albert-li-sz/setdraft
+            if [ "$component" != web ]; then image="$image-$component"; fi
+            set -- --tag "$image:sha-$GITHUB_SHA"
+            case "$GITHUB_REF" in
+              refs/heads/main) set -- "$@" --tag "$image:latest" ;;
+              refs/tags/v*) set -- "$@" --tag "$image:${GITHUB_REF_NAME#v}" ;;
+            esac
+            docker buildx imagetools create "$@" \
+              "$(cat "digests/$component-amd64")" "$(cat "digests/$component-arm64")"
+            docker buildx imagetools inspect "$image:sha-$GITHUB_SHA"
+            echo "- \`$image:sha-$GITHUB_SHA\` (linux/amd64, linux/arm64)" >> "$GITHUB_STEP_SUMMARY"
+          done

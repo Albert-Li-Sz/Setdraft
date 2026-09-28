@@ -71,3 +71,48 @@ test("sandbox scheduling options survive Compose generation and environment load
   await assert.rejects(loadDeployment(root, {SETDRAFT_SANDBOX_CONCURRENCY: "0"}), /正整数/u);
  } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("prebuilt images share a release tag and custom registry choices survive regeneration", async () => {
+ const root = await mkdtemp(join(tmpdir(), "setdraft-release-config-"));
+ try {
+  await composeConfiguration(root, [], {});
+  let env = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  assert.equal(env.SETDRAFT_IMAGE_MODE, "prebuilt");
+  assert.equal(env.SETDRAFT_WEB_IMAGE, "ghcr.io/albert-li-sz/setdraft:latest");
+  assert.equal(env.SETDRAFT_SANDBOX_IMAGE, "ghcr.io/albert-li-sz/setdraft-sandbox:latest");
+  assert.equal(env.SETDRAFT_MAINTENANCE_IMAGE, "ghcr.io/albert-li-sz/setdraft-maintenance:latest");
+  await composeConfiguration(root, [], {
+   SETDRAFT_IMAGE_NAMESPACE: "registry.example.com/team", SETDRAFT_IMAGE_TAG: "1.2.3",
+   SETDRAFT_DOCKER_REGISTRY: "hub.example.com",
+   SETDRAFT_MAINTENANCE_IMAGE: `registry.example.com/backup@sha256:${"a".repeat(64)}`,
+  });
+  await composeConfiguration(root, [], {});
+  env = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  assert.equal(env.SETDRAFT_WEB_IMAGE, "registry.example.com/team/setdraft:1.2.3");
+  assert.equal(env.SETDRAFT_SANDBOX_IMAGE, "registry.example.com/team/setdraft-sandbox:1.2.3");
+  assert.equal(env.SETDRAFT_MAINTENANCE_IMAGE, `registry.example.com/backup@sha256:${"a".repeat(64)}`);
+  assert.match(env.SETDRAFT_POSTGRES_IMAGE, /^hub\.example\.com\/library\//u);
+ } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("source builds use local tags, persist across upgrades and can switch back to releases", async () => {
+ const root = await mkdtemp(join(tmpdir(), "setdraft-source-config-"));
+ try {
+  await composeConfiguration(root, ["--build"], {});
+  await composeConfiguration(root, [], {});
+  let env = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  assert.equal(env.SETDRAFT_IMAGE_MODE, "source");
+  for(const component of ["web", "sandbox", "maintenance"]) assert.equal(env[`SETDRAFT_${component.toUpperCase()}_IMAGE`], `setdraft/${component}:local`);
+  await composeConfiguration(root, ["--prebuilt"], {});
+  env = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  assert.equal(env.SETDRAFT_IMAGE_MODE, "prebuilt");
+  assert.equal(env.SETDRAFT_WEB_IMAGE, "ghcr.io/albert-li-sz/setdraft:latest");
+  const before = await readFile(join(root, ".env.compose"), "utf8");
+  for(const args of [["--build","--prebuilt"], ["--build","--build"]]) await assert.rejects(composeConfiguration(root,args,{}), /不能重复/u);
+  for(const overrides of [
+   {SETDRAFT_IMAGE_MODE:"unknown"}, {SETDRAFT_IMAGE_TAG:"bad/tag"},
+   {SETDRAFT_IMAGE_NAMESPACE:"https://ghcr.io/albert-li-sz"}, {SETDRAFT_IMAGE_NAMESPACE:"ghcr.io/Team"},
+  ]) await assert.rejects(composeConfiguration(root,[],overrides));
+  assert.equal(await readFile(join(root,".env.compose"),"utf8"),before);
+ } finally { await rm(root, { recursive: true, force: true }); }
+});

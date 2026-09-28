@@ -46,14 +46,12 @@ function activeServices() {
 function usage() {
 	console.log(`Setdraft · 题序 本地管理
 
-  ./install.sh [--mode production|dev] [--dry-run]
+  ./install.sh --native [--mode production|dev] [--dry-run]
                                           安装依赖、构建网页并启动；默认生产模式
-  ./upgrade.sh [--mode production|dev] [--dry-run]
+  ./upgrade.sh --native [--mode production|dev] [--dry-run]
                                           从 origin/main 快进升级；默认沿用上次模式
-  ./uninstall.sh [--purge-data] [--remove-deps] [--dry-run]
+  ./uninstall.sh --native [--purge-data] [--remove-deps] [--dry-run]
                                           停止服务并移除沙箱镜像
-  ./install.ps1 / ./upgrade.ps1 / ./uninstall.ps1
-                                          Windows PowerShell 等价入口
   部署参数（install / upgrade / start）：
     --host 0.0.0.0|127.0.0.1              生产模式监听地址；默认 0.0.0.0
     --public-origin <HTTP(S) URL>          自建反向代理后的浏览器访问来源

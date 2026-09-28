@@ -8,6 +8,12 @@ import { loadDeployment, saveDeployment, takeDeploymentOptions } from "./deploym
 export async function composeConfiguration(root, args, environment = process.env) {
 	const remaining = [...args];
 	const overrides = takeDeploymentOptions(remaining, "install");
+	for (let i = 0; i < remaining.length;) {
+		if (!["--build", "--prebuilt"].includes(remaining[i])) { i++; continue; }
+		if (overrides.SETDRAFT_IMAGE_MODE) throw new Error("--build / --prebuilt 不能重复或同时使用。");
+		overrides.SETDRAFT_IMAGE_MODE = remaining[i] === "--build" ? "source" : "prebuilt";
+		remaining.splice(i, 1);
+	}
 	if (remaining.length) throw new Error(`未知部署参数：${remaining.join(" ")}`);
 	const config = await loadDeployment(root, environment, overrides);
 	if (config.values.SETDRAFT_AI_CONFIG_PATH) throw new Error("Docker 部署请将旧 AI 配置复制到数据目录的 ai-config.json，并清空 SETDRAFT_AI_CONFIG_PATH；已初始化的团队配置保存在身份库中。");
@@ -18,8 +24,14 @@ export async function composeConfiguration(root, args, environment = process.env
 	config.values.SETDRAFT_PORT = port;
 	const previous=parseEnv(await readFile(join(root,".env.compose"),"utf8").catch(()=>""));
  const secret=key=>environment[key] || previous[key] || randomBytes(32).toString("hex");
- const values = {
+ const namespace = config.values.SETDRAFT_IMAGE_NAMESPACE || "ghcr.io/albert-li-sz";
+	const tag = config.values.SETDRAFT_IMAGE_TAG || "latest";
+	const image = (name, local) => config.values.SETDRAFT_IMAGE_MODE === "source" ? `setdraft/${local}:local` : `${namespace}/${name}:${tag}`;
+	const values = {
 		...config.values,
+		SETDRAFT_WEB_IMAGE: config.values.SETDRAFT_WEB_IMAGE || image("setdraft", "web"),
+		SETDRAFT_SANDBOX_IMAGE: config.values.SETDRAFT_SANDBOX_IMAGE || image("setdraft-sandbox", "sandbox"),
+		SETDRAFT_MAINTENANCE_IMAGE: config.values.SETDRAFT_MAINTENANCE_IMAGE || image("setdraft-maintenance", "maintenance"),
         SETDRAFT_DB_ADMIN_PASSWORD: secret("SETDRAFT_DB_ADMIN_PASSWORD"),
         SETDRAFT_DB_APP_PASSWORD: secret("SETDRAFT_DB_APP_PASSWORD"),
         SETDRAFT_SEARCH_SECRET: secret("SETDRAFT_SEARCH_SECRET"),
