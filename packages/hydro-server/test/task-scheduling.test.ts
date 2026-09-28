@@ -52,6 +52,31 @@ async function generated(projects: ManualProjectStore, id: string) {
 }
 
 describe("sandbox admission and durable dispatch", () => {
+	it("dispatches multiple projects for one user when configured", async () => {
+		const policy = { ...sandboxPolicy({}), concurrency: 3, concurrencyPerUser: 2 };
+		const scheduler = new ExecutionScheduler(3, policy);
+		const { projects, queue } = await fixture("alice", scheduler, policy);
+		const gates: Array<() => void> = [];
+		vi.spyOn(projects.pipeline, "generate").mockImplementation(async (id, context) => {
+			await new Promise<void>((done) => {
+				gates.push(done);
+				context?.signal.addEventListener("abort", () => done(), { once: true });
+			});
+			return generated(projects, id);
+		});
+		const ids = [];
+		for (let i = 0; i < 3; i++) ids.push((await queue.submit("generate", (await projects.create("acm")).id)).id);
+		try {
+			await vi.waitFor(() => expect(gates).toHaveLength(2), { timeout: 3000 });
+			expect(scheduler.status("alice").running).toBe(2);
+			expect((await queue.get(ids[2])).state).toBe("queued");
+			gates[0]();
+			await vi.waitFor(() => expect(gates).toHaveLength(3), { timeout: 3000 });
+		} finally {
+			queue.close();
+			for (const done of gates) done();
+		}
+	});
 	it("returns a granted slot when cancellation races with the account check", async () => {
 		const policy = sandboxPolicy({});
 		const scheduler = new ExecutionScheduler(1, policy);

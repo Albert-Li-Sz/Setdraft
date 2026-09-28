@@ -64,7 +64,7 @@ cd setdraft
 登录过期会锁定工作台并暂停保存、轮询和订阅；使用同一账号重新登录可恢复当前页面未保存的编辑。
 退出或换号会清理页面中的业务数据，多标签页同步退出。尚未保存的编辑只保留在当前页面内存中，刷新页面会丢失。
 退出不终止后台任务；禁用账号会撤销登录并取消未完成工作。默认全站最多 2 个沙箱任务、4 个 AI 请求，
-每个用户分别最多运行 1 个；服务重启会恢复排队任务，已中断的执行可在任务页重试。
+每个用户默认分别最多运行 1 个（沙箱可配置更高的个人并发）；服务重启会恢复排队任务，已中断的执行可在任务页重试。
 
 ```bash
 ./scripts/setdraft-compose.sh account setup-code               # 未初始化时重新生成安装码
@@ -183,16 +183,32 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 
 | `.env` 配置 | 默认值 | 允许范围 / 含义 |
 | --- | --- | --- |
-| `SETDRAFT_SANDBOX_CONCURRENCY` | `2` | 1–16，全站执行名额；每人仍最多 1 个 |
+| `SETDRAFT_SANDBOX_CONCURRENCY` | `2` | 1–64，全站执行名额 |
+| `SETDRAFT_SANDBOX_CONCURRENCY_PER_USER` | `1` | 1–64，每人同时执行名额，实际受全站并发限制 |
+| `SETDRAFT_SANDBOX_CPUS` | `1` | 1–64，每个容器的 CPU 配额 |
+| `SETDRAFT_SANDBOX_MEMORY_MB` | `2048` | 512–131072，每个容器的内存上限（MiB），不另加 swap |
 | `SETDRAFT_SANDBOX_MAX_OUTSTANDING` | `64` | 1–1024，全站未完成任务上限 |
 | `SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER` | `8` | 1–128，每人未完成任务上限 |
 | `SETDRAFT_SANDBOX_QUEUE_TIMEOUT_MS` | `1800000` | 最长排队时间，毫秒 |
 | `SETDRAFT_SANDBOX_RUN_TIMEOUT_MS` | `900000` | 普通任务最长运行时间，毫秒 |
 | `SETDRAFT_SANDBOX_BUILD_TIMEOUT_MS` | `1800000` | 镜像构建最长运行时间，毫秒 |
 
-时间上限允许 1–86400000 毫秒；从入队或开始执行时分别计时。每个沙箱容器限制为 1 CPU / 2 GiB，
-设置并发数时需要额外为 Web、PostgreSQL、搜索及系统保留资源；小内存部署可先设为 `1`。
-修改 `.env` 后按安装章节重新生成 Compose 配置并重启 Web。AI 请求使用独立的 4 并发队列，不占沙箱名额。
+时间上限允许 1–86400000 毫秒；从入队或开始执行时分别计时。容器默认 1 CPU / 2 GiB，
+仍禁网、只读根文件系统、无 capabilities、禁止提权。Linux 原生部署使用服务进程的非 root UID/GID；服务为 root 时容器仍使用 nobody，避免嵌套输出目录的属主导致清理失败。
+
+高配部署可以在 `.env` 中提高并发，例如 16 核 / 32 GiB 机器可从以下设置开始压测：
+
+```dotenv
+SETDRAFT_SANDBOX_CONCURRENCY=8
+SETDRAFT_SANDBOX_CONCURRENCY_PER_USER=4
+SETDRAFT_SANDBOX_CPUS=1
+SETDRAFT_SANDBOX_MEMORY_MB=2048
+SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER=16
+```
+
+并发 × 单容器 CPU/内存配额应为 Web、PostgreSQL、搜索及系统留下余量；提高并发主要提升多个题目的吞吐，不会让单线程标程自动并行。
+提高 CPU 配额可能改变多线程程序的用时，调参后应重新验证题目；容器内的题目时间/内存限制仍生效。
+小内存部署可将全站并发设为 `1`。修改 `.env` 后按安装章节重新生成 Compose 配置并重启 Web，当前运行服务不会自动读取这些改动。
 
 ## AI 对话
 
@@ -200,6 +216,12 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 每套配置可保存模型名、API Key、Base URL、上下文长度和最大输出长度。对话支持 SSE
 流式 Markdown、GFM、LaTeX、图片粘贴和上传；等待时显示动画，支持减少动态效果偏好；代码块可单独复制，保留缩进与换行。Enter 发送，Shift+Enter 换行。聊天记录
 保存在服务器个人工作区。图片通过 multipart 上传；模型请求和 SSE 订阅分离，断线可续接且不会重复发送。
+
+消息、上下文、模型输入预算及图片数量/大小/编码/格式在入队和写入图片前验证。AI 使用独立的有界队列，不占沙箱名额：
+`SETDRAFT_AI_CONCURRENCY=4`（1–64），每人同时执行 1 个；`SETDRAFT_AI_MAX_OUTSTANDING=64`（1–1024）、
+`SETDRAFT_AI_MAX_OUTSTANDING_PER_USER=8`（1–128），超限返回 429，配置测试也计入限额。
+`SETDRAFT_AI_QUEUE_TIMEOUT_MS=1800000`、`SETDRAFT_AI_RUN_TIMEOUT_MS=900000` 分别限制排队及总执行时间（均为 1–86400000 毫秒）；连续 45 秒无内容仍会中止。
+每个账号保留最近 7 天、最多 200 条已结束请求的事件回放和失败重试数据，在恢复及请求结束时清理；过期请求不可续接/重试，需重新发送。聊天记录及聊天图片不受这项临时请求清理影响。
 
 联网搜索默认开启，随对话保存开关。可填写独立搜索关键词；留空时只使用本条消息前 500 字，不发送题目快照、历史对话或附件。输入涉及私密内容时可关闭联网或指定公开关键词。默认使用 Compose 内置的 SearXNG，无需搜索 API Key；管理员也可选择 Tavily、配置密钥、测试连接和设置每日额度。搜索失败会明确提示，模型仍可继续回答；答案附可展开的真实来源列表。SearXNG 依赖上游引擎，服务器网络受限时可自行配置搜索出站代理或使用可达的 Tavily 服务。
 

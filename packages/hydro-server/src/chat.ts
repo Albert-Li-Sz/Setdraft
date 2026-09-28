@@ -321,6 +321,33 @@ export class ChatService {
 		};
 	}
 
+	/** Validate before durable queue admission as well as immediately before execution. */
+	validateInput(
+		chat: ChatConversation,
+		message: string,
+		contextSnapshot?: string,
+		profileId?: string,
+		images: ChatImageUpload[] = [],
+		searchQuery?: string,
+	) {
+		if (this.catalog.profiles.length === 0) throw new ChatError("请先在设置中配置 AI API。", 503);
+		if ((!message.trim() && images.length === 0) || message.length > 40_000)
+			throw new ChatError("请填写消息或添加图片；文字最多 40000 个字符。");
+		if (contextSnapshot && contextSnapshot.length > 80_000) throw new ChatError("附带的题目上下文过长。");
+		if (searchQuery && searchQuery.length > 500) throw new ChatError("搜索词最多 500 个字符。", 422);
+		const selectedProfileId = profileId ?? chat.profileId ?? this.catalog.defaultProfileId;
+		const configuration = this.catalog.profiles.find((item) => item.id === selectedProfileId);
+		if (!configuration) throw new ChatError("当前对话使用的 AI 配置不存在，请重新选择。", 422);
+		const decodedImages = decodeImages(images);
+		const maxInputCharacters = Math.max(1000, (configuration.contextWindow - configuration.maxTokens) * 3);
+		if (
+			message.trim().length + (contextSnapshot?.length ?? 0) + images.length * imageContextCharacters >
+			maxInputCharacters
+		)
+			throw new ChatError("本次文字、图片和题目快照超过模型输入预算，请缩短内容或调大上下文长度。", 422);
+		return { configuration, decodedImages, maxInputCharacters };
+	}
+
 	async send(
 		id: string,
 		message: string,
@@ -333,32 +360,24 @@ export class ChatService {
 		webSearch = false,
 		searchQuery?: string,
 	): Promise<ChatConversation> {
-		if (this.catalog.profiles.length === 0) throw new ChatError("请先在设置中配置 AI API。", 503);
 		if (this.busy.has(id)) throw new ChatError("上一条消息仍在生成。", 409);
-		if ((!message.trim() && images.length === 0) || message.length > 40_000) {
-			throw new ChatError("请填写消息或添加图片；文字最多 40000 个字符。");
-		}
-		if (contextSnapshot && contextSnapshot.length > 80_000) throw new ChatError("附带的题目上下文过长。");
 		if (requestId && !/^[a-f0-9-]{36}$/u.test(requestId)) throw new ChatError("请求 ID 无效。", 422);
-		const decodedImages = decodeImages(images);
 		this.busy.add(id);
 		try {
 			const chat = await this.get(id);
-			const selectedProfileId = profileId ?? chat.profileId ?? this.catalog.defaultProfileId;
-			const configuration = this.catalog.profiles.find((item) => item.id === selectedProfileId);
-			if (!configuration) throw new ChatError("当前对话使用的 AI 配置不存在，请重新选择。", 422);
 			if (requestId && chat.messages.some((item) => item.role === "assistant" && item.requestId === requestId))
 				return chat;
+			const { configuration, decodedImages, maxInputCharacters } = this.validateInput(
+				chat,
+				message,
+				contextSnapshot,
+				profileId,
+				images,
+				searchQuery,
+			);
 			const previousUser = requestId
 				? chat.messages.find((item) => item.role === "user" && item.requestId === requestId)
 				: undefined;
-			const maxInputCharacters = Math.max(1000, (configuration.contextWindow - configuration.maxTokens) * 3);
-			if (
-				message.trim().length + (contextSnapshot?.length ?? 0) + images.length * imageContextCharacters >
-				maxInputCharacters
-			) {
-				throw new ChatError("本次文字、图片和题目快照超过模型输入预算，请缩短内容或调大上下文长度。", 422);
-			}
 			const now = new Date().toISOString();
 			const user: ChatMessage = {
 				id: requestId ?? randomUUID(),

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { AuthHttp } from "./auth-http.ts";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
 import { streamEvents } from "./event-stream.ts";
+import { QueueAdmissionError } from "./execution-scheduler.ts";
 import { AuthError, type IdentityStore } from "./identity.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
 import { copyProject, restoreProject } from "./project-history.ts";
@@ -776,7 +777,11 @@ export async function createHydroServer(
 				sendJson(response, error.statusCode, { error: error.code, message: error.message });
 				return;
 			}
-			if (error instanceof ManualProjectError || error instanceof ChatError) {
+			if (
+				error instanceof ManualProjectError ||
+				error instanceof ChatError ||
+				error instanceof QueueAdmissionError
+			) {
 				sendJson(response, error.statusCode, {
 					error: error.name,
 					message: error.message,

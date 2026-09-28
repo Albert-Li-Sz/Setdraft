@@ -3,6 +3,24 @@ import { ExecutionScheduler } from "../src/execution-scheduler.ts";
 import { sandboxPolicy } from "../src/sandbox-policy.ts";
 
 describe("installation execution limits", () => {
+	it("allows configured per-user parallelism without exceeding either limit", async () => {
+		const policy = { ...sandboxPolicy({}), concurrencyPerUser: 2 };
+		const scheduler = new ExecutionScheduler(3, policy);
+		const signal = new AbortController().signal;
+		const first = await scheduler.acquire("alice", "a1", signal);
+		let secondStarted = false;
+		const second = scheduler.acquire("alice", "a2", signal).then((release) => {
+			secondStarted = true;
+			return release;
+		});
+		await Promise.resolve();
+		try {
+			expect(secondStarted).toBe(true);
+		} finally {
+			first();
+			(await second)();
+		}
+	});
 	it("rotates users instead of draining the oldest user's backlog", async () => {
 		const scheduler = new ExecutionScheduler(1);
 		const signal = new AbortController().signal;
@@ -74,7 +92,7 @@ describe("installation execution limits", () => {
 	it("validates bounded deployment settings", () => {
 		expect(sandboxPolicy({})).toMatchObject({ concurrency: 2, maxOutstanding: 64, maxOutstandingPerUser: 8 });
 		expect(sandboxPolicy({ SETDRAFT_SANDBOX_CONCURRENCY: "1" }).concurrency).toBe(1);
-		for (const value of ["0", "-1", "2.5", "abc", "17"])
+		for (const value of ["0", "-1", "2.5", "abc", "65"])
 			expect(() => sandboxPolicy({ SETDRAFT_SANDBOX_CONCURRENCY: value })).toThrow("SETDRAFT_SANDBOX_CONCURRENCY");
 		expect(() => sandboxPolicy({ SETDRAFT_SANDBOX_RUN_TIMEOUT_MS: "86400001" })).toThrow(
 			"SETDRAFT_SANDBOX_RUN_TIMEOUT_MS",

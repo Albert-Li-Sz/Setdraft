@@ -3,6 +3,7 @@ import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CppLanguage, ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 export interface SandboxCase {
 	id: string;
@@ -390,25 +391,7 @@ export async function runManualSandbox(input: SandboxInput): Promise<ManualSandb
 			"run",
 			"--rm",
 			...(context ? ["--name", `setdraft-task-${context.id}`] : []),
-			"--network",
-			"none",
-			"--cpus",
-			"1",
-			"--memory",
-			"2g",
-			"--memory-swap",
-			"2g",
-			"--pids-limit",
-			"128",
-			"--read-only",
-			"--cap-drop",
-			"ALL",
-			"--security-opt",
-			"no-new-privileges",
-			"--user",
-			"65534:65534",
-			"--tmpfs",
-			"/tmp:rw,exec,size=128m,mode=1777",
+			...sandboxRuntimeArgs(),
 			"--mount",
 			`type=bind,source=${input.stage},target=/work`,
 			"--workdir",

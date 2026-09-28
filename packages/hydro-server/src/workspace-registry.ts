@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { AuthUser, SearchSnapshot } from "@setdraft/contracts";
 import { AiConfigurationStore } from "./ai-configuration.ts";
 import type { ChatService } from "./chat.ts";
+import { chatPolicy } from "./chat-policy.ts";
 import { ChatRequestQueue } from "./chat-requests.ts";
 import { ContestStore } from "./contests.ts";
 import { ExecutionScheduler } from "./execution-scheduler.ts";
@@ -30,7 +31,8 @@ export class WorkspaceRegistry {
 	private readonly workspaces = new Map<string, UserWorkspace>();
 	private readonly policy = sandboxPolicy();
 	private readonly sandbox = new ExecutionScheduler(this.policy.concurrency, this.policy);
-	private readonly ai = new ExecutionScheduler(4);
+	private readonly aiPolicy = chatPolicy();
+	private readonly ai = new ExecutionScheduler(this.aiPolicy.concurrency, this.aiPolicy);
 	private readonly probes = new Map<AbortController, { userId: string; done: Promise<unknown> }>();
 	constructor(identity: IdentityStore, projects: ManualProjectStore, chat: ChatService) {
 		this.identity = identity;
@@ -91,7 +93,12 @@ export class WorkspaceRegistry {
 				enabled,
 				policy: this.policy,
 			}),
-			chatRequests: new ChatRequestQueue(database, chat, { scheduler: this.ai, userId: user.id, enabled }),
+			chatRequests: new ChatRequestQueue(database, chat, {
+				scheduler: this.ai,
+				userId: user.id,
+				enabled,
+				policy: this.aiPolicy,
+			}),
 		};
 		this.workspaces.set(user.id, workspace);
 		await Promise.all([workspace.tasks.ready, workspace.chatRequests.ready]);
@@ -113,14 +120,21 @@ export class WorkspaceRegistry {
 	}
 	private async probe<T>(user: AuthUser, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
 		const controller = new AbortController();
+		const id = randomUUID();
+		const unreserve = this.ai.reserve(user.id, id);
+		const deadline = setTimeout(() => controller.abort(), this.aiPolicy.queueTimeoutMs + this.aiPolicy.runTimeoutMs);
+		deadline.unref();
 		const done = (async () => {
-			const release = await this.ai.acquire(user.id, randomUUID(), controller.signal);
+			let release: (() => void) | undefined;
 			try {
+				release = await this.ai.acquire(user.id, id, controller.signal);
 				controller.signal.throwIfAborted();
 				await this.identity.requireAdmin(user.id);
 				return await run(controller.signal);
 			} finally {
-				release();
+				release?.();
+				unreserve();
+				clearTimeout(deadline);
 			}
 		})();
 		this.probes.set(controller, { userId: user.id, done });

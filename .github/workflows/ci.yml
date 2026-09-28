@@ -10,68 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  build-check-test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [22, 24]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Build
-        run: npm run build
-
-      - name: Check
-        run: npm run check
-
-      - name: Test
-        run: npm test
-
-      - name: Production page smoke test
-        run: |
-          SETDRAFT_WEB_ROOT="$PWD/packages/hydro-web/dist" SETDRAFT_WORKSPACE_ROOT="$RUNNER_TEMP/hydro-smoke" node packages/hydro-server/dist/cli.js > "$RUNNER_TEMP/hydro-smoke.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:4321/ > "$RUNNER_TEMP/index.html"; then break; fi
-            sleep 1
-          done
-          grep -q '<div id="root"' "$RUNNER_TEMP/index.html"
-          curl --fail --silent http://127.0.0.1:4321/api/health | grep -q '"status":"ok"'
-
-  sandbox-integration:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Build runtime dependencies
-        run: npm run build:hydro
-      - name: Build sandbox image
-        run: docker build -t setdraft/sandbox:local packages/hydro-server/sandbox
-      - name: Sandbox integration tests
-        run: npm run test --workspace=@setdraft/server
+  verify:
+    uses: ./.github/workflows/verify.yml

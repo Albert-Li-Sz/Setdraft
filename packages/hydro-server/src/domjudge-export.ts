@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
+import { cleanupSandboxStage, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 interface SourceManifest {
 	cases: Array<{ inputFile: string; outputFile: string }>;
@@ -133,24 +134,7 @@ async function verifyOutputValidator(
 		[
 			"run",
 			"--rm",
-			"--network",
-			"none",
-			"--cpus",
-			"1",
-			"--memory",
-			"2g",
-			"--memory-swap",
-			"2g",
-			"--pids-limit",
-			"128",
-			"--cap-drop",
-			"ALL",
-			"--security-opt",
-			"no-new-privileges",
-			"--user",
-			"65534:65534",
-			"--tmpfs",
-			"/tmp:rw,exec,size=128m,mode=1777",
+			...sandboxRuntimeArgs(),
 			"--mount",
 			`type=bind,source=${directory},target=/work`,
 			"--workdir",
@@ -275,6 +259,6 @@ export async function writeDomjudgeProblemArchive(
 		}
 		return target;
 	} finally {
-		await rm(stage, { recursive: true, force: true });
+		await cleanupSandboxStage(stage);
 	}
 }

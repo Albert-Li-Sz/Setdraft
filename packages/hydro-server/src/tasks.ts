@@ -55,13 +55,21 @@ export class TaskQueue {
 	}
 	readonly ready: Promise<void>;
 	private pumping = false;
+	private repump = false;
 	private wake(): void {
 		void this.ready
 			.then(async () => {
-				if (this.pumping || this.closed) return;
+				if (this.closed) return;
+				if (this.pumping) {
+					this.repump = true;
+					return;
+				}
 				this.pumping = true;
 				try {
-					await this.pump();
+					do {
+						this.repump = false;
+						await this.pump();
+					} while (this.repump && !this.closed);
 				} finally {
 					this.pumping = false;
 				}
@@ -206,7 +214,7 @@ export class TaskQueue {
 				concurrency: this.policy.concurrency,
 				reason: this.slots.has(id)
 					? "dispatch"
-					: position > 1 || status?.userRunning
+					: position > this.policy.concurrencyPerUser || status?.userAtCapacity
 						? "user"
 						: status?.maintenance
 							? "maintenance"
@@ -348,15 +356,23 @@ export class TaskQueue {
 			[process.pid],
 		)) as Array<{ id: string }>;
 		for (const item of cancelling) this.controllers.get(item.id)?.abort();
-		const localLimit = this.scheduling ? 1 : this.policy.concurrency;
+		const localLimit = this.scheduling
+			? Math.min(this.policy.concurrency, this.policy.concurrencyPerUser)
+			: this.policy.concurrency;
 		if (this.controllers.size >= localLimit) return;
-		const queued = (await this.database.sql.one(
-			"SELECT id FROM tasks WHERE state='queued' ORDER BY created_at,id LIMIT 1",
-			[],
-		)) as { id: string } | undefined;
-		if (!queued || this.controllers.has(queued.id)) return;
+		const queued = await this.database.sql.all<{ id: string }>(
+			"SELECT id FROM tasks WHERE state='queued' ORDER BY created_at,id LIMIT $1",
+			[localLimit],
+		);
+		for (const task of queued) await this.dispatch(task, localLimit);
+	}
+
+	private async dispatch(queued: { id: string }, localLimit: number): Promise<void> {
+		if (this.controllers.has(queued.id) || this.controllers.size >= localLimit) return;
 		if (this.scheduling && !this.slots.has(queued.id)) {
 			if (!this.waiting.has(queued.id)) {
+				const dispatched = new Set([...this.controllers.keys(), ...this.waiting.keys(), ...this.slots.keys()]);
+				if (dispatched.size >= localLimit) return;
 				const pending = await this.get(queued.id);
 				if (this.closed || pending.state !== "queued") return;
 				const controller = new AbortController();

@@ -19,15 +19,22 @@ export class QueueAdmissionError extends Error {
 /** One process-wide queue; an execution slot is acquired before marking durable work running. */
 export class ExecutionScheduler {
 	private readonly limit: number;
+	private readonly perUserLimit: number;
 	private readonly active = new Map<string, { userId: string; exclusive: boolean }>();
 	private readonly waiting: Ticket[] = [];
 	private readonly turns = new Map<string, number>();
 	private turn = 0;
 	private readonly reservations = new Map<string, { userId: string; exclusive: boolean }>();
 	private readonly capacity?: { maxOutstanding: number; maxOutstandingPerUser: number };
-	constructor(limit: number, capacity?: { maxOutstanding: number; maxOutstandingPerUser: number }) {
+	constructor(
+		limit: number,
+		capacity?: { maxOutstanding: number; maxOutstandingPerUser: number; concurrencyPerUser?: number },
+	) {
 		if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Execution concurrency must be positive.");
 		this.limit = limit;
+		this.perUserLimit = capacity?.concurrencyPerUser ?? 1;
+		if (!Number.isSafeInteger(this.perUserLimit) || this.perUserLimit < 1)
+			throw new Error("Per-user execution concurrency must be positive.");
 		this.capacity = capacity;
 	}
 	/** Reserve admission before the durable insert; recovered work may exceed newly lowered limits. */
@@ -60,6 +67,7 @@ export class ExecutionScheduler {
 			running: this.active.size,
 			outstanding: this.reservations.size,
 			userRunning: [...this.active.values()].some((item) => item.userId === userId),
+			userAtCapacity: [...this.active.values()].filter((item) => item.userId === userId).length >= this.perUserLimit,
 			maintenance: [...this.active.values(), ...this.waiting].some((item) => item.exclusive),
 		};
 	}
@@ -103,7 +111,7 @@ export class ExecutionScheduler {
 			let ticket: Ticket | undefined;
 			for (const candidate of candidates) {
 				if (candidate.exclusive && active.length) continue;
-				if (active.some((item) => item.userId === candidate.userId)) continue;
+				if (active.filter((item) => item.userId === candidate.userId).length >= this.perUserLimit) continue;
 				if (!ticket || (this.turns.get(candidate.userId) ?? 0) < (this.turns.get(ticket.userId) ?? 0))
 					ticket = candidate;
 			}

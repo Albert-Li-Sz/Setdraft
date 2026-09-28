@@ -28,6 +28,8 @@ import type { ManualProjectStore } from "./manual-projects.ts";
 import { runManualSandbox, type SandboxCase } from "./manual-sandbox.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, fileEntries, hashFile, parseGeneratorScript } from "./project-files.ts";
+import { sandboxPolicy } from "./sandbox-policy.ts";
+import { cleanupSandboxStage } from "./sandbox-runtime.ts";
 
 /** Owns the generation/verification workflow; draft mutations remain in the repository. */
 export class ProjectPipeline {
@@ -133,7 +135,7 @@ export class ProjectPipeline {
 			return { project: await this.projects.snapshot(id), report };
 		} finally {
 			unlock();
-			if (stage) await rm(stage, { recursive: true, force: true });
+			if (stage) await cleanupSandboxStage(stage);
 		}
 	}
 
@@ -426,7 +428,14 @@ export class ProjectPipeline {
 					await promisify(execFile)("docker", ["image", "inspect", "--format", "{{.Id}}", this.projects.image])
 				).stdout.trim(),
 				toolchain: report.toolchain,
-				environment: { locale: "C.UTF-8", timezone: "UTC", network: "none", cpus: 1, memory: "2g", readOnly: true },
+				environment: {
+					locale: "C.UTF-8",
+					timezone: "UTC",
+					network: "none",
+					cpus: sandboxPolicy().cpus,
+					memory: `${sandboxPolicy().memoryMb}m`,
+					readOnly: true,
+				},
 				languages: {
 					reference: project.reference.language,
 					oracle: project.oracle?.language,
@@ -484,7 +493,7 @@ export class ProjectPipeline {
 			return { release, report };
 		} finally {
 			unlock();
-			if (stage) await rm(stage, { recursive: true, force: true });
+			if (stage) await cleanupSandboxStage(stage);
 			if (releaseDirectory) {
 				if (releaseId) {
 					await this.projects.database.delete("release", releaseId);

@@ -63,12 +63,17 @@ test("sandbox scheduling options survive Compose generation and environment load
   const limits = {
    SETDRAFT_SANDBOX_CONCURRENCY: "1", SETDRAFT_SANDBOX_MAX_OUTSTANDING: "12", SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER: "3",
    SETDRAFT_SANDBOX_QUEUE_TIMEOUT_MS: "60000", SETDRAFT_SANDBOX_RUN_TIMEOUT_MS: "120000", SETDRAFT_SANDBOX_BUILD_TIMEOUT_MS: "180000",
+   SETDRAFT_SANDBOX_CONCURRENCY_PER_USER: "4", SETDRAFT_SANDBOX_CPUS: "2", SETDRAFT_SANDBOX_MEMORY_MB: "4096",
+   SETDRAFT_AI_CONCURRENCY: "8", SETDRAFT_AI_MAX_OUTSTANDING: "32", SETDRAFT_AI_MAX_OUTSTANDING_PER_USER: "4",
+   SETDRAFT_AI_QUEUE_TIMEOUT_MS: "60000", SETDRAFT_AI_RUN_TIMEOUT_MS: "300000",
   };
   await composeConfiguration(root, [], limits);
   const compose = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
   const native = deploymentEnvironment(await loadDeployment(root, {}), {});
   for (const [key,value] of Object.entries(limits)) { assert.equal(compose[key], value); assert.equal(native[key], value); }
   await assert.rejects(loadDeployment(root, {SETDRAFT_SANDBOX_CONCURRENCY: "0"}), /正整数/u);
+  for (const invalid of [{SETDRAFT_SANDBOX_CONCURRENCY: "65"}, {SETDRAFT_SANDBOX_CPUS: "1.5"}, {SETDRAFT_AI_MAX_OUTSTANDING: "0"}, {SETDRAFT_AI_RUN_TIMEOUT_MS: "86400001"}])
+   await assert.rejects(loadDeployment(root, invalid), /需要/u);
  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
