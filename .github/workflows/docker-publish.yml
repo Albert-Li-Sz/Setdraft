@@ -3,7 +3,7 @@ name: Publish Docker images
 on:
   push:
     branches: [main]
-  tags: ['v[0-9]*', 'Rev[0-9]*']
+    tags: ['v[0-9]*', 'Rev[0-9]*']
   workflow_dispatch:
 
 permissions:
