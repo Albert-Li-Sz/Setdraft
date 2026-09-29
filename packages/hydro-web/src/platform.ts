@@ -2,7 +2,15 @@ import type { AiConfiguration, CppLanguage } from "@setdraft/contracts";
 
 export * from "@setdraft/contracts";
 export { apiUrl, requestJson, responseError, waitForTask } from "./api-client.ts";
-export type PageRoute = "workspace" | "chat" | "records" | "contests" | "tasks" | "settings" | "admin";
+export type PageRoute =
+	| "workspace"
+	| "chat"
+	| "records"
+	| "contests"
+	| "tasks"
+	| "settings"
+	| "admin"
+	| "authoring-guide";
 export type ApiStatus = "checking" | "online" | "offline";
 
 export const cppLanguageOptions: ReadonlyArray<{ value: CppLanguage; label: string }> = [
@@ -21,6 +29,7 @@ export function pageFromHash(hash: string): PageRoute {
 	if (hash === "#tasks") return "tasks";
 	if (hash === "#admin") return "admin";
 	if (hash === "#settings") return "settings";
+	if (hash === "#authoring-guide") return "authoring-guide";
 	return "workspace";
 }
 

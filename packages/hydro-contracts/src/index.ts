@@ -1,4 +1,8 @@
+export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-templates.ts";
+
 export type CheckerMode = "text" | "custom";
+export type JudgingMode = "default" | "interactive";
+export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
 export const cppLanguages = ["cpp11", "cpp14", "cpp17", "cpp20", "cpp23", "cpp26"] as const;
 export type CppLanguage = (typeof cppLanguages)[number];
@@ -28,6 +32,7 @@ export interface ManualSandboxReport {
 	oracleCount: number;
 	validatorUsed: boolean;
 	checkerUsed: boolean;
+	interactorUsed?: boolean;
 	toolchain?: { cpp: string; python: string; java: string };
 }
 
@@ -37,9 +42,21 @@ export interface ManualSubtask {
 	score: number;
 }
 
+export interface StatementSections {
+	description: string;
+	input: string;
+	output: string;
+	interaction: string;
+	notes: string;
+}
+
 export interface ManualProject {
 	id: string;
 	scoringMode: "acm" | "oi";
+	judgingMode?: JudgingMode;
+	interactionInputMode?: InteractionInputMode;
+	interactorSource?: string;
+	interactorStandard?: CppLanguage;
 	revision: number;
 	createdAt: string;
 	updatedAt: string;
@@ -47,6 +64,7 @@ export interface ManualProject {
 	title: string;
 	tags: string[];
 	statement: string;
+	statementSections?: StatementSections;
 	samples: Array<{ input: string; output: string }>;
 	timeLimit: string;
 	memoryLimit: string;
@@ -112,6 +130,8 @@ export interface ManualRelease {
 	name?: string;
 	id: string;
 	scoringMode: "acm" | "oi";
+	judgingMode?: JudgingMode;
+	interactionInputMode?: InteractionInputMode;
 	projectId: string;
 	revision: number;
 	projectHash: string;
@@ -126,6 +146,34 @@ export interface ManualRelease {
 
 export type ContestFormat = "hydro" | "domjudge";
 
+export interface ContestPdfOptions {
+	enabled: boolean;
+	subtitle: string;
+	author: string;
+	date: string;
+	coverNotes: string;
+	titlePage: boolean;
+	problemList: boolean;
+	headerFooter: boolean;
+	language: "zh" | "en";
+	titlePageLanguage: "auto" | "zh" | "en";
+	problemLanguage: "auto" | "zh" | "en";
+}
+
+export const defaultContestPdfOptions: Readonly<ContestPdfOptions> = {
+	enabled: false,
+	subtitle: "试题册",
+	author: "",
+	date: "",
+	coverNotes: "",
+	titlePage: true,
+	problemList: true,
+	headerFooter: true,
+	language: "zh",
+	titlePageLanguage: "auto",
+	problemLanguage: "auto",
+};
+
 export interface ContestDraft {
 	id: string;
 	revision: number;
@@ -134,6 +182,7 @@ export interface ContestDraft {
 	releaseIds: string[];
 	colors: Record<string, string>;
 	colorNames: Record<string, string>;
+	pdf?: ContestPdfOptions;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -145,6 +194,7 @@ export interface ContestRelease {
 	title: string;
 	slug: string;
 	format: ContestFormat;
+	pdf?: ContestPdfOptions;
 	problems: Array<{
 		label: string;
 		releaseId: string;
@@ -327,8 +377,9 @@ export function isContestReadyRelease(release: ManualRelease): boolean {
 	return (
 		release.report.success &&
 		release.report.mode === "finalize" &&
-		release.report.checkerUsed &&
-		(release.checkerMode === "text" || release.checkerMode === "custom") &&
+		(release.judgingMode === "interactive"
+			? release.report.interactorUsed === true
+			: release.report.checkerUsed && (release.checkerMode === "text" || release.checkerMode === "custom")) &&
 		(release.scoringMode === "acm" || release.scoringMode === "oi")
 	);
 }
@@ -353,6 +404,7 @@ function report(value: unknown): boolean {
 		typeof value.success === "boolean" &&
 		typeof value.validatorUsed === "boolean" &&
 		typeof value.checkerUsed === "boolean" &&
+		(value.interactorUsed === undefined || typeof value.interactorUsed === "boolean") &&
 		["caseCount", "generatedCount", "oracleCount"].every((key) => Number.isSafeInteger(value[key])) &&
 		Array.isArray(value.checks) &&
 		value.checks.every(
@@ -398,6 +450,25 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 	)
 		return false;
 	if (value.checkerMode !== undefined && value.checkerMode !== "text" && value.checkerMode !== "custom") return false;
+	if (value.judgingMode !== undefined && value.judgingMode !== "default" && value.judgingMode !== "interactive")
+		return false;
+	if (
+		value.interactionInputMode !== undefined &&
+		value.interactionInputMode !== "provided" &&
+		value.interactionInputMode !== "empty"
+	)
+		return false;
+	if (value.interactorSource !== undefined && typeof value.interactorSource !== "string") return false;
+	if (
+		value.statementSections !== undefined &&
+		(!object(value.statementSections) ||
+			!["description", "input", "output", "interaction", "notes"].every(
+				(key) => typeof (value.statementSections as Record<string, unknown>)[key] === "string",
+			))
+	)
+		return false;
+	if (value.interactorStandard !== undefined && !cppLanguages.includes(value.interactorStandard as CppLanguage))
+		return false;
 	if (
 		!program(value.reference) ||
 		(value.oracle !== undefined && !program(value.oracle)) ||

@@ -10,6 +10,7 @@ export const pageLabels: Record<PageRoute, string> = {
 	tasks: "任务",
 	settings: "个人设置",
 	admin: "管理员设置",
+	"authoring-guide": "出题文档",
 };
 const navigation = [
 	{ page: "workspace", icon: "grid" },

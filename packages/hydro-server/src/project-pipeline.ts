@@ -72,6 +72,10 @@ export class ProjectPipeline {
 
 		try {
 			const project = await this.projects.load(id);
+			if (project.judgingMode === "interactive" && project.interactionInputMode === "empty")
+				throw new ManualProjectError("无输入交互题自动使用一个空测试点，无需生成数据。", 422);
+			if (project.judgingMode === "interactive" && !project.interactorSource?.trim())
+				throw new ManualProjectError("请先添加 C++ testlib 交互器。", 422);
 			if (!project.reference.code.trim()) throw new ManualProjectError("请先添加标准程序。", 422);
 			if (!project.generatorSource.trim()) throw new ManualProjectError("请上传或填写 Gen 源码。", 422);
 			const commands = parseGeneratorScript(project.generatorScript);
@@ -92,6 +96,10 @@ export class ProjectPipeline {
 				stage,
 				image: this.projects.image,
 				reference: project.reference,
+				interactor:
+					project.judgingMode === "interactive"
+						? { language: project.interactorStandard ?? "cpp17", code: project.interactorSource ?? "" }
+						: undefined,
 				oracle: project.oracle,
 				generator: project.generatorSource,
 				generatorStandard: project.generatorStandard,
@@ -144,9 +152,14 @@ export class ProjectPipeline {
 			JSON.stringify({
 				slug: project.slug,
 				scoringMode: project.scoringMode,
+				judgingMode: project.judgingMode ?? "default",
+				interactionInputMode: project.interactionInputMode ?? "provided",
+				interactorSource: project.interactorSource ?? "",
+				interactorStandard: project.interactorStandard ?? "cpp17",
 				title: project.title,
 				tags: project.tags,
 				statement: project.statement,
+				statementSections: project.statementSections,
 				samples: project.samples,
 				timeLimit: project.timeLimit,
 				memoryLimit: project.memoryLimit,
@@ -198,14 +211,25 @@ export class ProjectPipeline {
 					project.generatorScript,
 					project.reference,
 					inputs,
+					...(project.judgingMode === "interactive"
+						? [project.judgingMode, project.interactorSource, project.interactorStandard]
+						: []),
 				]),
 			)
 			.digest("hex");
 	}
 
 	private spec(project: ManualProject, cases: ManualCaseSummary[]): HydroProblemSpec {
+		const interactive = project.judgingMode === "interactive";
+		const emptyInput = interactive && project.interactionInputMode === "empty";
 		return {
-			type: "default",
+			type: interactive ? "interactive" : "default",
+			...(interactive
+				? {
+						interactor: project.interactorSource,
+						interactorLanguage: `cc.cc${(project.interactorStandard ?? "cpp17").slice(3)}`,
+					}
+				: {}),
 			slug: project.slug,
 			title: project.title,
 			tags: project.tags,
@@ -213,12 +237,14 @@ export class ProjectPipeline {
 			statement: formatHydroStatement(project),
 			timeLimit: project.timeLimit,
 			memoryLimit: project.memoryLimit,
-			checker: { type: "testlib", source: effectiveChecker(project.checkerMode, project.checkerSource) ?? "" },
+			checker: interactive
+				? undefined
+				: { type: "testlib", source: effectiveChecker(project.checkerMode, project.checkerSource) ?? "" },
 			attachments: project.attachments.map((item) => ({
 				name: item.name,
 				content: Buffer.from(item.contentBase64, "base64"),
 			})),
-			subtasks: project.subtasks.map((subtask) => ({
+			subtasks: (emptyInput ? [{ id: 1, type: "min" as const, score: 100 }] : project.subtasks).map((subtask) => ({
 				...subtask,
 				cases: cases
 					.filter((item) => item.subtaskId === subtask.id)
@@ -243,11 +269,16 @@ export class ProjectPipeline {
 		let releaseId: string | undefined;
 		try {
 			const project = await this.projects.load(id);
+			const interactive = project.judgingMode === "interactive";
+			const emptyInput = interactive && project.interactionInputMode === "empty";
 			if (!project.reference.code.trim()) throw new ManualProjectError("标准程序是打包前的必填项。", 422);
-			if (!effectiveChecker(project.checkerMode, project.checkerSource)) {
+			if (interactive && !project.interactorSource?.trim())
+				throw new ManualProjectError("请提供 C++ testlib 交互器源码。", 422);
+			if (!interactive && !effectiveChecker(project.checkerMode, project.checkerSource)) {
 				throw new ManualProjectError("请选择文本比对 Checker，或提供 C++ testlib Checker 源码。", 422);
 			}
 			if (
+				!emptyInput &&
 				project.scoringMode === "acm" &&
 				(project.subtasks.length !== 1 ||
 					project.subtasks[0].id !== 1 ||
@@ -256,8 +287,23 @@ export class ProjectPipeline {
 			) {
 				throw new ManualProjectError("ACM 题目仅允许一个 100 分 min 分组。", 422);
 			}
-			const { cases, orphanOutputs } = await this.projects.caseList(project);
-			if (orphanOutputs.length)
+			const { cases: storedCases, orphanOutputs } = await this.projects.caseList(project);
+			const cases: ManualCaseSummary[] = emptyInput
+				? [
+						{
+							id: "interactive-empty",
+							origin: "manual",
+							inputFile: "interactive-empty.in",
+							outputFile: "interactive-empty.out",
+							inputBytes: 0,
+							outputBytes: 0,
+							subtaskId: 1,
+						},
+					]
+				: storedCases.map((item) =>
+						interactive ? { ...item, outputFile: `${item.id}.out`, outputBytes: 0 } : item,
+					);
+			if (!interactive && orphanOutputs.length)
 				throw new ManualProjectError(`存在没有对应 .in 的输出文件：${orphanOutputs.join(", ")}`, 422);
 			if (cases.length === 0) throw new ManualProjectError("请先上传测试数据或运行 Gen。", 422);
 			if (project.scoringMode === "acm" && cases.some((item) => item.subtaskId !== 1)) {
@@ -290,11 +336,17 @@ export class ProjectPipeline {
 					422,
 				);
 			stage = await mkdtemp(join(this.projects.projectDirectory(id), ".verify-"));
+			if (emptyInput) await writeFile(join(stage, "interactive-empty.in"), "");
 			const sandboxCases: SandboxCase[] = await Promise.all(
 				cases.map(async (item) => ({
 					id: item.id,
-					inputPath: await this.projects.dataFile(id, item.origin, item.inputFile),
-					outputPath: item.outputFile ? await this.projects.dataFile(id, item.origin, item.outputFile) : undefined,
+					inputPath: emptyInput
+						? join(stage!, "interactive-empty.in")
+						: await this.projects.dataFile(id, item.origin, item.inputFile),
+					outputPath:
+						!interactive && item.outputFile
+							? await this.projects.dataFile(id, item.origin, item.outputFile)
+							: undefined,
 					outputName: item.outputFile ?? `${item.id}.out`,
 				})),
 			);
@@ -304,11 +356,14 @@ export class ProjectPipeline {
 				stage,
 				image: this.projects.image,
 				reference: project.reference,
+				interactor: interactive
+					? { language: project.interactorStandard ?? "cpp17", code: project.interactorSource ?? "" }
+					: undefined,
 				oracle: project.oracle,
 				generatorStandard: project.generatorStandard,
 				checker: effectiveChecker(project.checkerMode, project.checkerSource),
 				checkerStandard: project.checkerStandard,
-				validator: project.validatorSource,
+				validator: emptyInput ? undefined : project.validatorSource,
 				validatorStandard: project.validatorStandard,
 				cases: sandboxCases,
 				samples: project.samples,
@@ -319,7 +374,7 @@ export class ProjectPipeline {
 			const report: ManualVerificationReport = {
 				...sandbox,
 				revision: project.revision,
-				projectHash: await this.projectHash(project, cases),
+				projectHash: await this.projectHash(project, storedCases),
 				issues: structural.issues,
 				verifiedAt: new Date().toISOString(),
 			};
@@ -338,7 +393,9 @@ export class ProjectPipeline {
 			}
 			for (const item of cases) {
 				await copyFile(
-					await this.projects.dataFile(id, item.origin, item.inputFile),
+					emptyInput
+						? join(stage, "interactive-empty.in")
+						: await this.projects.dataFile(id, item.origin, item.inputFile),
 					join(hydroRoot, "testdata", item.inputFile),
 				);
 				await copyFile(
@@ -365,6 +422,7 @@ export class ProjectPipeline {
 				"checker.cc": effectiveChecker(project.checkerMode, project.checkerSource) ?? "",
 				"validator.cc": project.validatorSource,
 				"oracle.txt": project.oracle?.code ?? "",
+				...(interactive ? { "interactor.cc": project.interactorSource ?? "" } : {}),
 			};
 			for (const [name, content] of Object.entries(sourceTexts)) {
 				const path = join(sourceRoot, name);
@@ -383,16 +441,23 @@ export class ProjectPipeline {
 				await copyFile(pdfSource, sourceTarget);
 				sourceFiles.set("problem.pdf", sourceTarget);
 			}
-			for (const item of cases) {
-				for (const name of [item.inputFile, item.outputFile].filter(
-					(value): value is string => value !== undefined,
-				)) {
-					const relative = `data/${item.origin}/${name}`;
+			for (const origin of ["manual", "generated"] as const) {
+				for (const file of await this.projects.database.fileEntries(origin, id)) {
+					const relative = `data/${origin}/${file.name}`;
 					const target = join(sourceRoot, relative);
 					await mkdir(join(target, ".."), { recursive: true });
-					await copyFile(await this.projects.dataFile(id, item.origin, name), target);
+					await copyFile(await this.projects.dataFile(id, origin, file.name), target);
 					sourceFiles.set(relative, target);
 				}
+			}
+			if (emptyInput) {
+				const relative = "data/automatic/interactive-empty.in";
+				const target = join(sourceRoot, relative);
+				await mkdir(join(target, ".."), { recursive: true });
+				await writeFile(target, "");
+				sourceFiles.set(relative, target);
+			}
+			for (const item of cases) {
 				const verifiedName = item.outputFile ?? `${item.id}.out`;
 				const verifiedRelative = `data/verified/${verifiedName}`;
 				const verifiedTarget = join(sourceRoot, verifiedRelative);
@@ -442,13 +507,15 @@ export class ProjectPipeline {
 					generator: project.generatorStandard,
 					checker: project.checkerStandard,
 					validator: project.validatorStandard,
+					...(interactive ? { interactor: project.interactorStandard ?? "cpp17" } : {}),
 				},
 				testlibCommit: "1e4e8a24c79c6bad3becbdb5a332ffc352b7d5dd",
 				testlibSha256: fileHashes["testlib/testlib.h"],
-				generatorCommands: project.generatorScript.trim() ? parseGeneratorScript(project.generatorScript) : [],
+				generatorCommands:
+					!emptyInput && project.generatorScript.trim() ? parseGeneratorScript(project.generatorScript) : [],
 				cases: cases.map((item) => ({
 					id: item.id,
-					origin: item.origin,
+					origin: emptyInput ? "automatic" : item.origin,
 					inputFile: item.inputFile,
 					outputFile: item.outputFile ?? `${item.id}.out`,
 					subtaskId: item.subtaskId,
@@ -467,6 +534,8 @@ export class ProjectPipeline {
 				name: name ?? `v${project.revision}`,
 				id: releaseId,
 				scoringMode: project.scoringMode,
+				judgingMode: project.judgingMode ?? "default",
+				interactionInputMode: project.interactionInputMode ?? "provided",
 				projectId: id,
 				revision: project.revision,
 				projectHash: report.projectHash,

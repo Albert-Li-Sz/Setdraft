@@ -2,6 +2,7 @@
 	"name": "setdraft",
 	"description": "Setdraft · 题序 — Competitive Programming Workspace",
 	"private": true,
+	"license": "AGPL-3.0-only",
 	"type": "module",
 	"workspaces": ["packages/*"],
 	"scripts": {
@@ -9,7 +10,7 @@
 		"build:hydro": "npm run build --workspace=@earendil-works/pi-telemetry && npm run build --workspace=@earendil-works/pi-ai && npm run build --workspace=@setdraft/authoring && npm run build --workspace=@setdraft/server && npm run build --workspace=@setdraft/web",
 		"test": "npm run test:scripts && npm run test:hydro",
 		"test:hydro": "npm run test --workspace=@earendil-works/pi-ai && npm run test --workspace=@earendil-works/pi-telemetry && npm run test --workspace=@setdraft/authoring && npm run test --workspace=@setdraft/server && npm run test --workspace=@setdraft/web",
-		"test:scripts": "node --test scripts/hydro-local.test.mjs scripts/compose-config.test.mjs scripts/compose-installer.test.mjs scripts/searxng.test.mjs scripts/check-runtime-deps.test.mjs scripts/release-gates.test.mjs",
+		"test:scripts": "node --test scripts/hydro-local.test.mjs scripts/compose-config.test.mjs scripts/compose-installer.test.mjs scripts/searxng.test.mjs scripts/check-runtime-deps.test.mjs scripts/release-gates.test.mjs scripts/package-source.test.mjs",
 		"dev:hydro-api": "npm run dev --workspace=@setdraft/server",
 		"dev:hydro-web": "npm run dev --workspace=@setdraft/web",
 		"hydro:validate:fixture": "tsx packages/hydro-authoring/src/cli.ts validate fixtures/hydro/a-plus-b/hydro/a-plus-b",

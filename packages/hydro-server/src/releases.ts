@@ -47,16 +47,28 @@ export class ReleaseStore {
 		return snapshot.reference;
 	}
 
-	async exportDomjudge(id: string, context?: ExecutionContext): Promise<{ path: string; size: number; name: string }> {
+	async exportDomjudge(
+		id: string,
+		context?: ExecutionContext,
+		statement?: { pdfPath: string; archivePath: string },
+	): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
 		try {
 			await writeDomjudgeProblemArchive(this.projects.releaseDirectory(id), release, this.projects.image, {
 				signal: context?.signal,
+				taskId: context?.id,
 				containerName: context ? `hydro-task-${context.id}-checker` : undefined,
+				...statement,
 			});
 		} catch (error) {
 			throw new ManualProjectError(error instanceof Error ? error.message : "DOMjudge 导出失败。", 422);
 		}
+		if (statement)
+			return {
+				path: statement.archivePath,
+				size: (await stat(statement.archivePath)).size,
+				name: `${release.slug}.domjudge.zip`,
+			};
 		await this.projects.database.indexFile(
 			"release-file",
 			id,

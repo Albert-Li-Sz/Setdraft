@@ -166,11 +166,19 @@ function validateConfig(
 		);
 	}
 	if (value.type === "interactive") {
+		const interactor = isRecord(value.interactor) ? value.interactor.file : value.interactor;
+		if (isRecord(value.interactor) && !/^cc\.cc(?:11|14|17|20|23|26)$/u.test(String(value.interactor.lang)))
+			addIssue(
+				issues,
+				"INVALID_INTERACTOR_LANGUAGE",
+				"testdata/config.yaml.interactor.lang",
+				"Use a supported C++ language.",
+			);
 		if (
-			typeof value.interactor !== "string" ||
-			!isSafeFlatName(value.interactor) ||
-			!value.interactor.endsWith(".cc") ||
-			!testFiles.get(value.interactor)
+			typeof interactor !== "string" ||
+			!isSafeFlatName(interactor) ||
+			!interactor.endsWith(".cc") ||
+			!testFiles.get(interactor)
 		)
 			addIssue(
 				issues,
@@ -178,7 +186,7 @@ function validateConfig(
 				"testdata/config.yaml.interactor",
 				"Provide a referenced C++ interactor source.",
 			);
-		else referencedFiles.add(value.interactor);
+		else referencedFiles.add(interactor);
 	} else if (value.interactor !== undefined)
 		addIssue(
 			issues,

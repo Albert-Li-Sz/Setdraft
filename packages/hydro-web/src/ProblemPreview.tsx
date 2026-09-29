@@ -5,7 +5,10 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import type { ProjectSnapshot } from "./platform.ts";
 
-type PreviewProject = Pick<ProjectSnapshot, "statement" | "samples" | "attachments">;
+type PreviewProject = Pick<
+	ProjectSnapshot,
+	"statement" | "statementSections" | "judgingMode" | "samples" | "attachments"
+>;
 
 const remarkPlugins = [remarkGfm, remarkMath];
 const rehypePlugins = [rehypeKatex];

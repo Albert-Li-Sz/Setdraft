@@ -32,3 +32,6 @@ coverage/
 .hydro-problem-make/
 
 .env.compose
+
+packages/hydro-web/public/open-source/*
+!packages/hydro-web/public/open-source/index.html

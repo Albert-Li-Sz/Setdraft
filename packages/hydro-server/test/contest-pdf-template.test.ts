@@ -1,0 +1,137 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, expect, it, vi } from "vitest";
+import { createContestPdfCompiler, renderContestPdf } from "../src/contest-pdf-compiler.ts";
+import { buildContestPdfSources, type ContestPdfDocument } from "../src/contest-pdf-document.ts";
+import { pdfFixture } from "./fixtures/contest-pdf.ts";
+
+const assets = fileURLToPath(new URL("../assets/", import.meta.url));
+const fontHashes: Record<string, string> = {
+	"NewCMMath-Book.otf": "765b14d6f8a8d3e9b319f168cc1b10dd89df38d34108e75b44013904bb173218",
+	"cmunss.otf": "a0e41b8611156eed280c3a730ddcf03c35090fb03efc9413bbe2b1e2915de95b",
+	"cmunsx.otf": "5d3a5b51898be3279b28734ac135dc89f4971dc7be1215981eff3fa9f66300da",
+	"cmuntt.ttf": "75b653ab15c2a678a303a1293db1692cbe6c3dfdd5d90f5fce97690aa9991948",
+	"FZSSK.ttf": "00fdbfb433aaf4c00dd02b79319bbfe94ffca399dba1be9e6455e4bb650e0273",
+	"FZHTK.ttf": "5be63dbc864f04b012f83db53b2e0ea4a2c70311c4a42cc33c6206ae9cd47ef0",
+	"FZKTK.ttf": "6527f1a53414d9d1dcdb64f7f26cc451ef7ab2c57a2a2b1a06e5255e97f2d894",
+	"FZXBSK.ttf": "a6e4e1ee8878b824b4eb66dc58e25ed255992ef3ac901264b8444a5bc5a30029",
+};
+const fonts = await Promise.all(Object.keys(fontHashes).map((name) => readFile(join(assets, "xcpc/fonts", name))));
+const compiler = await createContestPdfCompiler();
+const upstream = await readFile(join(assets, "xcpc/upstream.typ"), "utf8");
+const localUpstream = upstream.replace(/@preview\/(numbly|cmarker|mitex):[0-9.]+/gu, "/$1/lib.typ");
+compiler.addSource("/xcpc/original-local.typ", localUpstream);
+afterAll(() => compiler.reset());
+
+function render(source: string) {
+	return renderContestPdf(compiler, `#set document(date: none)\n${source}`);
+}
+
+it("retains the pinned upstream template and all eight original font files byte for byte", () => {
+	expect(createHash("sha256").update(upstream).digest("hex")).toBe(
+		"c130ad6e5b30c4315e5373ffec1bd95d7058dc731954611d3a6e56f945d8759f",
+	);
+	for (const [index, hash] of Object.values(fontHashes).entries())
+		expect(createHash("sha256").update(fonts[index]).digest("hex")).toBe(hash);
+});
+
+it.each([
+	{ language: "zh", titlePage: true, problemList: true, headerFooter: true },
+	{ language: "en", titlePage: true, problemList: true, headerFooter: true },
+	{ language: "zh", titlePage: false, problemList: true, headerFooter: true },
+	{ language: "en", titlePage: true, problemList: false, headerFooter: false },
+] as const)(
+	"matches the upstream page count and complete PDF bytes with the original WASM compiler: %j",
+	async (options) => {
+		const first = pdfFixture.problems[0];
+		const document: ContestPdfDocument = {
+			...pdfFixture,
+			options: { ...pdfFixture.options, ...options, coverNotes: "" },
+			problems: [
+				{ ...first, samples: [...first.samples, { input: "10 20\n30 40", output: "30\n70" }] },
+				{
+					...first,
+					label: "B",
+					title: "Long statement / 多页题面",
+					statementSections: {
+						...first.statementSections!,
+						description: Array.from(
+							{ length: 50 },
+							() => "A paragraph with **bold**, *emphasis*, $x^2$ and 中文。",
+						).join("\n\n"),
+					},
+				},
+			],
+		};
+		const sources = buildContestPdfSources(document);
+		for (const source of [sources.booklet, ...sources.problems.values()]) {
+			const baseline = source
+				.replace('"/xcpc/lib.typ"', '"/xcpc/original-local.typ"')
+				.replace(/^ {2}cover-notes:.*\n/mu, "");
+			const expected = await render(baseline);
+			const actual = await render(source);
+			expect(actual.pages).toBe(expected.pages);
+			expect(Buffer.from(actual.pdf).equals(Buffer.from(expected.pdf))).toBe(true);
+		}
+	},
+	60_000,
+);
+
+it.each([
+	'<!--raw-typst #panic("RAW_COMMENT_EXECUTED") -->',
+	'```typst\n#panic("RAW_TYPST_EXECUTED")\n```',
+	'`#panic("INLINE_TYPST_EXECUTED")`{=typst}',
+	'#read("/xcpc/LICENSE")',
+])("does not execute embedded Typst: %s", async (description) => {
+	const first = pdfFixture.problems[0];
+	const source = buildContestPdfSources({
+		...pdfFixture,
+		problems: [{ ...first, statementSections: { ...first.statementSections!, description } }],
+	}).booklet;
+	expect((await render(source)).pages).toBe(2);
+});
+
+it.each([
+	'<img src="/xcpc/LICENSE">',
+	'<img src="https://example.com/private.svg">',
+	'<img src="/images/../xcpc/LICENSE">',
+])("blocks HTML images outside the attachment allowlist: %s", async (description) => {
+	const first = pdfFixture.problems[0];
+	const source = buildContestPdfSources({
+		...pdfFixture,
+		problems: [{ ...first, statementSections: { ...first.statementSections!, description } }],
+	}).booklet;
+	await expect(render(source)).rejects.toThrow("已上传");
+});
+
+it("never loads remote fonts, packages, or host files outside its virtual filesystem", async () => {
+	const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+	try {
+		const isolated = await createContestPdfCompiler();
+		try {
+			await renderContestPdf(isolated, buildContestPdfSources(pdfFixture).booklet);
+			for (const source of [
+				'#read("/etc/passwd")',
+				'#read("/job.json")',
+				'#read("/xcpc/fonts/FZSSK.ttf")',
+				'#import "@preview/numbly:0.1.0": *',
+			])
+				await expect(renderContestPdf(isolated, source)).rejects.toThrow("PDF 排版失败");
+		} finally {
+			await isolated.reset();
+		}
+		expect(fetch).not.toHaveBeenCalled();
+	} finally {
+		fetch.mockRestore();
+	}
+});
+
+it("limits physical pages even when page numbering is reset", async () => {
+	await expect(
+		render(
+			'#set text(font: "CMU Sans Serif")\n#for index in range(1001) { counter(page).update(1); [Page]; pagebreak(weak: true) }',
+		),
+	).rejects.toThrow("1000 页");
+}, 30_000);

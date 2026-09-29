@@ -36,6 +36,9 @@ const AdminSettingsPage = lazy(() =>
 	import("./AdminSettingsPage.tsx").then((module) => ({ default: module.AdminSettingsPage })),
 );
 const TasksPage = lazy(() => import("./TasksPage.tsx").then((module) => ({ default: module.TasksPage })));
+const AuthoringGuide = lazy(() =>
+	import("./AuthoringGuide.tsx").then((module) => ({ default: module.AuthoringGuide })),
+);
 
 export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const currentProjectKey = `setdraft.project-id.${user.id}`;
@@ -523,68 +526,6 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		}
 	}
 
-	async function uploadDomjudgePdf(file: File): Promise<void> {
-		const current = projectRef.current;
-		const signal = session.signal;
-		if (!current) return;
-		setBusy("upload");
-		try {
-			await transferFiles(file.name, async (progress) => {
-				await saveNow();
-				signal.throwIfAborted();
-				const revision = projectRef.current?.revision ?? current.revision;
-				const snapshot = await requestJson<ProjectSnapshot>(
-					apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
-					{
-						method: "PUT",
-						signal,
-						headers: { "content-type": "application/pdf", "x-expected-revision": String(revision) },
-						body: file,
-						onUploadProgress: (loaded) =>
-							progress({ phase: "uploading", file: file.name, loaded, total: file.size }),
-					},
-				);
-				signal.throwIfAborted();
-				setCurrentProject(snapshot);
-				setReport(undefined);
-				showNotice("DOMjudge PDF 已上传；重新验证后会进入新发布包。", "passed");
-			});
-		} catch (error) {
-			if (signal.aborted) return;
-			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
-			showNotice(error instanceof Error ? error.message : "PDF 上传失败。", "failed");
-		} finally {
-			if (!signal.aborted) setBusy(undefined);
-		}
-	}
-
-	async function deleteDomjudgePdf(): Promise<void> {
-		const current = projectRef.current;
-		const signal = session.signal;
-		if (!current) return;
-		try {
-			await saveNow();
-			signal.throwIfAborted();
-			const revision = projectRef.current?.revision ?? current.revision;
-			const snapshot = await requestJson<ProjectSnapshot>(
-				apiUrl(apiOrigin, `/projects/${current.id}/domjudge-pdf`),
-				{
-					method: "DELETE",
-					signal,
-					headers: { "x-expected-revision": String(revision) },
-				},
-			);
-			signal.throwIfAborted();
-			setCurrentProject(snapshot);
-			setReport(undefined);
-			showNotice("已移除 DOMjudge PDF；重新验证后生效。", "passed");
-		} catch (error) {
-			if (signal.aborted) return;
-			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
-			showNotice(error instanceof Error ? error.message : "移除 PDF 失败。", "failed");
-		}
-	}
-
 	async function deleteFile(name: string): Promise<void> {
 		const current = projectRef.current;
 		const signal = session.signal;
@@ -748,8 +689,6 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								onAddCase={addTextCase}
 								onManageCases={manageCases}
 								onUploadAttachments={uploadAttachments}
-								onUploadDomjudgePdf={uploadDomjudgePdf}
-								onDeleteDomjudgePdf={deleteDomjudgePdf}
 								onDeleteFile={deleteFile}
 								onGenerate={generate}
 								onFinalize={finalize}
@@ -784,6 +723,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 						/>
 					)}
 					{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
+					{page === "authoring-guide" && <AuthoringGuide />}
 					{page === "tasks" && <TasksPage apiOrigin={apiOrigin} paused={paused} />}
 					{page === "settings" && <SettingsPage user={user} />}
 					{page === "admin" && user.role === "admin" && (

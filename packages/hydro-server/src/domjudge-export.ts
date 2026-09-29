@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
+import { isContestReadyRelease } from "@setdraft/contracts";
+import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
 import { cleanupSandboxStage, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
@@ -24,12 +26,12 @@ export function domjudgeProblemId(releaseId: string): string {
 	return `p${releaseId.replaceAll("-", "")}`;
 }
 
-function buildScript(standard: CppLanguage): string {
+function buildScript(standard: CppLanguage, role = "checker"): string {
 	return [
 		"#!/bin/sh",
 		"set -eu",
 		'cd "$(dirname "$0")"',
-		`g++ -std=${standardNames[standard]} -O2 -pipe -I. checker.cc -o checker`,
+		`g++ -std=${standardNames[standard]} -O2 -pipe -I. ${role}.cc -o ${role}`,
 		"",
 	].join("\n");
 }
@@ -48,6 +50,29 @@ const runScript = [
 	"  1|2|7) exit 43 ;;",
 	"  *) exit 1 ;;",
 	"esac",
+	"",
+].join("\n");
+
+const interactiveRunScript = [
+	"#!/bin/sh",
+	"set -u",
+	'validator_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)',
+	'"$validator_dir/interactor" "$1" "$3/transcript" "$2" 2> "$3/judgemessage.txt"',
+	"status=$?",
+	'cat "$3/judgemessage.txt" >&2',
+	`awk -v status="$status" '
+NR == 1 {
+    if (status == 0 && /^ok[[:space:]]/) { valid = 1; score = 100 }
+    else if ((status == 1 || status == 2) && /^(wrong answer|wrong output format)[[:space:]]/) { valid = 1; score = 0 }
+    else if (status == 7 && /^points [0-9.]+/) { valid = 1; score = $2; if (score <= 1) score *= 100 }
+    else if (/^partially correct \\([0-9.]+\\)/) {
+        value = $3; gsub(/[()]/, "", value)
+        if (status == value) { valid = 1; score = value; if (score <= 1) score *= 100 }
+    }
+}
+match($0, /score\\(-?[0-9]+\\)/) { value = substr($0, RSTART + 6, RLENGTH - 7); score = value + 0 }
+END { if (!valid || score < 0 || score > 100) exit 1; if (score == 100) exit 42; exit 43 }
+' "$3/judgemessage.txt"`,
 	"",
 ].join("\n");
 
@@ -154,17 +179,18 @@ export async function writeDomjudgeProblemArchive(
 	releaseRoot: string,
 	release: ManualRelease,
 	image: string,
-	options: { signal?: AbortSignal; containerName?: string } = {},
+	options: {
+		signal?: AbortSignal;
+		containerName?: string;
+		taskId?: string;
+		pdfPath?: string;
+		archivePath?: string;
+	} = {},
 ): Promise<string> {
-	if (
-		release.scoringMode !== "acm" ||
-		!release.report.success ||
-		!release.report.checkerUsed ||
-		!release.checkerMode
-	) {
-		throw new Error("只有通过 ACM Checker 验证的题目可导出 DOMjudge 包。");
+	if (release.scoringMode !== "acm" || !isContestReadyRelease(release)) {
+		throw new Error("只有通过 ACM 完整验证的题目可导出 DOMjudge 包。");
 	}
-	const target = join(releaseRoot, "domjudge.zip");
+	const target = options.archivePath ?? join(releaseRoot, "domjudge.zip");
 	try {
 		await stat(target);
 		return target;
@@ -172,6 +198,10 @@ export async function writeDomjudgeProblemArchive(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	const project = JSON.parse(await readFile(join(releaseRoot, "source", "project.json"), "utf8")) as ManualProject;
+	const interactive = release.judgingMode === "interactive";
+	if (interactive !== (project.judgingMode === "interactive")) throw new Error("发布记录与源快照题型不一致。");
+	const role = interactive ? "interactor" : "checker";
+	const standard = interactive ? (project.interactorStandard ?? "cpp17") : project.checkerStandard;
 	const manifest = JSON.parse(await readFile(join(releaseRoot, "source", "manifest.json"), "utf8")) as SourceManifest;
 	const problemId = domjudgeProblemId(release.id);
 	const stage = await mkdtemp(join(releaseRoot, ".domjudge-"));
@@ -193,7 +223,7 @@ export async function writeDomjudgeProblemArchive(
 			[
 				"problem_format_version: legacy-icpc",
 				`name: ${JSON.stringify(release.title)}`,
-				"validation: custom",
+				interactive ? "validation: custom interactive" : "validation: custom",
 				"limits:",
 				`  memory: ${Math.ceil(memory)}`,
 				"",
@@ -202,20 +232,20 @@ export async function writeDomjudgeProblemArchive(
 		const timeLimitMs = parseHydroTimeLimitMs(project.timeLimit);
 		if (timeLimitMs === undefined) throw new Error("已发布题目的时间限制无效。");
 		await put("domjudge-problem.ini", `timelimit = ${timeLimitMs / 1000}\nexternalid = ${problemId}\n`);
-		const validatorDir = join(stage, "output_validators", "checker");
+		const validatorDir = join(stage, "output_validators", role);
 		await mkdir(validatorDir, { recursive: true });
 		await chmod(validatorDir, 0o777);
 		for (const [name, source] of [
-			["checker.cc", join(releaseRoot, "source", "checker.cc")],
+			[`${role}.cc`, join(releaseRoot, "source", `${role}.cc`)],
 			["testlib.h", join(releaseRoot, "source", "testlib", "testlib.h")],
 		] as const) {
-			const relative = `output_validators/checker/${name}`;
+			const relative = `output_validators/${role}/${name}`;
 			const path = join(stage, relative);
 			await copyFile(source, path);
 			files.set(relative, path);
 		}
-		await put("output_validators/checker/build", buildScript(project.checkerStandard));
-		await put("output_validators/checker/run", runScript);
+		await put(`output_validators/${role}/build`, buildScript(standard, role));
+		await put(`output_validators/${role}/run`, interactive ? interactiveRunScript : runScript);
 		await chmod(join(validatorDir, "build"), 0o755);
 		await chmod(join(validatorDir, "run"), 0o755);
 		for (const [index, item] of manifest.cases.entries()) {
@@ -231,17 +261,55 @@ export async function writeDomjudgeProblemArchive(
 				files.set(relative, path);
 			}
 		}
-		for (const [index, sample] of project.samples.entries()) {
+		for (const [index, sample] of (interactive ? [] : project.samples).entries()) {
 			const stem = String(index + 1).padStart(3, "0");
 			await put(`data/sample/${stem}.in`, sample.input);
 			await put(`data/sample/${stem}.ans`, sample.output);
 		}
-		if (release.domjudgePdf) {
+		if (options.pdfPath || release.domjudgePdf) {
 			const path = join(stage, "problem.pdf");
-			await copyFile(join(releaseRoot, "problem.pdf"), path);
+			await copyFile(options.pdfPath ?? join(releaseRoot, "problem.pdf"), path);
 			files.set("problem.pdf", path);
 		}
-		await verifyOutputValidator(stage, image, manifest.cases.length, options.signal, options.containerName);
+		if (interactive) {
+			const report = await runInteractiveSandbox(
+				{
+					mode: "finalize",
+					stage: join(stage, "verification"),
+					image,
+					context: {
+						id: options.taskId ?? randomUUID(),
+						signal: options.signal ?? new AbortController().signal,
+						emit() {},
+					},
+					reference: project.reference,
+					interactor: { language: standard, code: project.interactorSource ?? "" },
+					generatorStandard: "cpp17",
+					checkerStandard: "cpp17",
+					validatorStandard: "cpp17",
+					timeLimitMs,
+					memoryLimitMb: Math.ceil(memory),
+					maxFileBytes: 64 * 1024 * 1024,
+					cases: manifest.cases.map((item, index) => ({
+						id: String(index + 1),
+						inputPath: join(stage, "data", "secret", `${String(index + 1).padStart(3, "0")}.in`),
+						outputName: item.outputFile,
+					})),
+				},
+				{
+					build: buildScript(standard, role),
+					run: interactiveRunScript,
+					testlibPath: join(validatorDir, "testlib.h"),
+				},
+			);
+			if (!report.success)
+				throw new Error(
+					`DOMjudge 交互适配器验证失败：${report.checks
+						.filter((item) => !item.passed)
+						.map((item) => item.message)
+						.join("\n")}`,
+				);
+		} else await verifyOutputValidator(stage, image, manifest.cases.length, options.signal, options.containerName);
 		const temporaryArchive = join(releaseRoot, `.domjudge-${randomUUID()}.zip`);
 		try {
 			await writeStoredArchiveFromFiles(
@@ -249,8 +317,8 @@ export async function writeDomjudgeProblemArchive(
 				"",
 				files,
 				new Map([
-					["output_validators/checker/build", 0o755],
-					["output_validators/checker/run", 0o755],
+					[`output_validators/${role}/build`, 0o755],
+					[`output_validators/${role}/run`, 0o755],
 				]),
 			);
 			await rename(temporaryArchive, target);

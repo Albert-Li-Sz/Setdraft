@@ -121,6 +121,10 @@ export async function restoreProject(
 					generatorStandard: record.generatorStandard ?? "cpp17",
 					checkerStandard: record.checkerStandard ?? "cpp17",
 					validatorStandard: record.validatorStandard ?? "cpp17",
+					judgingMode: record.judgingMode ?? "default",
+					interactionInputMode: record.interactionInputMode ?? "provided",
+					interactorSource: record.interactorSource ?? "",
+					interactorStandard: record.interactorStandard ?? "cpp17",
 					cases: [],
 					orphanOutputs: [],
 				}
@@ -133,6 +137,16 @@ export async function restoreProject(
 		)
 			throw new ManualProjectError("发布包题目快照无效，无法回退。", 422);
 		for (const item of manifest.cases ?? []) {
+			if (
+				item?.origin === "automatic" &&
+				candidate.judgingMode === "interactive" &&
+				candidate.interactionInputMode === "empty" &&
+				item.inputFile === "interactive-empty.in"
+			) {
+				if ((await readFile(await checked("data/automatic/interactive-empty.in"))).length !== 0)
+					throw new ManualProjectError("无输入交互题的测试输入必须严格为空。", 422);
+				continue;
+			}
 			if (
 				!item ||
 				!["manual", "generated"].includes(item.origin) ||
@@ -168,6 +182,7 @@ export async function restoreProject(
 			domjudgePdf: content.domjudgePdf,
 			checkerMode: content.checkerMode ?? (content.checkerSource.trim() ? "custom" : "text"),
 			oracle: content.oracle,
+			statementSections: content.statementSections,
 			generatedFromHash: content.generatedFromHash,
 		});
 		await projects.database.commitFiles(

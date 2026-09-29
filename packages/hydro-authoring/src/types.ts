@@ -30,6 +30,7 @@ export interface HydroProblemSpec {
 	multiPass?: number;
 	answerMode?: "single" | "multi";
 	interactor?: string;
+	interactorLanguage?: string;
 	slug: string;
 	title: string;
 	pid?: string;

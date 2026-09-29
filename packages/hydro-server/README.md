@@ -76,12 +76,99 @@ Security references: [OWASP password storage](https://cheatsheetseries.owasp.org
 | `GET/POST /api/contests`, `GET/PUT/DELETE /api/contests/:id` | Independent contests |
 | `POST /api/contests/:id/export` | Queue Hydro or DOMjudge export with required `{ format, name }` (package log name, 1–80 characters) |
 | `GET /api/contest-releases/:id/download` | Download a contest bundle |
+| `POST /api/contests/:id/pdf-preview` | Compile the saved contest configuration and selected releases into a preview PDF; requires `{ expectedRevision }` |
+| `GET /api/contest-releases/:id/pdf` | Download a generated contest booklet from an immutable contest release |
 
 The three long-running POST routes return `202` with `{ task }`. `GET /api/tasks` and `GET /api/tasks/:id` show state; `GET /api/tasks/:id/events` is an SSE stream with event IDs and `Last-Event-ID` replay. `POST /api/tasks/:id/cancel` stops the matching Docker container, and `/retry` creates another task. A problem revision can be sent as `expectedRevision` on JSON edits and case operations or `x-expected-revision` on file operations; conflicts return `409` with the current snapshot.
 
 Restoration checks the manifest and source hashes before replacing the editable document and all test/PDF file references in one transaction. It keeps the problem ID and creation date, increments the revision, and clears the current verification report. The release source tree must be present in backups. Copies use a fresh ID and timestamps, retain current code, attachments and both manual/generated tests, and omit releases, reports and tasks. Both operations reject stale revisions and recheck account access at commit.
 
 Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `SETDRAFT_CASE_MAX_BYTES`, `SETDRAFT_PROJECT_MAX_BYTES`, `SETDRAFT_TESTCASES_MAX` and `SETDRAFT_TOTAL_TIME_LIMIT_MS`.
+
+### Interactive problems
+
+Project updates accept `judgingMode: "default" | "interactive"`, `interactionInputMode: "provided" | "empty"`,
+`interactorSource` and `interactorStandard` (the existing C++ language keys). Missing legacy fields default to
+`default`, `provided`, an empty source and `cpp17`. These fields participate in source snapshots, fingerprints,
+history restoration and release metadata. Changing them invalidates the current report.
+
+`interactive-sandbox.ts` owns the interactive execution path. It compiles each role in a separate container and
+mounts only that role's program at runtime. Two non-root, network-disabled, read-only containers exchange streams
+through a bounded relay. Startup is bounded separately from the dialogue deadline; stderr and each direction's
+saved transcript are capped at 64 KiB, while emitted stdout is limited by `maxFileBytes`. All role containers and
+attached Docker processes are removed before returning. Restart cleanup uses the same task-scoped role names.
+Interactor exceptions are `SYSTEM_ERROR`, contestant failures are `RE`/`TLE`, rejected answers are `WA`.
+Partial scores do not pass the full-reference gate. Interactive reports use `interactorUsed`, not `checkerUsed`.
+
+Provided-input generation checks reproducibility and optional input validation before an actual dialogue.
+Empty mode rejects generation and verifies only `interactive-empty.in`, with a strictly empty answer and no seed.
+The ordinary stored `cases` remain in project snapshots, but are inactive in empty mode. Source archives retain
+all original manual/generated files; the active empty case has manifest origin `automatic`, separate from those
+restorable files. Explanatory public samples are never executed as batch tests.
+
+Hydro releases retain ACM/OI subtasks and use an interactor instead of a checker. Empty mode exports one 100-point
+subtask without mutating saved groups. DOMjudge exports accept only verified ACM releases and re-run the saved
+reference through the exact exported `build`/`run` adapter. Contest eligibility branches by judging mode.
+FPS/QDUOJ explicitly reject interactive releases. No new communication or multi-pass API is introduced.
+
+### Structured statements and contest PDFs
+
+Projects may include `statementSections` with `description`, `input`, `output`, `interaction` and `notes`.
+The structured formatter includes the active ordinary/interactive fields and public samples in statement output.
+Absent sections retain legacy `statement` behavior; the editor offers the old text intact in the description field.
+Hidden sections survive mode switches. Structured content participates in validation, fingerprints, source snapshots,
+history restoration and copies. Interactive public samples describe the protocol and are never batch-executed.
+
+Contests accept `pdf` settings: `enabled`, `subtitle`, `author`, `date`, `coverNotes`, `titlePage`, `problemList`,
+`headerFooter`, `language`, `titlePageLanguage` and `problemLanguage`. The default language is `zh` or `en`;
+cover and problem-label languages additionally support `auto`. These settings render selected immutable releases,
+not live project drafts. A cancellable child process parses Markdown, validates image assets, converts content through
+`contest-pdf-document.ts` into escaped Typst documents and compiles the booklet and individual statements. Local
+uploaded images and bundled formula support are used without fetching arbitrary remote images. The renderer directly
+adapts the pinned XCPC template and loads its eight original bundled fonts. It uses the upstream lockfile's
+WASM compiler and driver (`0.6.1-rc5`), with default fonts disabled and no system-font discovery.
+No TeX installation, font-path setting or runtime package download is needed. See `assets/README.md` for provenance,
+layout regression coverage, license notices and the separate Founder font permission caveat.
+
+When enabled, contest bundles include `booklet.pdf` and `statements/<label>.pdf`, and DOMjudge problem ZIPs carry
+the generated per-problem PDF. This replaces the authoring UI's manual DOMjudge PDF upload; existing release files
+remain immutable. Preview requires saved configuration and a matching contest revision. PDF generation limits
+serialized content to 20 MiB, compilation to 90 seconds and global compiler concurrency to two.
+
+PNG/JPEG/GIF assets must have valid headers, positive dimensions, at most 8192 pixels per side and 16 million pixels
+per image; total raster dimensions are capped at 64 million pixels per job. SVG uses a restricted element/attribute
+allowlist for basic shapes, text and gradients: at most 256 KiB, 5000 nodes and 32 levels, without embedded images,
+scripts, styles, external references, `use`, filters, DTD/entity declarations or processing instructions. Gradient
+references must stay within the same SVG. Each problem allows at most 20 attachments of 1 MiB each; image bytes total
+at most 16 MiB per job. Generated Typst sources total at most 40 MiB; each document is limited to 1000 pages and generated
+PDFs total at most 64 MiB.
+
+Source extraction accepts 1–100 problems with unique one-to-three-letter uppercase labels. Individual source
+`project.json` files are limited to 32 MiB and manifests to 2 MiB; public statement JSON is extracted sequentially and
+limited to 20 MiB in aggregate before handing the job to the compiler child process.
+
+Formula conversion rejects `\includegraphics`; authors must use Markdown image attachments instead. Length arguments
+for `\hspace`, `\vspace` and `\raisebox` accept only signed numeric values with supported units
+(`pt`, `bp`, `pc`, `mm`, `cm`, `in`, `em`, `ex`, `mu`, `sp`) and magnitude at most 10000, not expressions or code.
+The formula evaluation scope restricts file reading, nested evaluation and document-query helpers.
+Markdown uses the original cmarker 0.1.6 renderer with raw Typst disabled. HTML image paths must also pass the
+validated-attachment allowlist. Sample tables preserve raw lines as in the upstream template; long sample lines
+must be shortened or split by the author. The problem list is part of the cover and is hidden when the cover is off.
+
+The integrated application is distributed under AGPL-3.0-only with earlier MIT notices preserved. The web prebuild
+packages matching application sources and installation inputs at `/open-source/source.tgz`; sidebar and PDF
+settings expose `/open-source/index.html` without login. Keep this source offer available when deploying modified
+versions. Fonts retain separate terms; verify Founder font rights before redistribution. See the root `COPYING.md`.
+
+The WASM compiler reads only explicitly mapped templates, local packages, validated images and generated sources.
+It cannot read host files or job JSON through Typst, and its package registry cannot download additional packages.
+The child process is killed on cancellation or timeout, but it is not an OS security sandbox. Its
+`--max-old-space-size=384` setting bounds only the V8 old-generation heap, not WASM linear memory or total
+process memory. Production deployments must retain container/cgroup memory limits and account for concurrent PDF jobs;
+the compiler process does not inherit the contestant Docker sandbox's isolation guarantees.
+
+The complete Chinese authoring guide is maintained in `docs/authoring-guide.md` and rendered by the web route
+`#authoring-guide`; it covers ordinary/interactive authoring, publication, contest covers and platform acceptance limits.
 
 ## AI API
 

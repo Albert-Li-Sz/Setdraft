@@ -41,4 +41,59 @@ describe("Hydro-style statement preview", () => {
 		expect(html).not.toContain("file://");
 		expect(html).not.toContain("javascript:");
 	});
+
+	it.each(["default", "interactive"] as const)(
+		"renders %s sections and samples using the export format",
+		(judgingMode) => {
+			const html = renderToStaticMarkup(
+				<ProblemPreview
+					project={{
+						judgingMode,
+						statement: "OLD_RENDERED_MARKDOWN",
+						statementSections: {
+							description: "结构化题面。",
+							input: "BATCH_INPUT_ONLY",
+							output: "BATCH_OUTPUT_ONLY",
+							interaction: "INTERACTION_ONLY",
+							notes: "注意边界。",
+						},
+						samples: [{ input: "1 2\n", output: "3\n" }],
+						attachments: [],
+					}}
+				/>,
+			);
+			expect(html).toContain("<h2>描述</h2>");
+			expect(html).toContain("<h2>提示</h2>");
+			expect(html).toContain("<h2>样例</h2>");
+			expect(html).toContain('class="language-input1"');
+			expect(html).toContain('class="language-output1"');
+			expect(html).not.toContain("OLD_RENDERED_MARKDOWN");
+			if (judgingMode === "interactive") {
+				expect(html).toContain("<h2>交互描述</h2>");
+				expect(html).not.toContain("BATCH_INPUT_ONLY");
+				expect(html).not.toContain("BATCH_OUTPUT_ONLY");
+			} else {
+				expect(html).toContain("<h2>输入</h2>");
+				expect(html).toContain("<h2>输出</h2>");
+				expect(html).not.toContain("INTERACTION_ONLY");
+			}
+		},
+	);
+
+	it("keeps sample Markdown and HTML inside code blocks", () => {
+		const html = renderToStaticMarkup(
+			<ProblemPreview
+				project={{
+					statement: "",
+					statementSections: { description: "示例。", input: "", output: "", interaction: "", notes: "" },
+					samples: [{ input: "```\n# NOT_A_HEADING\n<script>alert(1)</script>", output: "ok" }],
+					attachments: [],
+				}}
+			/>,
+		);
+		expect(html).toContain("NOT_A_HEADING");
+		expect(html).not.toContain("<h1>");
+		expect(html).not.toContain("<script>");
+		expect(html).toContain("&lt;script&gt;");
+	});
 });

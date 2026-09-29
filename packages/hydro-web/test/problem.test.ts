@@ -32,6 +32,26 @@ const project: ProjectSnapshot = {
 };
 
 describe("manual problem editor helpers", () => {
+	it("saves interactive settings independently of scoring mode and preserves hidden programs", () => {
+		expect(
+			editableProject({
+				...project,
+				judgingMode: "interactive",
+				interactionInputMode: "empty",
+				interactorSource: "interactive source",
+				interactorStandard: "cpp20",
+				checkerSource: "saved checker",
+				generatorSource: "saved generator",
+			}),
+		).toMatchObject({
+			judgingMode: "interactive",
+			interactionInputMode: "empty",
+			interactorSource: "interactive source",
+			interactorStandard: "cpp20",
+			checkerSource: "saved checker",
+			generatorSource: "saved generator",
+		});
+	});
 	it("keeps public samples separate from private data", () => {
 		expect(formatHydroStatement(project)).toBe(`${project.statement}\n`);
 		expect(editableProject(project).samples).toEqual(project.samples);
@@ -49,5 +69,33 @@ describe("manual problem editor helpers", () => {
 		expect(snapshot).toContain("标准程序（cpp17）");
 		expect(snapshot).toContain("# A + B");
 		expect(parseTags("入门, 模拟，入门")).toEqual(["入门", "模拟"]);
+	});
+
+	it("serializes the active statement sections while preserving inactive content", () => {
+		const structured = {
+			...project,
+			judgingMode: "interactive" as const,
+			statement: "OUTDATED_MARKDOWN",
+			statementSections: {
+				description: "求和说明。",
+				input: "SAVED_BATCH_INPUT",
+				output: "SAVED_BATCH_OUTPUT",
+				interaction: "发送两个整数，收到它们的和。",
+				notes: "每次输出后 flush。",
+			},
+		};
+		const editable = editableProject(structured);
+		expect(editable.statementSections).toEqual(structured.statementSections);
+		expect(editable.statement).toBe(formatHydroStatement(structured));
+		expect(editable.statement).toContain("## 交互描述");
+		expect(editable.statement).toContain("## 样例");
+		expect(editable.statement).not.toContain("OUTDATED_MARKDOWN");
+		expect(editable.statement).not.toContain("SAVED_BATCH_INPUT");
+		expect(projectContextSnapshot(structured)).toContain("发送两个整数，收到它们的和。");
+		expect(projectContextSnapshot(structured)).not.toContain("OUTDATED_MARKDOWN");
+		const batch = editableProject({ ...structured, judgingMode: "default" });
+		expect(batch.statement).toContain("SAVED_BATCH_INPUT");
+		expect(batch.statement).not.toContain("## 交互描述");
+		expect(batch.statementSections?.interaction).toBe(structured.statementSections.interaction);
 	});
 });

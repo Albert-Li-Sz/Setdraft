@@ -122,6 +122,7 @@ export async function writeLegacyProblemExport(
 	release: ManualRelease,
 	format: "fps" | "qduoj",
 ): Promise<string> {
+	if (release.judgingMode === "interactive") throw new Error("交互题仅支持 Hydro 和 DOMjudge 导出。");
 	if (!release.report.success || release.scoringMode !== "acm" || release.checkerMode !== "text") {
 		throw new Error(
 			"FPS、QDUOJ 当前只支持使用默认文本 Checker 的 ACM 题目；自定义 testlib Checker 无法按其双参数 SPJ 协议安全转换。",

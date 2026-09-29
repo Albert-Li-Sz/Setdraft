@@ -1,4 +1,109 @@
 export const englishMessages: Readonly<Record<string, string>> = {
+	开源与源码: "Licenses and source",
+	"使用 XCPC 原模板与原字体。": "Uses the original XCPC template and fonts.",
+	"题目列表位于封面；关闭封面时不显示。样例按原模板保留换行，不自动折行。":
+		"The problem list appears on the cover only. Samples preserve line breaks without automatic wrapping, as in the original template.",
+	出题文档: "Authoring guide",
+	"从题面和数据到本地验证、发布与竞赛 PDF。":
+		"From statements and test data to local verification, releases, and contest PDFs.",
+	返回工作台: "Back to workspace",
+	搜索文档: "Search the guide",
+	"按关键词查找配置与操作…": "Find settings and actions by keyword…",
+	文档目录: "Contents",
+	"未找到匹配章节。": "No matching sections found.",
+	"找到 {0} 个章节": "Found {0} sections",
+	"共 {0} 个章节": "{0} sections",
+	描述: "Description",
+	交互描述: "Interaction",
+	提示: "Notes",
+	题面分栏: "Statement sections",
+	完整题面预览: "Full statement preview",
+	"{0} · Markdown": "{0} · Markdown",
+	"样例 {0}": "Sample {0}",
+	"旧版完整题面保留在“描述”中。编辑后按分栏排版，可将输入、输出和提示移到对应栏目。":
+		"Your legacy statement is preserved in Description. Editing enables sectioned formatting; move input, output, and notes into their sections when ready.",
+	"公开展示，不是私有测试数据": "Public examples, not private test data",
+	"交互样例仅说明通信过程，不作为普通输入输出测试；请在交互描述中说明消息顺序。":
+		"Interactive samples illustrate the conversation and are not batch tests. Describe the message order in Interaction.",
+	"样例会展示在题面和 PDF 中；普通题发布时会运行标程核验样例。":
+		"Samples appear in the statement and PDF. Batch samples are verified with the reference before release.",
+	交互器发送: "Interactor sends",
+	选手发送: "Contestant sends",
+	"说明交互协议、消息格式、查询次数、结束条件和 flush 要求…":
+		"Describe the protocol, message format, query limit, termination, and flush requirements…",
+	"填写本栏内容，无需重复栏目标题…": "Write this section without repeating its heading…",
+	启用交互题: "Enable interactive judging",
+	"切换题型会保留已有题面、程序和数据，发布前需重新验证。":
+		"Switching modes preserves statement text, programs, and data. Verify again before release.",
+	交互数据配置: "Interaction test data",
+	全交互: "Fully interactive",
+	半对拍: "Input-driven interaction",
+	"全交互 · 输入与答案全空": "Fully interactive · Empty input and answer",
+	"半对拍 · 私有输入、空答案": "Input-driven · Private input, empty answer",
+	"输入与答案全空，交互器自行组织固定场景。": "Input and answer are empty. The interactor supplies a fixed scenario.",
+	"仅提供交互器私有输入，答案为空，仍使用双向交互。":
+		"Only the interactor receives private input. Answers are empty; communication remains bidirectional.",
+	"竞赛题面 PDF": "Contest statement PDF",
+	"在竞赛中配置封面、目录和页眉页脚，从已发布题面自动生成题册与单题 PDF。":
+		"Configure the cover, problem list, headers, and footers in the contest to generate booklet and individual problem PDFs from released statements.",
+	"配置竞赛 PDF": "Configure contest PDF",
+	"从已发布题面生成完整题册和单题 PDF，按当前题序排版；DOMjudge 题目包自动附带单题 PDF。":
+		"Generate booklet and individual PDFs from released statements in contest order. DOMjudge problem packages include their individual PDFs.",
+	"竞赛包附带 PDF": "Include PDFs in contest packages",
+	封面副标题: "Cover subtitle",
+	"署名 / 主办方": "Author / organizer",
+	"日期 / 地点": "Date / venue",
+	默认语言: "Default language",
+	封面语言: "Cover language",
+	题面栏目语言: "Statement heading language",
+	跟随默认语言: "Use default language",
+	显示封面: "Show cover",
+	显示题目列表: "Show problem list",
+	显示页眉页脚: "Show headers and footers",
+	"首页补充说明 · Markdown": "Cover notes · Markdown",
+	"填写比赛时长、注意事项或主办方说明…": "Add contest duration, instructions, or organizer notes…",
+	"保存 PDF 配置": "Save PDF settings",
+	"正在生成 PDF…": "Generating PDF…",
+	预览题册: "Preview booklet",
+	"配置尚未保存，保存后可预览和导出。": "Save your changes before previewing or exporting.",
+	竞赛题册预览: "Contest booklet preview",
+	"PDF 生成失败。": "Could not generate the PDF.",
+	判题方式: "Judging mode",
+	"竞赛只能使用已选择赛制、通过完整判题验证的新发布版本；旧题请重新验证并发布。":
+		"Contests require a scoring mode and complete judge verification. Verify and publish older problems again.",
+	普通题: "Batch problem",
+	交互题: "Interactive problem",
+	交互器输入: "Interactor input",
+	"有输入（私有测试数据）": "Private test input",
+	"无输入（一个空测试点）": "No input (one empty case)",
+	程序与交互器: "Programs and interactor",
+	"交互器 · C++ testlib": "Interactor · C++ testlib",
+	编译交互器: "Compile interactor",
+	标程交互验证: "Reference interaction",
+	第二标准程序交互验证: "Second reference interaction",
+	交互系统错误: "Interaction system error",
+	导入交互器模板: "Import interactor template",
+	导入配套标程: "Import matching reference",
+	"覆盖现有交互器代码？": "Replace the existing interactor?",
+	"覆盖现有标准程序？": "Replace the existing reference program?",
+	自动补空答案: "Automatic empty answer",
+	"· 双向交互已测试": "· Bidirectional interaction verified",
+	"交互样例仅说明通信过程，不作为普通输入输出测试；请在题面中说明交互协议。":
+		"Interactive samples only illustrate the conversation, not batch tests. Describe the protocol in the statement.",
+	"自动使用一个严格空的 .in 和空答案，不注入 seed。已有数据与分组保留，切回有输入模式即可恢复。":
+		"Uses one strictly empty input and answer, without a seed. Existing data and subtasks are preserved for switching back.",
+	"上传 .in 作为交互器私有输入；无需答案，发布时自动补空答案。选手只能通过 stdin/stdout 与交互器通信。":
+		"Upload private .in files for the interactor. Empty answers are supplied on release. Contestants communicate only through stdin/stdout.",
+	"Gen 重跑确认输入可复现，再由标程与交互器双向验证。生成的答案文件为空。":
+		"Generation is repeated to check reproducibility, then verified by a reference interaction. Answer files remain empty.",
+	"标准程序和交互器必填；第二标准程序可选，独立执行同一交互协议。发送消息后必须 flush。":
+		"A reference and interactor are required. An optional second reference runs independently. Flush after sending messages.",
+	"模板使用固定场景和严格空输入，不使用时间随机数。":
+		"The template uses a fixed scenario and strictly empty input, without time-based randomness.",
+	"模板从 inf 读取 1–1000000 的整数；用 cout 发送，ouf 读取选手回答，quitf 判分。":
+		"The template reads an integer from 1 to 1000000 through inf, sends with cout, reads replies through ouf, and judges with quitf.",
+	"标程必须通过全部交互测试点才可发布；公开样例不参与普通输入输出比对。":
+		"The reference must pass every interaction before release. Public samples are not checked as batch input/output.",
 	联网搜索: "Web search",
 	启用联网搜索: "Enable web search",
 	搜索服务: "Search provider",
@@ -262,11 +367,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"手动数字测试点已重新编号。": "Manual numeric test cases renumbered.",
 	"Gen 数据已移除。": "Generated test data removed.",
 	"附件读取失败。": "Could not read the attachments.",
-	"DOMjudge PDF 已上传；重新验证后会进入新发布包。":
-		"DOMjudge PDF uploaded. Verify again to include it in the next release.",
-	"PDF 上传失败。": "Could not upload the PDF.",
-	"已移除 DOMjudge PDF；重新验证后生效。": "DOMjudge PDF removed. Verify again to apply this change.",
-	"移除 PDF 失败。": "Could not remove the PDF.",
 	"删除文件失败。": "Could not delete the file.",
 	"正在编译 Gen 和标程，逐条生成并复现检查…":
 		"Compiling the generator and reference solution, then checking reproducibility…",
@@ -337,13 +437,9 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"（历史版本）": "(historical version)",
 	制题步骤: "Authoring steps",
 	"Markdown 题面": "Markdown statement",
-	"公开样例在“测试数据”中配置": "Configure public samples in Test data",
-	"粘贴题目描述、输入格式、输出格式和约束…": "Write the description, input, output, and constraints…",
 	"Hydro 题面预览": "Statement preview",
 	公开样例: "Public samples",
 	题面: "Statement",
-	"独立保存输入与输出，不自动拼入 Markdown；导出 DOMjudge 时作为公开测试数据。":
-		"Input and output are saved separately from Markdown and exported as public test data for DOMjudge.",
 	"样例 {0} 输入": "Sample {0} input",
 	"样例 {0} 输出": "Sample {0} output",
 	私有测试点: "Private test cases",
@@ -478,10 +574,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	题面附件: "Statement attachments",
 	"在题面中使用 file://文件名 引用。": "Reference attachments with file://filename in the statement.",
 	上传附件: "Upload attachments",
-	"DOMjudge 包默认不含题面；上传 PDF 后才会附带原文件。":
-		"DOMjudge packages include a statement only when you upload a PDF.",
-	"替换 PDF": "Replace PDF",
-	"上传 PDF": "Upload PDF",
 	运行状态: "Environment",
 	"正在检测 Linux 沙箱…": "Checking Linux sandbox…",
 	"草稿版本：": "Problem revision:",
@@ -670,8 +762,8 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	选择已验证题目: "Select a verified problem",
 	"选择已发布题目…": "Select a published problem…",
 	加入题目: "Add problem",
-	"个旧发布版本需重新通过完整 Checker 验证后才能加入竞赛。":
-		"legacy releases need full checker verification before joining a contest.",
+	"个旧发布版本需重新通过完整判题验证后才能加入竞赛。":
+		"legacy releases need complete judge verification before joining a contest.",
 	"尚未加入题目。请先在制题工作台完整验证并发布。":
 		"No problems added yet. Verify and publish a problem in the workspace first.",
 	题序: "Order",
@@ -915,10 +1007,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 
 	"附件已上传，可一键复制引用。": "Attachments uploaded. You can now copy their references.",
 
-	"预览 PDF": "Preview PDF",
-
-	"DOMjudge PDF 预览": "DOMjudge PDF preview",
-
 	系统任务: "System tasks",
 
 	"{0} 次任务": "Runs: {0}",
@@ -945,8 +1033,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 
 	"与题目发布版本绑定；删除竞赛后仍可下载。":
 		"Tied to released problem versions. Downloads remain available after the contest is deleted.",
-
-	"题面 PDF 预览": "Problem PDF preview",
 
 	"下载 PDF": "Download PDF",
 

@@ -6,17 +6,16 @@ export function sandboxUser(uid = process.getuid?.(), gid = process.getgid?.()):
 	return uid && uid > 0 ? `${uid}:${gid && gid > 0 ? gid : uid}` : "65534:65534";
 }
 
-export function sandboxRuntimeArgs(): string[] {
-	const policy = sandboxPolicy();
+export function sandboxRuntimeArgs(budget = sandboxPolicy()): string[] {
 	return [
 		"--network",
 		"none",
 		"--cpus",
-		String(policy.cpus),
+		String(budget.cpus),
 		"--memory",
-		`${policy.memoryMb}m`,
+		`${budget.memoryMb}m`,
 		"--memory-swap",
-		`${policy.memoryMb}m`,
+		`${budget.memoryMb}m`,
 		"--pids-limit",
 		"128",
 		"--read-only",

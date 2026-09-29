@@ -22,12 +22,23 @@ afterEach(async () => {
 	await rm(root, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(structuredStatement = false) {
 	const project = await source.create("acm");
 	await source.update(project.id, {
 		title: "Original",
 		slug: "original",
 		statement: "Statement",
+		...(structuredStatement
+			? {
+					statementSections: {
+						description: "Original description",
+						input: "Input",
+						output: "Output",
+						interaction: "Hidden protocol",
+						notes: "Notes",
+					},
+				}
+			: {}),
 		reference: { language: "cpp17", code: "code" },
 		attachments: [{ name: "note.txt", contentBase64: Buffer.from("attachment").toString("base64") }],
 	});
@@ -99,12 +110,13 @@ async function fixture() {
 
 describe("problem copies and release restoration", () => {
 	it("copies current content and all test origins independently, excluding releases and reports", async () => {
-		const { project } = await fixture();
+		const { project } = await fixture(true);
 		const copied = await copyProject(source, project.id, target, project.revision);
 		expect(copied.id).not.toBe(project.id);
 		expect(copied).toMatchObject({
 			title: project.title,
 			statement: project.statement,
+			statementSections: project.statementSections,
 			reference: project.reference,
 			attachments: project.attachments,
 			cases: project.cases,
@@ -129,6 +141,7 @@ describe("problem copies and release restoration", () => {
 		await source.update(project.id, {
 			title: "Mistake",
 			statement: "Wrong",
+			statementSections: { description: "New sections", input: "", output: "", interaction: "", notes: "" },
 			reference: { language: "python3", code: "wrong" },
 			oracle: { language: "java", code: "unexpected" },
 			attachments: [],
@@ -149,6 +162,7 @@ describe("problem copies and release restoration", () => {
 			generatedFromHash: project.generatedFromHash,
 		});
 		expect(restored.oracle).toBeUndefined();
+		expect(restored.statementSections).toBeUndefined();
 		expect(restored.lastReport).toBeUndefined();
 		expect(restored.latestReleaseId).toBe(release.id);
 		expect(await source.releases.listReleases()).toHaveLength(1);
@@ -157,6 +171,24 @@ describe("problem copies and release restoration", () => {
 		await expect(
 			source.update(project.id, { title: "Stale window", expectedRevision: before.revision }),
 		).rejects.toMatchObject({ statusCode: 409 });
+	});
+	it("restores structured sections and inactive interactive text from the immutable source", async () => {
+		const { project, release } = await fixture(true);
+		const changed = await source.update(project.id, {
+			judgingMode: "interactive",
+			statementSections: {
+				description: "New description",
+				input: "",
+				output: "",
+				interaction: "New protocol",
+				notes: "",
+			},
+		});
+		const restored = await restoreProject(source, project.id, release.id, changed.revision);
+		expect(restored.statementSections).toEqual(project.statementSections);
+		expect(restored.statement).toBe(project.statement);
+		expect(restored.judgingMode).toBe("default");
+		expect(restored.lastReport).toBeUndefined();
 	});
 	it("rejects missing revisions, stale versions, and releases belonging to another problem", async () => {
 		const { project, release } = await fixture();

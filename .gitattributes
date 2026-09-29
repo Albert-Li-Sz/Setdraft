@@ -21,3 +21,5 @@
 *.gz binary
 *.woff binary
 *.woff2 binary
+
+packages/hydro-server/assets/** -text -whitespace

@@ -1,11 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isSafeFlatName, writeStoredArchiveFromFiles } from "@setdraft/authoring";
-import { type ContestDraft, type ContestFormat, type ContestRelease, isContestReadyRelease } from "@setdraft/contracts";
+import {
+	type ContestDraft,
+	type ContestFormat,
+	type ContestRelease,
+	isContestReadyRelease,
+	isProjectSnapshot,
+} from "@setdraft/contracts";
+import { compileContestPdfs } from "./contest-pdf.ts";
+import type { ContestPdfDocument } from "./contest-pdf-document.ts";
+import { readContestPdfOptions } from "./contest-pdf-options.ts";
 import { domjudgeProblemId } from "./domjudge-export.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { ManualProjectError, type ManualProjectStore, type ManualRelease } from "./manual-projects.ts";
+import { hashFile } from "./project-files.ts";
 import { releaseName } from "./releases.ts";
 
 export type { ContestDraft, ContestFormat, ContestRelease } from "@setdraft/contracts";
@@ -103,6 +113,7 @@ export class ContestStore {
 			releaseIds: [],
 			colors: {},
 			colorNames: {},
+			pdf: readContestPdfOptions(input.pdf),
 			createdAt: now,
 			updatedAt: now,
 		};
@@ -115,7 +126,12 @@ export class ContestStore {
 		const document = await this.projects.database.getVersioned<ContestDraft>("contest", id);
 		if (!document) throw new ManualProjectError("竞赛不存在。", 404);
 		const { value: draft, version } = document;
-		const snapshot = { ...draft, revision: draft.revision ?? 0, colorNames: draft.colorNames ?? {} };
+		const snapshot = {
+			...draft,
+			revision: draft.revision ?? 0,
+			colorNames: draft.colorNames ?? {},
+			pdf: readContestPdfOptions(draft.pdf),
+		};
 		if (version !== undefined) this.documentVersions.set(snapshot, version);
 		return snapshot;
 	}
@@ -134,7 +150,7 @@ export class ContestStore {
 		const releases = await Promise.all(releaseIds.map(async (id) => await this.projects.releases.release(id)));
 		if (releases.some((release) => !isContestReadyRelease(release))) {
 			throw new ManualProjectError(
-				"竞赛只能使用已选择赛制、通过完整 Checker 验证的新发布版本；旧题请重新验证并发布。",
+				"竞赛只能使用已选择赛制、通过完整判题验证的新发布版本；旧题请重新验证并发布。",
 				422,
 			);
 		}
@@ -211,11 +227,74 @@ export class ContestStore {
 			releaseIds,
 			colors: normalizedColors,
 			colorNames: normalizedColorNames,
+			pdf: input.pdf === undefined ? draft.pdf : readContestPdfOptions(input.pdf),
 			revision: draft.revision + 1,
 			updatedAt: new Date().toISOString(),
 		});
 		await this.save(updated);
 		return updated;
+	}
+
+	private async pdfDocument(draft: ContestDraft, releases: ManualRelease[]): Promise<ContestPdfDocument> {
+		const options = readContestPdfOptions(draft.pdf);
+		const problems: ContestPdfDocument["problems"] = [];
+		let totalBytes = Buffer.byteLength(JSON.stringify({ title: draft.title, options, problems }));
+		for (const [index, release] of releases.entries()) {
+			const sourceRoot = join(this.projects.releaseDirectory(release.id), "source");
+			const projectPath = join(sourceRoot, "project.json");
+			const manifestPath = join(sourceRoot, "manifest.json");
+			if ((await stat(projectPath)).size > 32 * 1024 * 1024 || (await stat(manifestPath)).size > 2 * 1024 * 1024)
+				throw new ManualProjectError("发布源快照超过 PDF 读取限制。", 422);
+			const manifest: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
+			if (
+				!manifest ||
+				typeof manifest !== "object" ||
+				!("projectId" in manifest) ||
+				manifest.projectId !== release.projectId ||
+				!("projectHash" in manifest) ||
+				manifest.projectHash !== release.projectHash ||
+				!("files" in manifest) ||
+				!manifest.files ||
+				typeof manifest.files !== "object" ||
+				!("project.json" in manifest.files) ||
+				manifest.files["project.json"] !== (await hashFile(projectPath))
+			)
+				throw new ManualProjectError("发布包题面快照校验失败。", 422);
+			const raw: unknown = JSON.parse(await readFile(projectPath, "utf8"));
+			if (!raw || typeof raw !== "object" || Array.isArray(raw))
+				throw new ManualProjectError("发布包题面快照无效。", 422);
+			const project = { ...raw, cases: [], orphanOutputs: [] };
+			if (!isProjectSnapshot(project) || project.id !== release.projectId || project.revision !== release.revision)
+				throw new ManualProjectError("发布包题面快照无效。", 422);
+			const problem = {
+				label: labelAt(index),
+				title: release.title,
+				statement: project.statementSections ? "" : project.statement,
+				statementSections: project.statementSections,
+				judgingMode: project.judgingMode,
+				samples: project.samples,
+				attachments: project.attachments,
+				timeLimit: project.timeLimit,
+				memoryLimit: project.memoryLimit,
+			};
+			totalBytes += Buffer.byteLength(JSON.stringify(problem)) + 1;
+			if (totalBytes > 20 * 1024 * 1024) throw new ManualProjectError("PDF 题面与附件合计不能超过 20 MiB。", 422);
+			problems.push(problem);
+		}
+		return { title: draft.title, options, problems };
+	}
+
+	async previewPdf(id: string, expectedRevision: unknown, signal?: AbortSignal): Promise<Buffer> {
+		const draft = await this.get(id);
+		if (draft.revision !== expectedRevision) throw new ManualProjectError("竞赛版本已变化，请保存配置后重试。", 409);
+		if (!draft.releaseIds.length) throw new ManualProjectError("请先加入至少一道题。", 422);
+		const document = await this.pdfDocument(draft, await this.selectedReleases(draft.releaseIds));
+		const result = await compileContestPdfs(this.draftDirectory(id), document, signal, true);
+		try {
+			return await readFile(result.booklet);
+		} finally {
+			await result.cleanup();
+		}
 	}
 
 	async export(id: string, format: ContestFormat, context?: ExecutionContext, name?: string): Promise<ContestRelease> {
@@ -224,6 +303,7 @@ export class ContestStore {
 		let stage: string | undefined;
 		let releaseRoot: string | undefined;
 		let archiveId: string | undefined;
+		let pdfs: Awaited<ReturnType<typeof compileContestPdfs>> | undefined;
 		try {
 			const draft = await this.get(id);
 			if (draft.releaseIds.length === 0) throw new ManualProjectError("请先加入至少一道题。", 422);
@@ -236,6 +316,12 @@ export class ContestStore {
 			await mkdir(releaseRoot, { recursive: true });
 			stage = await mkdtemp(join(releaseRoot, ".stage-"));
 			const files = new Map<string, string>();
+			if (draft.pdf?.enabled) {
+				context?.emit("pdf", "正在生成竞赛题册与单题 PDF…");
+				pdfs = await compileContestPdfs(stage, await this.pdfDocument(draft, releases), context?.signal);
+				files.set("booklet.pdf", pdfs.booklet);
+				for (const [label, path] of pdfs.problems) files.set(`statements/${label}.pdf`, path);
+			}
 			const problems = [];
 			const metadata = [];
 			for (const [index, release] of releases.entries()) {
@@ -253,7 +339,12 @@ export class ContestStore {
 					...(colorName ? { colorName } : {}),
 				});
 				if (format === "domjudge") {
-					const archive = await this.projects.releases.exportDomjudge(release.id, context);
+					const pdfPath = pdfs?.problems.get(label);
+					const archive = await this.projects.releases.exportDomjudge(
+						release.id,
+						context,
+						pdfPath ? { pdfPath, archivePath: join(stage, `${label}.zip`) } : undefined,
+					);
 					files.set(`problems/${label}.zip`, archive.path);
 					metadata.push(
 						`- id: ${domjudgeProblemId(release.id)}\n  label: ${label}\n  name: ${JSON.stringify(release.title)}\n  color: ${JSON.stringify(colorName)}\n  rgb: '${color}'`,
@@ -270,6 +361,7 @@ export class ContestStore {
 				title: draft.title,
 				slug: draft.slug,
 				format,
+				...(draft.pdf?.enabled ? { pdf: draft.pdf } : {}),
 				problems,
 				createdAt: new Date().toISOString(),
 			};
@@ -279,9 +371,12 @@ export class ContestStore {
 			const instructionsPath = join(stage, "README.txt");
 			await writeFile(
 				instructionsPath,
-				format === "domjudge"
+				(format === "domjudge"
 					? "先在 DOMjudge 中创建竞赛，再导入 problems.yaml，然后逐个上传 problems/ 下的题目 ZIP。竞赛赛程由 DOMjudge 管理。\n"
-					: "逐个导入 problems/ 下的 Hydro 题目 ZIP，再按 manifest.json 中的顺序加入 Hydro 竞赛。\n",
+					: "逐个导入 problems/ 下的 Hydro 题目 ZIP，再按 manifest.json 中的顺序加入 Hydro 竞赛。\n") +
+					(pdfs
+						? "booklet.pdf 为完整题册，statements/ 为单题 PDF；DOMjudge 题目 ZIP 已附带对应的单题题面。\n"
+						: ""),
 			);
 			files.set("README.txt", instructionsPath);
 			if (format === "domjudge") {
@@ -299,6 +394,16 @@ export class ContestStore {
 						name: "bundle.zip",
 						source: { path: join(releaseRoot, "bundle.zip") },
 					},
+					...(pdfs
+						? [
+								{
+									ownerKind: "contest-bundle",
+									ownerId: archiveId,
+									name: "booklet.pdf",
+									source: { path: pdfs.booklet },
+								},
+							]
+						: []),
 				],
 				async () => {
 					context?.signal.throwIfAborted();
@@ -311,13 +416,23 @@ export class ContestStore {
 			return contestRelease;
 		} finally {
 			this.busy.delete(id);
-			if (stage) await rm(stage, { recursive: true, force: true });
-			if (releaseRoot) {
-				if (archiveId) {
-					await this.projects.database.delete("contest-release", archiveId);
-					await this.projects.database.removeOwnerFiles("contest-bundle", archiveId);
+			try {
+				await pdfs?.cleanup();
+			} finally {
+				try {
+					if (stage) await rm(stage, { recursive: true, force: true });
+				} finally {
+					if (releaseRoot) {
+						try {
+							if (archiveId) {
+								await this.projects.database.delete("contest-release", archiveId);
+								await this.projects.database.removeOwnerFiles("contest-bundle", archiveId);
+							}
+						} finally {
+							await rm(releaseRoot, { recursive: true, force: true });
+						}
+					}
 				}
-				await rm(releaseRoot, { recursive: true, force: true });
 			}
 		}
 	}
@@ -333,12 +448,20 @@ export class ContestStore {
 		return releases.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 	}
 
-	async releaseFile(id: string): Promise<{ path: string; size: number; name: string }> {
+	async releaseFile(
+		id: string,
+		kind: "bundle" | "pdf" = "bundle",
+	): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
+		if (kind === "pdf" && !release.pdf?.enabled) throw new ManualProjectError("该竞赛包未包含 PDF。", 404);
+		const name = kind === "pdf" ? "booklet.pdf" : "bundle.zip";
 		const path =
-			(await this.projects.database.filePath("contest-bundle", id, "bundle.zip")) ??
-			join(this.releaseDirectory(id), "bundle.zip");
-		return { path, size: (await stat(path)).size, name: `${release.slug}.${release.format}.contest.zip` };
+			(await this.projects.database.filePath("contest-bundle", id, name)) ?? join(this.releaseDirectory(id), name);
+		return {
+			path,
+			size: (await stat(path)).size,
+			name: kind === "pdf" ? `${release.slug}.pdf` : `${release.slug}.${release.format}.contest.zip`,
+		};
 	}
 
 	async delete(id: string): Promise<void> {

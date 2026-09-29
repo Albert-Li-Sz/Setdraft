@@ -3,6 +3,7 @@ import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CppLanguage, ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { interactiveContainerNames, runInteractiveSandbox } from "./interactive-sandbox.ts";
 import { sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 export interface SandboxCase {
@@ -18,6 +19,7 @@ export interface SandboxInput {
 	stage: string;
 	image: string;
 	reference: ManualProgram;
+	interactor?: { language: CppLanguage; code: string };
 	oracle?: ManualProgram;
 	generator?: string;
 	generatorStandard: CppLanguage;
@@ -277,7 +279,7 @@ export { cppLanguages } from "@setdraft/contracts";
 
 export function removeTaskContainer(taskId: string): Promise<void> {
 	return new Promise((done) => {
-		const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${taskId}`], {
+		const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${taskId}`, ...interactiveContainerNames(taskId)], {
 			stdio: "ignore",
 			timeout: 10_000,
 			killSignal: "SIGKILL",
@@ -350,6 +352,7 @@ function runDocker(
 }
 
 export async function runManualSandbox(input: SandboxInput): Promise<ManualSandboxReport> {
+	if (input.interactor) return runInteractiveSandbox(input);
 	const context = input.context;
 	context?.signal.throwIfAborted();
 	context?.emit("stage", input.mode === "generate" ? "编译并生成测试数据" : "执行完整验证");

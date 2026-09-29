@@ -1,0 +1,167 @@
+.authoring-guide-layout {
+	display: grid;
+	grid-template-columns: 236px minmax(0, 1fr);
+	gap: 40px;
+	align-items: start;
+}
+
+.authoring-guide-sidebar {
+	position: sticky;
+	top: 84px;
+	min-width: 0;
+}
+
+.authoring-guide-count {
+	display: block;
+	margin: 12px 0;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.authoring-guide-toc {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-height: calc(100dvh - 200px);
+	overflow: auto;
+	padding: 4px;
+	margin: -4px;
+}
+
+.authoring-guide-toc button {
+	border: 0;
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: var(--muted);
+	text-align: left;
+	font-size: 13px;
+	line-height: 1.6;
+	min-height: var(--control-height);
+	padding: 8px 10px;
+}
+
+.authoring-guide-toc button:hover,
+.authoring-guide-toc button:focus-visible {
+	background: var(--surface-subtle);
+	color: var(--ink);
+}
+
+.authoring-guide-content {
+	min-width: 0;
+	font-size: 14px;
+	line-height: 1.9;
+	overflow-wrap: anywhere;
+}
+
+.authoring-guide-content > p:first-child {
+	margin-top: 0;
+	color: var(--muted);
+}
+
+.authoring-guide-content section {
+	padding: 24px 0;
+	border-bottom: 1px solid var(--line);
+	scroll-margin-top: 84px;
+}
+
+.authoring-guide-content h2 {
+	margin: 0 0 16px;
+	font-size: 20px;
+	font-weight: 600;
+	line-height: 1.5;
+}
+
+.authoring-guide-content p {
+	margin: 12px 0;
+}
+
+.authoring-guide-content a {
+	color: inherit;
+	text-underline-offset: 3px;
+}
+
+.authoring-guide-content pre {
+	padding: 16px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--surface-subtle);
+	overflow: auto;
+	font-size: 12px;
+	line-height: 1.8;
+}
+
+.authoring-guide-content code {
+	font-size: 0.9em;
+	background: var(--surface-subtle);
+	border-radius: 4px;
+	padding: 2px 4px;
+}
+
+.authoring-guide-content pre code {
+	padding: 0;
+	font-size: inherit;
+}
+
+.authoring-guide-content table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	margin: 16px 0;
+}
+
+.authoring-guide-content th,
+.authoring-guide-content td {
+	border: 1px solid var(--line);
+	padding: 10px 12px;
+	text-align: left;
+	vertical-align: top;
+}
+
+.authoring-guide-content th {
+	background: var(--surface-subtle);
+	font-weight: 600;
+}
+
+.authoring-guide-content ul,
+.authoring-guide-content ol {
+	padding-left: 24px;
+}
+
+.authoring-guide-content li + li {
+	margin-top: 8px;
+}
+
+.authoring-guide-empty {
+	padding: 24px 0;
+	color: var(--muted);
+}
+
+@media (max-width: 1000px) {
+	.authoring-guide-layout {
+		grid-template-columns: 200px minmax(0, 1fr);
+		gap: 24px;
+	}
+}
+
+@media (max-width: 720px) {
+	.authoring-guide .page-heading {
+		flex-direction: column;
+		gap: 16px;
+	}
+	.authoring-guide-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.authoring-guide-sidebar {
+		position: static;
+	}
+
+	.authoring-guide-toc {
+		max-height: 200px;
+	}
+
+	.authoring-guide-content th,
+	.authoring-guide-content td {
+		padding: 8px;
+	}
+}

@@ -146,10 +146,12 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 
 ## 制题流程
 
-1. 新建题目时选择 ACM 或 OI 赛制，然后编辑 Markdown 题面和附件。
+完整操作说明见 [出题文档](docs/authoring-guide.md)，工作台“复制给用户”旁的“出题文档”按钮可在新标签页打开站内版本。以下是普通题流程；交互题见下节。
+
+1. 新建题目时选择 ACM 或 OI 赛制，按“描述、输入、输出、提示、样例”分栏编辑 Markdown 题面和附件。
 2. 手动填写或上传 `.in/.out/.ans` 测试点，或上传 C++ Gen 和逐行 `gen ...` 脚本。
    缺少输出时由标准程序生成，生成数据会排在手动数据之后。
-   公开样例在“测试数据”中独立配置，不自动拼入 Markdown 题面；DOMjudge 导出到 `data/sample`，私有测试点导出到 `data/secret`。
+   公开样例在“题面 → 样例”中配置，结构化题面、预览和 PDF 会包含样例；DOMjudge 导出到 `data/sample`，私有测试点导出到 `data/secret`。旧版完整 Markdown 保留在“描述”，可自行整理到对应栏目。
 3. 编写标准程序；可选第二标准程序、testlib Validator 和 C++ testlib Checker。默认
    Checker 是文本比较，支持 C++11/14/17/20/23/26。
 4. 点击“验证并打包”，为发布包命名。后台任务记录阶段、测试点和日志；离开页面仍可在“任务”查看、
@@ -163,9 +165,35 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 “复制给用户”将当前题目、代码、附件和测试数据复制到另一位启用用户的题目中心。接收方拥有独立题目 ID，
 不继承历史发布包、报告、聊天或任务；双方后续修改互不影响。接收者不会获得原题目的访问权限。
 
-已通过验证的题目可以在“竞赛列表”中组成独立竞赛，分别维护名称、题序和颜色。生成竞赛包时填写日志名称，历史包保存在对应竞赛内部。任务页按题目或竞赛分组，每次运行单独显示，点击打开日志弹窗。Hydro 竞赛包按题序包含多题；DOMjudge 竞赛包
-只接受 ACM 题，包含 `problems.yaml`、气球颜色和逐题 ZIP，不包含题面。为 DOMjudge
-题目单独上传 PDF 后，PDF 才会写入题目包，并支持站内弹窗预览；PDF 渲染器、字体和字符映射随应用打包，不依赖外部 CDN。OI 题目只可导出到 Hydro。
+已通过验证的题目可以在“竞赛列表”中组成独立竞赛，分别维护名称、题序和颜色。生成竞赛包时填写日志名称，历史包保存在对应竞赛内部。任务页按题目或竞赛分组，每次运行单独显示，点击打开日志弹窗。Hydro 竞赛包按题序包含多题；DOMjudge 竞赛包只接受 ACM 题，包含 `problems.yaml`、气球颜色和逐题 ZIP。OI 题目只可导出到 Hydro。
+
+在竞赛内开启“竞赛包附带 PDF”，配置封面副标题、署名、日期、首页 Markdown、栏目语言、题目列表和页眉页脚，保存后预览完整题册。题册来自所选发布版本而非未发布草稿。生成的竞赛包包含 `booklet.pdf` 与 `statements/A.pdf` 等单题 PDF，DOMjudge 逐题 ZIP 自动附带对应 PDF，替代旧的题目 PDF 上传入口；旧发布包不变。关闭选项则不生成新题册。PDF 直接复用 XCPC 原模板与原字体，保留首页编辑；内置 Typst、公式适配和字体，站内预览不依赖外部 CDN。题目列表属于封面，样例保留换行但不自动折行。
+
+### 交互题
+
+在“题目配置”开启“交互题”，ACM/OI 计分方式不变，题面切换为“描述、交互描述、提示、样例”。在“测试数据”中选择：
+
+- **半对拍（有输入）**：上传 `.in` 或运行 Gen，输入只交给交互器；可选 testlib Validator。无需标准答案，发布时使用空答案文件。仍由交互器双向通信，不是普通 Checker 的单向对拍。
+- **全交互（无输入）**：自动使用一个零字节 `.in` 和零字节答案，不注入 seed。生成器、输入校验器和原测试分组不参与运行；已有数据、程序及分组不会删除，切回有输入模式后恢复使用。
+
+“程序与交互器”提供 C++/testlib 交互器编辑器、C++ 标准选择及可运行模板，也可导入配套标程。
+有输入模板读取一个 1–1000000 的整数；无输入模板固定发送 21。标程回复两倍的数值。
+模板不使用时间随机数。交互器用 `inf` 读取私有输入、`cout` 发送消息、`ouf` 读取选手回答，
+用 `quitf(_ok, ...)` / `quitf(_wa, ...)` 判分；双方发送消息后必须 flush。标程支持 C++、Python、Java。
+交互样例仅用于说明协议，不按普通输入输出配对执行，也不会导出为 DOMjudge 样例测试点；在“交互描述”中说明消息顺序、格式和结束条件。
+
+验证时双方分开编译、分容器运行；选手侧不挂载私有输入、答案或交互器源码。
+验证限制运行时间、输出和通信日志，异常或取消后先清理整组容器再释放任务名额。
+标程及已配置的第二标准程序必须通过全部交互测试点并获得满分才能发布。
+切换题型、输入模式或修改交互器后须重新验证；旧项目缺少新配置时仍按普通题处理。
+
+Hydro 包包含 `type: interactive`、指定 C++ 语言的交互器源码和测试数据，不附加普通 Checker。
+DOMjudge 仅支持 ACM，使用 `validation: custom interactive` 和 `output_validators/interactor/{build,run}`；
+通过 ZIP 导入注册 executable，无需预先填写 `special_run` ID。testlib AC/WA 适配为 42/43，裁判异常保留为系统错误。
+目标判题环境必须支持所选 C++ 标准；Hydro 的 C++23/26 语言可能需要管理员自行配置，C++26 仍属实验性。
+不支持将交互题导出到 FPS/QDUOJ，也不新增通信题、grader 或 multi-pass。
+
+使用与验收步骤见 [交互题说明](docs/interactive-problems.md)。本地沙箱和适配器测试不等同于在 Hydro / DOMjudge 9.0.1 上实际导入并提交的验收。
 
 ## 沙箱调度
 
@@ -185,8 +213,8 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 | --- | --- | --- |
 | `SETDRAFT_SANDBOX_CONCURRENCY` | `2` | 1–64，全站执行名额 |
 | `SETDRAFT_SANDBOX_CONCURRENCY_PER_USER` | `1` | 1–64，每人同时执行名额，实际受全站并发限制 |
-| `SETDRAFT_SANDBOX_CPUS` | `1` | 1–64，每个容器的 CPU 配额 |
-| `SETDRAFT_SANDBOX_MEMORY_MB` | `2048` | 512–131072，每个容器的内存上限（MiB），不另加 swap |
+| `SETDRAFT_SANDBOX_CPUS` | `1` | 1–64，每个任务的 CPU 配额；交互运行时双方各占一半 |
+| `SETDRAFT_SANDBOX_MEMORY_MB` | `2048` | 512–131072，每个任务的内存预算（MiB），不另加 swap |
 | `SETDRAFT_SANDBOX_MAX_OUTSTANDING` | `64` | 1–1024，全站未完成任务上限 |
 | `SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER` | `8` | 1–128，每人未完成任务上限 |
 | `SETDRAFT_SANDBOX_QUEUE_TIMEOUT_MS` | `1800000` | 最长排队时间，毫秒 |
@@ -195,6 +223,9 @@ Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓
 
 时间上限允许 1–86400000 毫秒；从入队或开始执行时分别计时。容器默认 1 CPU / 2 GiB，
 仍禁网、只读根文件系统、无 capabilities、禁止提权。Linux 原生部署使用服务进程的非 root UID/GID；服务为 root 时容器仍使用 nobody，避免嵌套输出目录的属主导致清理失败。
+
+交互编译串行使用任务预算，运行时交互器上限 512 MiB，选手容器为题目内存加 64 MiB（Java 加 256 MiB），
+总和不能超过任务预算；预算不足会明确失败。选手的非 Java 地址空间限制及 Java 堆限制仍按题目配置执行。
 
 高配部署可以在 `.env` 中提高并发，例如 16 核 / 32 GiB 机器可从以下设置开始压测：
 
@@ -250,4 +281,17 @@ SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER=16
 [Testlib](https://github.com/MikeMirzayanov/testlib) 的生成和校验能力，以及
 [Codeforces Polygon](https://polygon.codeforces.com/) 的制题流程思路。AI 底层协议来自
 [pi](https://github.com/earendil-works/pi) 的 `pi-ai` 和 telemetry 库。本项目与这些
-项目没有官方隶属关系，采用 [MIT 许可](LICENSE)。
+项目没有官方隶属关系。竞赛 PDF 模板直接改编自
+[xcpc-statement-generator](https://github.com/lihaoze123/xcpc-statement-generator)
+（固定版本 `84d82230`），使用原模板和八款原字体。
+
+## 许可与源码
+
+集成版本采用 [AGPL-3.0](LICENSES/AGPL-3.0.txt)，原有 [MIT 声明](LICENSE) 和第三方许可保留。
+详见 [COPYING.md](COPYING.md)。Web 构建前自动生成对应源码归档，侧栏和 PDF 配置的“开源与源码”
+入口提供免登录下载；部署修改版本时必须同步更新并保留该源码入口。源码归档包含构建/安装脚本和锁文件，
+排除部署环境文件、用户数据、依赖安装目录及生成产物；发布前应检查归档，勿把密钥放在源码目录。
+
+字体不随模板改授 AGPL：CMU / New Computer Modern 保留 OFL / GUST 条款。
+上游未提供四款方正字体的独立分发或嵌入授权文件，公开镜像、源码归档和 PDF 前需另行确认相关权利。
+字体来源、校验和与许可记录见 [字体声明](packages/hydro-server/assets/xcpc/FONT-NOTICES.md)。

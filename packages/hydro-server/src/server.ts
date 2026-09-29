@@ -399,12 +399,34 @@ export async function createHydroServer(
 				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
-			const contestRoute = /^\/api\/contests\/([^/]+)(?:\/(export))?$/u.exec(url.pathname);
+			const contestRoute = /^\/api\/contests\/([^/]+)(?:\/(export|pdf-preview))?$/u.exec(url.pathname);
 			if (contestRoute) {
 				const id = contestRoute[1];
 				if (request.method === "GET" && !contestRoute[2]) sendJson(response, 200, await contests.get(id));
 				else if (request.method === "PUT" && !contestRoute[2]) {
 					sendJson(response, 200, await contests.update(id, await readJson(request, maxRequestBytes)));
+				} else if (request.method === "POST" && contestRoute[2] === "pdf-preview") {
+					const value = await readJson(request, 1024);
+					const revision =
+						value && typeof value === "object" && !Array.isArray(value)
+							? (value as Record<string, unknown>).expectedRevision
+							: undefined;
+					const controller = new AbortController();
+					const abort = () => controller.abort();
+					response.once("close", abort);
+					try {
+						const bytes = await contests.previewPdf(id, revision, controller.signal);
+						if (!controller.signal.aborted) {
+							response.writeHead(200, {
+								"content-type": "application/pdf",
+								"content-length": bytes.length,
+								"cache-control": "no-store",
+							});
+							response.end(bytes);
+						}
+					} finally {
+						response.off("close", abort);
+					}
 				} else if (request.method === "POST" && contestRoute[2] === "export") {
 					const value = await readJson(request, maxRequestBytes);
 					const format =
@@ -425,11 +447,18 @@ export async function createHydroServer(
 				sendJson(response, 200, { releases: await contests.listReleases() });
 				return;
 			}
-			const contestReleaseRoute = /^\/api\/contest-releases\/([^/]+)\/download$/u.exec(url.pathname);
+			const contestReleaseRoute = /^\/api\/contest-releases\/([^/]+)\/(download|pdf)$/u.exec(url.pathname);
 			if (contestReleaseRoute) {
 				if (request.method === "GET") {
-					const file = await contests.releaseFile(contestReleaseRoute[1]);
-					await sendFile(response, file.path, file.name, file.size);
+					const pdf = contestReleaseRoute[2] === "pdf";
+					const file = await contests.releaseFile(contestReleaseRoute[1], pdf ? "pdf" : "bundle");
+					await sendFile(
+						response,
+						file.path,
+						pdf && url.searchParams.get("preview") === "1" ? undefined : file.name,
+						file.size,
+						pdf ? "application/pdf" : "application/zip",
+					);
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authFetch } from "./auth-client.ts";
+import { ContestPdfEditor } from "./ContestPdfEditor.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { EmptyState } from "./EmptyState.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
@@ -157,6 +158,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 	const [historyOpen, setHistoryOpen] = useState<string>();
 	const [exportFormat, setExportFormat] = useState<"hydro" | "domjudge">();
 	const [bundleName, setBundleName] = useState("");
+	const [pdfDirty, setPdfDirty] = useState(false);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -216,6 +218,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 					releaseIds: next.releaseIds,
 					colors: next.colors,
 					colorNames: next.colorNames,
+					pdf: next.pdf,
 				}),
 			});
 			setDraft(saved);
@@ -229,7 +232,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 	}
 
 	async function exportBundle(format: "hydro" | "domjudge"): Promise<void> {
-		if (!draft || !bundleName.trim()) return;
+		if (!draft || !bundleName.trim() || pdfDirty) return;
 		setExportFormat(undefined);
 		setBusy(true);
 		setMessage("正在整理已验证的题包…");
@@ -367,7 +370,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 								</button>
 							</div>
 							<ContestDetails
-								key={draft.id}
+								key={`details:${draft.id}`}
 								contest={draft}
 								disabled={busy}
 								onSave={(next) => void update(next)}
@@ -401,7 +404,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 							{oldReleaseCount > 0 && (
 								<p className="manual-muted">
 									{oldReleaseCount}
-									{t("个旧发布版本需重新通过完整 Checker 验证后才能加入竞赛。")}
+									{t("个旧发布版本需重新通过完整判题验证后才能加入竞赛。")}
 								</p>
 							)}
 							{selected.length === 0 ? (
@@ -510,11 +513,20 @@ export function ContestsPage({ apiOrigin }: Props) {
 									</table>
 								</div>
 							)}
+							<ContestPdfEditor
+								key={`pdf:${draft.id}`}
+								contest={draft}
+								apiOrigin={apiOrigin}
+								disabled={busy}
+								ready={selected.length > 0 && allReady}
+								onSave={async (pdf) => await update({ ...draft, pdf })}
+								onDirty={setPdfDirty}
+							/>
 							<div className="manual-release-actions">
 								<button
 									className="button primary"
 									type="button"
-									disabled={busy || selected.length === 0 || !allReady}
+									disabled={busy || pdfDirty || selected.length === 0 || !allReady}
 									onClick={() => {
 										setBundleName("");
 										setExportFormat("hydro");
@@ -525,7 +537,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 								<button
 									className="button secondary"
 									type="button"
-									disabled={busy || selected.length === 0 || !allReady || !allAcm}
+									disabled={busy || pdfDirty || selected.length === 0 || !allReady || !allAcm}
 									onClick={() => {
 										setBundleName("");
 										setExportFormat("domjudge");
@@ -654,6 +666,15 @@ export function ContestsPage({ apiOrigin }: Props) {
 								>
 									{t("下载")}
 								</a>
+								{item.pdf?.enabled && (
+									<a
+										className="button secondary button-link"
+										href={apiUrl(apiOrigin, `/contest-releases/${item.id}/pdf`)}
+										download={`${item.slug}.pdf`}
+									>
+										{t("下载 PDF")}
+									</a>
+								)}
 							</div>
 						))}
 					</div>

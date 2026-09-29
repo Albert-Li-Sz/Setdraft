@@ -36,7 +36,13 @@ export function buildHydroProblemFiles(
 		type: spec.type ?? "default",
 		...(spec.multiPass ? { multi_pass: spec.multiPass } : {}),
 		...(spec.type === "submit_answer" && spec.answerMode === "multi" ? { subType: "multi" } : {}),
-		...(spec.type === "interactive" ? { interactor: "interactor.cc" } : {}),
+		...(spec.type === "interactive"
+			? {
+					interactor: spec.interactorLanguage
+						? { file: "interactor.cc", lang: spec.interactorLanguage }
+						: "interactor.cc",
+				}
+			: {}),
 		checker_type: spec.checker?.type ?? "default",
 		...(spec.checker ? { checker: "checker.cc" } : {}),
 		time: spec.timeLimit,

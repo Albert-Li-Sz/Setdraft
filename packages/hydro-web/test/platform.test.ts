@@ -7,6 +7,7 @@ describe("manual authoring navigation", () => {
 		expect(pageFromHash("#chat")).toBe("chat");
 		expect(pageFromHash("#records")).toBe("records");
 		expect(pageFromHash("#settings")).toBe("settings");
+		expect(pageFromHash("#authoring-guide")).toBe("authoring-guide");
 		expect(pageFromHash("#unknown")).toBe("workspace");
 	});
 

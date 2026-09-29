@@ -129,6 +129,10 @@ export function AppShell({
 				<div ref={setTarget} className="sidebar-slot" />
 			</div>
 			<div className="sidebar-bottom">
+				<a className="sidebar-settings" href="/open-source/index.html" target="_blank" rel="noreferrer">
+					<Icon name="file" />
+					{t("开源与源码")}
+				</a>
 				<a
 					className={`sidebar-settings ${page === "settings" ? "active" : ""}`}
 					href="#settings"

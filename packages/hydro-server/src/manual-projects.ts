@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { DEFAULT_HYDRO_JUDGE_LIMITS, type HydroJudgeLimits, isSafeFlatName } from "@setdraft/authoring";
+import { editableStatementSections, formatHydroStatement } from "@setdraft/authoring/statement";
 import {
 	type AddedManualCase,
 	type CppLanguage,
@@ -143,6 +144,10 @@ export class ManualProjectStore {
 		const project: ManualProject = {
 			id,
 			scoringMode,
+			judgingMode: "default",
+			interactionInputMode: "provided",
+			interactorSource: "",
+			interactorStandard: "cpp17",
 			revision: 0,
 			createdAt: now,
 			updatedAt: now,
@@ -150,6 +155,7 @@ export class ManualProjectStore {
 			title: "",
 			tags: [],
 			statement: "",
+			statementSections: editableStatementSections({ statement: "" }),
 			samples: [],
 			timeLimit: "1s",
 			memoryLimit: "256m",
@@ -180,6 +186,10 @@ export class ManualProjectStore {
 			const project = {
 				...stored,
 				scoringMode: stored.scoringMode ?? "oi",
+				judgingMode: stored.judgingMode ?? "default",
+				interactionInputMode: stored.interactionInputMode ?? "provided",
+				interactorSource: stored.interactorSource ?? "",
+				interactorStandard: stored.interactorStandard ?? "cpp17",
 				checkerMode: stored.checkerMode ?? (stored.checkerSource.trim() ? "custom" : "text"),
 				generatorStandard: stored.generatorStandard ?? "cpp17",
 				checkerStandard: stored.checkerStandard ?? "cpp17",
@@ -277,12 +287,26 @@ export class ManualProjectStore {
 	async update(id: string, value: unknown): Promise<ManualProjectSnapshot> {
 		await this.assertNotBusy(id);
 		const project = await this.load(id);
+		const previousStatement = JSON.stringify([project.statement, project.statementSections, project.samples]);
 		const input = record(value, "题目");
 		if (input.expectedRevision !== undefined && input.expectedRevision !== project.revision) {
 			throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, await this.get(id));
 		}
 		if (input.scoringMode !== undefined && input.scoringMode !== project.scoringMode) {
 			throw new ManualProjectError("题目赛制在创建后不可更改；请新建题目。", 422);
+		}
+		for (const field of ["judgingMode", "interactionInputMode", "interactorSource", "interactorStandard"] as const) {
+			if (input[field] !== undefined && input[field] !== project[field]) project.lastReport = undefined;
+		}
+		if (input.judgingMode !== undefined) {
+			if (input.judgingMode !== "default" && input.judgingMode !== "interactive")
+				throw new ManualProjectError("判题模式无效。", 422);
+			project.judgingMode = input.judgingMode;
+		}
+		if (input.interactionInputMode !== undefined) {
+			if (input.interactionInputMode !== "provided" && input.interactionInputMode !== "empty")
+				throw new ManualProjectError("交互题输入模式无效。", 422);
+			project.interactionInputMode = input.interactionInputMode;
 		}
 		const fields = [
 			"slug",
@@ -294,12 +318,33 @@ export class ManualProjectStore {
 			"generatorScript",
 			"checkerSource",
 			"validatorSource",
+			"interactorSource",
 		] as const;
 		for (const field of fields) {
+			if (field === "statement" && input.statementSections !== undefined) continue;
 			if (input[field] !== undefined)
 				project[field] = boundedString(input[field], field, field === "statement" ? 1_000_000 : 200_000);
 		}
-		for (const field of ["generatorStandard", "checkerStandard", "validatorStandard"] as const) {
+		if (input.statementSections !== undefined) {
+			const sections = record(input.statementSections, "题面分栏");
+			project.statementSections = {
+				description: boundedString(sections.description, "描述", 1_000_000),
+				input: boundedString(sections.input, "输入", 1_000_000),
+				output: boundedString(sections.output, "输出", 1_000_000),
+				interaction: boundedString(sections.interaction, "交互描述", 1_000_000),
+				notes: boundedString(sections.notes, "提示", 1_000_000),
+			};
+			if (Object.values(project.statementSections).reduce((size, text) => size + text.length, 0) > 1_000_000)
+				throw new ManualProjectError("题面分栏合计不能超过 1000000 字符。", 422);
+		} else if (input.statement !== undefined) {
+			project.statementSections = undefined;
+		}
+		for (const field of [
+			"generatorStandard",
+			"checkerStandard",
+			"validatorStandard",
+			"interactorStandard",
+		] as const) {
 			if (input[field] !== undefined) project[field] = readCppLanguage(input[field], field);
 		}
 		if (input.checkerMode !== undefined) {
@@ -366,6 +411,9 @@ export class ManualProjectStore {
 				return { name, contentBase64 };
 			});
 		}
+		if (project.statementSections) project.statement = formatHydroStatement(project);
+		if (JSON.stringify([project.statement, project.statementSections, project.samples]) !== previousStatement)
+			project.lastReport = undefined;
 		project.revision += 1;
 		project.updatedAt = new Date().toISOString();
 		await this.save(project);

@@ -86,6 +86,8 @@ export function validateHydroProblemSpec(
 	if (!["default", "interactive", "submit_answer"].includes(problemType))
 		addIssue(issues, "INVALID_PROBLEM_TYPE", "type", "Use default, interactive, or submit_answer.");
 	if (problemType === "interactive") {
+		if (spec.interactorLanguage !== undefined && !/^cc\.cc(?:11|14|17|20|23|26)$/u.test(spec.interactorLanguage))
+			addIssue(issues, "INVALID_INTERACTOR_LANGUAGE", "interactorLanguage", "Use a supported C++ language.");
 		if (!spec.interactor?.trim() || !spec.interactor.includes("registerInteraction("))
 			addIssue(issues, "MISSING_INTERACTOR", "interactor", "Provide a C++ testlib interactor.");
 	} else if (spec.interactor !== undefined)

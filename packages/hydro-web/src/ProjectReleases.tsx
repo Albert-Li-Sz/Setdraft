@@ -156,7 +156,7 @@ export function ProjectReleases({
 										>
 											DOMjudge
 										</button>
-										{release.checkerMode === "text" && (
+										{release.judgingMode !== "interactive" && release.checkerMode === "text" && (
 											<>
 												<button
 													type="button"
