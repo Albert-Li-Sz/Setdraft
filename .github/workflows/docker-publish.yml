@@ -15,12 +15,10 @@ concurrency:
 
 jobs:
   check:
-    if: github.repository == 'Albert-Li-Sz/Setdraft'
     uses: ./.github/workflows/verify.yml
 
   build:
     needs: check
-    if: github.repository == 'Albert-Li-Sz/Setdraft'
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     permissions:
