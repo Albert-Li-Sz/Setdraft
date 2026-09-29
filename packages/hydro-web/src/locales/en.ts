@@ -21,6 +21,14 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"模型上下文空间不足，本次回复未使用网络资料。":
 		"There is not enough model context space. This reply did not use web sources.",
 	"联网搜索暂时不可用，本次回复未使用网络资料。": "Web search is unavailable. This reply did not use web sources.",
+	"搜索服务拒绝请求，请管理员检查接口权限或限流配置；本次回复未使用网络资料。":
+		"The search provider rejected the request. Ask an administrator to check API access and rate limits. This reply did not use web sources.",
+	"上游搜索引擎暂时无可用结果，可能超时或触发验证；请管理员检查搜索出站网络、代理和引擎配置。本次回复未使用网络资料。":
+		"Upstream search engines returned no usable results, possibly due to timeouts or verification challenges. Ask an administrator to check outbound networking, the search proxy and engine settings. This reply did not use web sources.",
+	"未找到可用的搜索结果，请尝试更换关键词；本次回复未使用网络资料。":
+		"No usable search results were found. Try different keywords. This reply did not use web sources.",
+	"联网搜索超时，请管理员检查搜索服务和出站网络；本次回复未使用网络资料。":
+		"Web search timed out. Ask an administrator to check the search service and outbound networking. This reply did not use web sources.",
 	"管理员已关闭联网搜索。": "Web search has been disabled by the administrator.",
 	"联网搜索尚未配置。": "Web search has not been configured.",
 	"请填写 Tavily API Key。": "Enter a Tavily API key.",

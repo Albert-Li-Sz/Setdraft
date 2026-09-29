@@ -1,6 +1,15 @@
 use_default_settings:
   engines:
     keep_only: [bing, duckduckgo, brave, baidu]
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: baidu
+    disabled: false
 search:
   formats: [json]
   safe_search: 1

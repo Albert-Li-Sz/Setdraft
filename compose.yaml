@@ -85,8 +85,15 @@ services:
     restart: unless-stopped
     environment:
       SEARXNG_SECRET: ${SETDRAFT_SEARCH_SECRET:?Run ./install.sh}
+      HTTP_PROXY: ${SETDRAFT_SEARCH_PROXY:-}
+      HTTPS_PROXY: ${SETDRAFT_SEARCH_PROXY:-}
+      http_proxy: ${SETDRAFT_SEARCH_PROXY:-}
+      https_proxy: ${SETDRAFT_SEARCH_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,::1
+      no_proxy: localhost,127.0.0.1,::1
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./deploy/searxng/limiter.toml:/etc/searxng/limiter.toml:ro
       - search-cache:/var/cache/searxng
   maintenance:
     image: ${SETDRAFT_MAINTENANCE_IMAGE:-ghcr.io/albert-li-sz/setdraft-maintenance:latest}

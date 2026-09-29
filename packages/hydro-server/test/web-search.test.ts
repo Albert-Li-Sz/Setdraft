@@ -34,6 +34,8 @@ it("normalizes sources, scopes caches and quotas, and reuses completed searches 
 		calls++;
 		expect(String(input)).toContain("http://search:8080/search?");
 		expect(init?.redirect).toBe("error");
+		expect(new Headers(init?.headers).get("x-forwarded-for")).toBe("127.0.0.1");
+		expect(new Headers(init?.headers).get("x-real-ip")).toBe("127.0.0.1");
 		return result();
 	};
 	const search = new WebSearch(identity, request);
@@ -61,6 +63,106 @@ it("redacts provider keys and never returns upstream errors or follows redirects
 	expect(JSON.stringify(await search.status())).not.toContain("fake-secret");
 	const db = new WorkspaceDatabase(root);
 	await expect(search.search(db, randomUUID(), randomUUID(), "query")).rejects.toThrow("联网搜索暂时不可用");
+});
+it("identifies unavailable SearXNG engines instead of hiding their failure behind a generic error", async () => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () =>
+		Response.json({
+			results: [],
+			unresponsive_engines: [
+				["duckduckgo", "timeout"],
+				["brave", "timeout"],
+			],
+		}),
+	);
+	const database = new WorkspaceDatabase(root);
+	await expect(search.search(database, randomUUID(), randomUUID(), "public query")).rejects.toMatchObject({
+		statusCode: 502,
+		message: expect.stringContaining("上游搜索引擎"),
+	});
+});
+it("uses surviving engines without exposing upstream failure details", async () => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () =>
+		Response.json({
+			results: [{ title: "Available source", url: "https://example.com/docs", content: "Real result" }],
+			unresponsive_engines: [["duckduckgo", "fake-secret timeout"]],
+		}),
+	);
+	const database = new WorkspaceDatabase(root);
+	const snapshot = await search.search(database, randomUUID(), randomUUID(), "query");
+	expect(snapshot.results).toHaveLength(1);
+	expect(JSON.stringify(snapshot)).not.toContain("fake-secret");
+});
+it.each([403, 429])("explains provider HTTP %s without returning its response body", async (status) => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () => new Response("fake-secret provider body", { status }));
+	const database = new WorkspaceDatabase(root);
+	await expect(search.search(database, randomUUID(), randomUUID(), "query")).rejects.toMatchObject({
+		statusCode: 502,
+		message: expect.stringContaining("搜索服务拒绝请求"),
+	});
+});
+it("distinguishes a valid empty search from engine outages", async () => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () => Response.json({ results: [], unresponsive_engines: [] }));
+	const database = new WorkspaceDatabase(root);
+	await expect(search.search(database, randomUUID(), randomUUID(), "query")).rejects.toThrow("未找到可用的搜索结果");
+});
+it("does not send internal service headers to Tavily", async () => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async (_input, init) => {
+		expect(new Headers(init?.headers).has("x-forwarded-for")).toBe(false);
+		expect(new Headers(init?.headers).has("x-real-ip")).toBe(false);
+		return result();
+	});
+	await search.configure({ enabled: true, provider: "tavily", apiKey: "fake-key", dailyLimit: 10 });
+	await search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "query");
+});
+it("bypasses cached results for a fresh connectivity check", async () => {
+	const identity = new IdentityStore(root);
+	let calls = 0;
+	const search = new WebSearch(identity, async () => {
+		calls += 1;
+		return calls === 1 ? result() : new Response("offline", { status: 503 });
+	});
+	const database = new WorkspaceDatabase(root);
+	const userId = randomUUID();
+	await search.search(database, userId, "initial", "query");
+	await search.search(database, userId, "cached", "query");
+	await expect(search.search(database, userId, "probe", "query", undefined, { bypassCache: true })).rejects.toThrow(
+		"联网搜索暂时不可用",
+	);
+	expect(calls).toBe(2);
+});
+it("reports the search deadline without exposing transport errors", async () => {
+	const controller = new AbortController();
+	const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+	try {
+		const identity = new IdentityStore(root);
+		const search = new WebSearch(identity, async () => {
+			controller.abort();
+			throw new Error("fake-secret transport error");
+		});
+		const database = new WorkspaceDatabase(root);
+		await expect(search.search(database, randomUUID(), randomUUID(), "query")).rejects.toMatchObject({
+			statusCode: 502,
+			message: "联网搜索超时，请管理员检查搜索服务和出站网络；本次回复未使用网络资料。",
+		});
+	} finally {
+		timeout.mockRestore();
+	}
+});
+it("preserves caller cancellation instead of reporting an upstream outage", async () => {
+	const controller = new AbortController();
+	const reason = new Error("Cancelled by caller");
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () => {
+		controller.abort(reason);
+		throw new Error("transport stopped");
+	});
+	const database = new WorkspaceDatabase(root);
+	await expect(search.search(database, randomUUID(), randomUUID(), "query", controller.signal)).rejects.toBe(reason);
 });
 it("persists search events and sources and sends only explicit query text to the provider", async () => {
 	const identity = new IdentityStore(root);

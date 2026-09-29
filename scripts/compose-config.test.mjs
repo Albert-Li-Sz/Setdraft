@@ -57,6 +57,19 @@ test("cleared modern options cannot be restored by legacy process variables", as
  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("search proxy is validated and survives Compose regeneration separately from download proxies", async () => {
+ const root = await mkdtemp(join(tmpdir(), "setdraft-search-proxy-"));
+ try {
+  await composeConfiguration(root, [], { SETDRAFT_SEARCH_PROXY: "http://proxy.example.org:7890", SETDRAFT_DOWNLOAD_PROXY: "http://downloads.example.org:8080" });
+  await composeConfiguration(root, [], {});
+  const environment = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  assert.equal(environment.SETDRAFT_SEARCH_PROXY, "http://proxy.example.org:7890");
+  assert.equal(environment.SETDRAFT_DOWNLOAD_PROXY, "http://downloads.example.org:8080");
+  for (const proxy of ["not-a-url", "file:///tmp/proxy", "http://proxy.example.org/path", "http://proxy.example.org#fragment"])
+   await assert.rejects(loadDeployment(root, { SETDRAFT_SEARCH_PROXY: proxy }), /SETDRAFT_SEARCH_PROXY/u);
+ } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("sandbox scheduling options survive Compose generation and environment loading", async () => {
  const root = await mkdtemp(join(tmpdir(), "setdraft-scheduling-config-"));
  try {

@@ -83,16 +83,17 @@ export class WebSearch {
 		requestId: string,
 		query: string,
 		signal?: AbortSignal,
+		options: { bypassCache?: boolean } = {},
 	): Promise<SearchSnapshot> {
 		const configuration = await this.configuration();
 		const prior = await database.get<SearchSnapshot>("search-cache", `request:${requestId}`);
-		if (prior) return prior;
+		if (prior && !options.bypassCache) return prior;
 		if (!configuration.enabled) throw new ChatError("管理员已关闭联网搜索。", 503);
 		const normalized = plain(query, 500);
 		if (!normalized) throw new ChatError("请输入搜索关键词。", 422);
 		const key = createHash("sha256").update(`${configuration.provider}:${normalized}`).digest("hex");
 		const cached = await database.get<Cache>("search-cache", key);
-		if (cached && cached.expiresAt > Date.now()) {
+		if (cached && cached.expiresAt > Date.now() && !options.bypassCache) {
 			await database.put("search-cache", `request:${requestId}`, cached.snapshot);
 			return cached.snapshot;
 		}
@@ -117,6 +118,7 @@ export class WebSearch {
 				throw new Error("Invalid search endpoint");
 			const init: RequestInit = { signal: cancellation, redirect: "error", headers: { accept: "application/json" } };
 			if (configuration.provider === "searxng") {
+				init.headers = { accept: "application/json", "x-forwarded-for": "127.0.0.1", "x-real-ip": "127.0.0.1" };
 				url.searchParams.set("q", normalized);
 				url.searchParams.set("format", "json");
 				url.searchParams.set("categories", "general");
@@ -133,7 +135,12 @@ export class WebSearch {
 				});
 			}
 			response = await this.request(url, init);
-			if (!response.ok) throw new Error("Search provider unavailable");
+			if (!response.ok) {
+				await response.body?.cancel().catch(() => {});
+				if (response.status === 403 || response.status === 429)
+					throw new ChatError("搜索服务拒绝请求，请管理员检查接口权限或限流配置；本次回复未使用网络资料。", 502);
+				throw new Error("Search provider unavailable");
+			}
 			// Bound provider responses before parsing, including chunked bodies.
 			const reader = response.body?.getReader();
 			if (!reader) throw new Error("Empty response");
@@ -175,7 +182,21 @@ export class WebSearch {
 				results.push({ id: results.length + 1, title, url: link.href, snippet });
 				if (results.length === 5) break;
 			}
-			if (!results.length) throw new Error("No results");
+			if (!results.length) {
+				if (
+					configuration.provider === "searxng" &&
+					raw &&
+					typeof raw === "object" &&
+					"unresponsive_engines" in raw &&
+					Array.isArray(raw.unresponsive_engines) &&
+					raw.unresponsive_engines.length
+				)
+					throw new ChatError(
+						"上游搜索引擎暂时无可用结果，可能超时或触发验证；请管理员检查搜索出站网络、代理和引擎配置。本次回复未使用网络资料。",
+						502,
+					);
+				throw new ChatError("未找到可用的搜索结果，请尝试更换关键词；本次回复未使用网络资料。", 502);
+			}
 			const snapshot: SearchSnapshot = {
 				query: normalized,
 				provider: configuration.provider,
@@ -194,6 +215,8 @@ export class WebSearch {
 		} catch (error) {
 			if (signal?.aborted) throw signal.reason;
 			if (error instanceof ChatError) throw error;
+			if (timeout.aborted)
+				throw new ChatError("联网搜索超时，请管理员检查搜索服务和出站网络；本次回复未使用网络资料。", 502);
 			throw new ChatError("联网搜索暂时不可用，本次回复未使用网络资料。", 502);
 		}
 	}
