@@ -89,7 +89,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Albert-Li-Sz/setdraft.git",
+		"url": "git+https://github.com/Albert-Li-Sz/Setdraft.git",
 		"directory": "packages/ai"
 	},
 	"engines": {

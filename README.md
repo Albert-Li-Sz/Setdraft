@@ -11,14 +11,14 @@ Web 界面采用黑白配色、可收起侧栏与简洁工具栏，右上角支�
 服务器需要 Docker Engine、Docker Compose 插件和 Git。默认安装无需宿主机 Node.js；支持 Linux 和 macOS Docker Desktop，镜像支持 Linux amd64 / arm64。Windows 安装、升级和卸载脚本已移除。
 
 ```bash
-git clone https://github.com/Albert-Li-Sz/setdraft.git
+git clone https://github.com/Albert-Li-Sz/Setdraft.git
 cd setdraft
 ./install.sh
 ```
 
 安装器生成 `.env` 与 `.env.compose`，拉取官方 Web、沙箱和备份维护镜像，启动 Web/API、PostgreSQL 18 和 SearXNG；迁移容器负责初始化数据库表和权限。数据库及搜索端口不对宿主机开放。默认通过 `http://服务器IP:4321/` 访问，监听 `0.0.0.0:4321`，不安装反向代理、不配置 HTTPS。服务有健康检查和自动重启策略。首次安装码显示在终端及服务日志中，24 小时有效。
 
-默认安装不在服务器上编译源码。镜像发布在本项目的 [GitHub Packages](https://github.com/Albert-Li-Sz?tab=packages&repo_name=setdraft)：
+默认安装不在服务器上编译源码。镜像发布在本项目的 [GitHub Packages](https://github.com/Albert-Li-Sz?tab=packages&repo_name=Setdraft)：
 
 | 镜像 | 用途 |
 | --- | --- |
@@ -136,7 +136,7 @@ Vite 开发模式仅在本机开放，使用 `http://127.0.0.1:5173`，不用于
 离线服务器可提前导入三个 Setdraft 镜像及 PostgreSQL、SearXNG（没有 Node.js 时还需 Node 引导镜像），生成 `.env.compose` 后运行 `./scripts/setdraft-compose.sh start`；启动命令不拉取或构建镜像。
 
 GitHub 首次克隆发生在安装脚本运行之前；如需要代理，可使用
-`git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/Albert-Li-Sz/setdraft.git`。
+`git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/Albert-Li-Sz/Setdraft.git`。
 不要在命令行填带密码的代理地址；将这类地址写入 `.env`，避免 Shell 历史记录。Unix 上脚本保存的 `.env` 权限为 `0600`。
 
 Docker Hub 在部分国内网络下不可达。可配置自己可用的镜像仓库，脚本会同时处理 Node、Docker CLI、Python、GCC、PostgreSQL 和 SearXNG 镜像，

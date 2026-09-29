@@ -3,7 +3,7 @@ ARG GCC_IMAGE=gcc:16.2.0-trixie@sha256:28365a1efe31883fd29f9fce27811b731e815f9f9
 FROM ${PYTHON_IMAGE} AS python-runtime
 
 FROM ${GCC_IMAGE}
-LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/setdraft" \
+LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/Setdraft" \
       org.opencontainers.image.title="Setdraft sandbox" \
       org.opencontainers.image.description="GCC, Python, Java and testlib execution environment"
 COPY --from=python-runtime /usr/local /usr/local

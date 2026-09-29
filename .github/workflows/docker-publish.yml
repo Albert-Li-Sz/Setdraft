@@ -3,7 +3,7 @@ name: Publish Docker images
 on:
   push:
     branches: [main]
-    tags: ['v[0-9]*']
+  tags: ['v[0-9]*', 'Rev[0-9]*']
   workflow_dispatch:
 
 permissions:
@@ -15,12 +15,12 @@ concurrency:
 
 jobs:
   check:
-    if: github.repository == 'Albert-Li-Sz/setdraft'
+    if: github.repository == 'Albert-Li-Sz/Setdraft'
     uses: ./.github/workflows/verify.yml
 
   build:
     needs: check
-    if: github.repository == 'Albert-Li-Sz/setdraft'
+    if: github.repository == 'Albert-Li-Sz/Setdraft'
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     permissions:
@@ -59,7 +59,7 @@ jobs:
           tags: ${{ steps.image.outputs.tag }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/Albert-Li-Sz/setdraft
+            org.opencontainers.image.source=https://github.com/Albert-Li-Sz/Setdraft
           build-args: |
             NPM_REGISTRY=https://registry.npmjs.org
             DEBIAN_MIRROR=https://deb.debian.org
@@ -114,6 +114,7 @@ jobs:
             case "$GITHUB_REF" in
               refs/heads/main) set -- "$@" --tag "$image:latest" ;;
               refs/tags/v*) set -- "$@" --tag "$image:${GITHUB_REF_NAME#v}" ;;
+              refs/tags/Rev*) set -- "$@" --tag "$image:$GITHUB_REF_NAME" ;;
             esac
             docker buildx imagetools create "$@" \
               "$(cat "digests/$component-amd64")" "$(cat "digests/$component-arm64")"

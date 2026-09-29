@@ -24,7 +24,7 @@ RUN npm ci --registry="$NPM_REGISTRY" --ignore-scripts --no-audit --no-fund --fe
     && npm run build --workspace=@setdraft/web \
     && npm prune --omit=dev --ignore-scripts --no-audit --no-fund
 FROM ${NODE_IMAGE} AS web
-LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/setdraft" \
+LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/Setdraft" \
       org.opencontainers.image.title="Setdraft" \
       org.opencontainers.image.description="Competitive programming authoring workspace" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
@@ -44,7 +44,7 @@ ENTRYPOINT ["setdraft-entrypoint"]
 CMD ["node", "packages/hydro-server/dist/cli.js"]
 
 FROM ${POSTGRES_IMAGE} AS maintenance
-LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/setdraft" \
+LABEL org.opencontainers.image.source="https://github.com/Albert-Li-Sz/Setdraft" \
       org.opencontainers.image.title="Setdraft maintenance" \
       org.opencontainers.image.description="PostgreSQL and workspace backup and restore tools" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
