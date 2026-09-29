@@ -43,7 +43,7 @@ if [ "$COMMAND" = upgrade ]; then
   exec "$ROOT/scripts/setdraft-compose.sh" install "$@"
 fi
 if [ "$COMMAND" = install ]; then
-  if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+  if command -v node >/dev/null 2>&1 && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
     node scripts/compose-config.mjs "$@"
   else
     BOOTSTRAP_IMAGE=${SETDRAFT_NODE_IMAGE:-node:24.18.0-bookworm-slim}
