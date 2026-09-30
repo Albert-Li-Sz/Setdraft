@@ -164,7 +164,7 @@ describe("persistent task queue", () => {
 		projects.database.sql.close();
 	});
 
-	it("resumes two queued tasks after a service restart", async () => {
+	it("resumes queued tasks in durable order when submission timestamps tie", async () => {
 		const projects = new ManualProjectStore({ root });
 		const resolvers = new Map<string, () => void>();
 		vi.spyOn(projects.pipeline, "generate").mockImplementation(async (id, context) => {
@@ -192,19 +192,25 @@ describe("persistent task queue", () => {
 		queues.push(initial);
 		initial.close();
 		const queued = await Promise.all(ids.map(async (project) => await initial.submit("generate", project.id)));
+		for (const task of queued)
+			await projects.database.sql.execute("UPDATE tasks SET created_at=$1 WHERE id=$2", [
+				queued[0].createdAt,
+				task.id,
+			]);
+		queued.sort((left, right) => left.id.localeCompare(right.id));
 		const recovered = new TaskQueue(projects, new ContestStore(projects));
 		await recovered.ready;
 		queues.push(recovered);
 		await waitFor(recovered, queued[0].id, "running");
 		await waitFor(recovered, queued[1].id, "running");
 		expect((await recovered.get(queued[2].id)).state).toBe("queued");
-		await vi.waitFor(() => expect(resolvers.has(ids[0].id)).toBe(true));
-		resolvers.get(ids[0].id)?.();
-		await vi.waitFor(() => expect(resolvers.has(ids[1].id)).toBe(true));
-		resolvers.get(ids[1].id)?.();
+		await vi.waitFor(() => expect(resolvers.has(queued[0].resource.split(":")[1])).toBe(true));
+		resolvers.get(queued[0].resource.split(":")[1])?.();
+		await vi.waitFor(() => expect(resolvers.has(queued[1].resource.split(":")[1])).toBe(true));
+		resolvers.get(queued[1].resource.split(":")[1])?.();
 		await waitFor(recovered, queued[2].id, "running");
-		await vi.waitFor(() => expect(resolvers.has(ids[2].id)).toBe(true));
-		resolvers.get(ids[2].id)?.();
+		await vi.waitFor(() => expect(resolvers.has(queued[2].resource.split(":")[1])).toBe(true));
+		resolvers.get(queued[2].resource.split(":")[1])?.();
 		for (const task of queued) await waitFor(recovered, task.id, "succeeded");
 		recovered.close();
 		projects.database.sql.close();
