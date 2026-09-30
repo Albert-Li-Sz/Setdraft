@@ -1,4 +1,5 @@
 import { assertHydroJudgeLimits, DEFAULT_HYDRO_JUDGE_LIMITS, parseHydroTimeLimitMs } from "./judge-limits.ts";
+import { markdownReferences } from "./markdown.ts";
 import type { HydroJudgeLimits, HydroProblemSpec, ValidationIssue, ValidationReport } from "./types.ts";
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -19,8 +20,8 @@ export function isSafeFlatName(name: string): boolean {
 
 export function extractAttachmentReferences(markdown: string): string[] {
 	const references = new Set<string>();
-	for (const match of markdown.matchAll(/file:\/\/([^\s)"'?#]+)/g)) {
-		references.add(match[1]);
+	for (const { url } of markdownReferences(markdown)) {
+		if (/^file:\/\//iu.test(url)) references.add(url.slice(7).split(/[?#]/u)[0]);
 	}
 	return [...references];
 }

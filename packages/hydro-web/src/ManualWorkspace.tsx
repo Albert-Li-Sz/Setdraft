@@ -1,6 +1,6 @@
 import { interactiveReferenceTemplate, interactorTemplate } from "@setdraft/contracts";
 import { useEffect, useRef, useState } from "react";
-import { authFetch } from "./auth-client.ts";
+import { AuthenticationRequired, authFetch } from "./auth-client.ts";
 import { copyText } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
@@ -577,7 +577,14 @@ export function ManualWorkspace(props: Props) {
 													setIncludeCaseOutput(false);
 												})
 												.catch((error: unknown) =>
-													setCaseError(error instanceof Error ? error.message : "测试点保存失败。"),
+													setCaseError(
+														(error instanceof DOMException && error.name === "AbortError") ||
+															error instanceof AuthenticationRequired
+															? "保存结果未确认，草稿已保留。重新登录后请先核对测试点列表，再决定是否提交。"
+															: error instanceof Error
+																? error.message
+																: "测试点保存失败。",
+													),
 												)
 												.finally(() => {
 													caseSubmissionRef.current = false;

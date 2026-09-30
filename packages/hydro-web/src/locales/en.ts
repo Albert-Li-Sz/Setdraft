@@ -1,4 +1,7 @@
 export const englishMessages: Readonly<Record<string, string>> = {
+	停止未确认: "Stop unconfirmed",
+	"保存结果未确认，草稿已保留。重新登录后请先核对测试点列表，再决定是否提交。":
+		"The save result is unconfirmed and your draft is preserved. After signing in again, check the test case list before submitting.",
 	开源与源码: "Licenses and source",
 	"使用 XCPC 原模板与原字体。": "Uses the original XCPC template and fonts.",
 	"题目列表位于封面；关闭封面时不显示。样例按原模板保留换行，不自动折行。":

@@ -7,7 +7,12 @@ import { isContestReadyRelease } from "@setdraft/contracts";
 import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
-import { cleanupSandboxStage, removeDockerContainer, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
+import {
+	cleanupSandboxStage,
+	removeDockerContainer,
+	SandboxCleanupError,
+	sandboxRuntimeArgs,
+} from "./sandbox-runtime.ts";
 
 interface SourceManifest {
 	cases: Array<{ inputFile: string; outputFile: string }>;
@@ -81,6 +86,7 @@ function spawnDocker(
 	timeoutMs: number,
 	signal: AbortSignal | undefined,
 	containerName: string,
+	stage: string,
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const command = [...args.slice(0, 1), "--name", containerName, ...args.slice(1)];
@@ -113,8 +119,8 @@ function spawnDocker(
 					await stopping.catch(() => undefined);
 					await removeDockerContainer(containerName);
 				}
-			} catch (error) {
-				reject(error);
+			} catch {
+				reject(new SandboxCleanupError([containerName], [stage]));
 				return;
 			}
 			if (code === 0 && !stopping) resolve();
@@ -188,6 +194,7 @@ async function verifyOutputValidator(
 		Math.max(120_000, caseCount * 45_000),
 		signal,
 		containerName,
+		directory,
 	);
 }
 

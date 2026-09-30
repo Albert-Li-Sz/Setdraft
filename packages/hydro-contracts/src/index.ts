@@ -259,6 +259,7 @@ export interface ChatConversation {
 
 export interface ChatRequest {
 	id: string;
+	attemptId?: string;
 	chatId: string;
 	state: "queued" | "running" | "done" | "failed";
 	createdAt: string;
@@ -283,6 +284,7 @@ export interface TaskRecord {
 	resource: string;
 	format?: ContestFormat;
 	state: TaskState;
+	cleanupPending?: boolean;
 	fingerprint: string;
 	createdAt: string;
 	updatedAt: string;

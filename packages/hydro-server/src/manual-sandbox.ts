@@ -8,7 +8,7 @@ import type { ExecutionContext } from "./execution-context.ts";
 import { interactiveContainerNames, runInteractiveSandbox } from "./interactive-sandbox.ts";
 import { readSandboxFile } from "./sandbox-files.ts";
 import { readSandboxCheck, readSandboxReport } from "./sandbox-report.ts";
-import { removeDockerContainer, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
+import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 export interface SandboxCase {
 	id: string;
@@ -281,7 +281,11 @@ export type {
 export { cppLanguages } from "@setdraft/contracts";
 
 export async function removeTaskContainer(taskId: string): Promise<void> {
-	await Promise.all([`setdraft-task-${taskId}`, ...interactiveContainerNames(taskId)].map(removeDockerContainer));
+	const results = await Promise.allSettled(
+		[`setdraft-task-${taskId}`, ...interactiveContainerNames(taskId)].map(removeDockerContainer),
+	);
+	const failed = results.find((result) => result.status === "rejected");
+	if (failed?.status === "rejected") throw failed.reason;
 }
 
 function runDocker(
@@ -290,6 +294,7 @@ function runDocker(
 	signal?: AbortSignal,
 	taskId?: string,
 	context?: ExecutionContext,
+	stage?: string,
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -361,8 +366,13 @@ function runDocker(
 					await stopping.catch(() => undefined);
 					await removeTaskContainer(taskId);
 				}
-			} catch (error) {
-				reject(error);
+			} catch {
+				reject(
+					new SandboxCleanupError(
+						taskId ? [`setdraft-task-${taskId}`, ...interactiveContainerNames(taskId)] : [],
+						stage ? [stage] : [],
+					),
+				);
 				return;
 			}
 			if (code === 0 && !stopping) resolve();
@@ -435,6 +445,7 @@ export async function runManualSandbox(input: SandboxInput): Promise<ManualSandb
 		context?.signal,
 		taskId,
 		context,
+		input.stage,
 	);
 	const report = readSandboxReport(
 		JSON.parse(

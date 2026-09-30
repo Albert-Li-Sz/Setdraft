@@ -62,6 +62,16 @@ async function readJson(request: IncomingMessage, maxBytes: number): Promise<unk
 	}
 }
 
+async function requestAttempt(request: IncomingMessage): Promise<string | undefined> {
+	if (!request.headers["content-type"]) return undefined;
+	const value = await readJson(request, 1024);
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new ChatError("执行轮次参数无效。", 422);
+	const attemptId = (value as { attemptId?: unknown }).attemptId;
+	if (attemptId !== undefined && typeof attemptId !== "string") throw new ChatError("执行轮次参数无效。", 422);
+	return attemptId;
+}
+
 function expectedRevision(request: IncomingMessage): number | undefined {
 	const header = request.headers["x-expected-revision"];
 	if (header === undefined) return undefined;
@@ -764,9 +774,9 @@ export async function createHydroServer(
 				const [, chatId, requestId, action] = chatRequestRoute;
 				if (request.method === "GET" && !action) sendJson(response, 200, await chatRequests.get(requestId, chatId));
 				else if (request.method === "POST" && action === "retry")
-					sendJson(response, 202, await chatRequests.retry(chatId, requestId));
+					sendJson(response, 202, await chatRequests.retry(chatId, requestId, await requestAttempt(request)));
 				else if (request.method === "POST" && action === "cancel")
-					sendJson(response, 200, await chatRequests.cancel(chatId, requestId));
+					sendJson(response, 200, await chatRequests.cancel(chatId, requestId, await requestAttempt(request)));
 				else if (request.method === "GET" && action === "events") {
 					const after = Number(request.headers["last-event-id"] ?? url.searchParams.get("after") ?? 0);
 					if (!Number.isSafeInteger(after) || after < 0) throw new ChatError("事件序号无效。", 422);

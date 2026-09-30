@@ -11,12 +11,23 @@ import { type ExecutionScheduler, QueueAdmissionError } from "./execution-schedu
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
 import { removeTaskContainer } from "./manual-sandbox.ts";
 import { type SandboxPolicy, sandboxPolicy } from "./sandbox-policy.ts";
+import { confirmSandboxCleanup, SandboxCleanupError } from "./sandbox-runtime.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
 
 function digest(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+interface CleanupRecord {
+	taskId: string;
+	containers: string[];
+	directories: string[];
+	finalState: TaskState;
+	error: string;
+	attempts: number;
+	nextRetryAt: number;
 }
 
 export class TaskQueue {
@@ -31,6 +42,7 @@ export class TaskQueue {
 	private readonly slots = new Map<string, () => void>();
 	private readonly admissions = new Map<string, () => void>();
 	private readonly running = new Set<Promise<void>>();
+	private readonly cleanup = new Map<string, { record: CleanupRecord; resume?: () => void }>();
 	private readonly releaseSubmissions = new Map<string, Promise<TaskRecord>>();
 	readonly policy: SandboxPolicy;
 
@@ -79,6 +91,16 @@ export class TaskQueue {
 			.catch(() => console.error("Task queue unavailable."));
 	}
 	private async recover(): Promise<void> {
+		for (const record of await this.database.list<CleanupRecord>("sandbox-cleanup")) {
+			const resume = this.scheduling?.scheduler.pause(`cleanup:${this.scheduling.userId}:${record.taskId}`);
+			// Startup fails closed if Docker cannot confirm removal of a retained container.
+			await confirmSandboxCleanup(record);
+			await this.database.transaction(async () => {
+				await this.finish(record.taskId, record.finalState, undefined, record.error);
+				await this.database.delete("sandbox-cleanup", record.taskId);
+			});
+			resume?.();
+		}
 		for (const task of await this.list()) {
 			if (task.state === "queued") this.reserve(task, true);
 			if (task.state === "running") {
@@ -93,12 +115,16 @@ export class TaskQueue {
 		clearInterval(this.timer);
 		for (const controller of this.waiting.values()) controller.abort();
 		for (const controller of this.controllers.values()) controller.abort();
-		for (const id of this.slots.keys()) if (!this.controllers.has(id)) this.releaseSlot(id);
-		for (const id of this.admissions.keys()) if (!this.controllers.has(id)) this.releaseAdmission(id);
+		for (const id of this.slots.keys()) if (!this.controllers.has(id) && !this.cleanup.has(id)) this.releaseSlot(id);
+		for (const id of this.admissions.keys())
+			if (!this.controllers.has(id) && !this.cleanup.has(id)) this.releaseAdmission(id);
 	}
 
 	async idle(): Promise<void> {
-		while (this.running.size) await Promise.all([...this.running]);
+		while (this.running.size || this.pumping) {
+			if (this.running.size) await Promise.all([...this.running]);
+			else await new Promise((resolve) => setTimeout(resolve, 10));
+		}
 	}
 	async cancelAll(): Promise<void> {
 		const rows = (await this.database.sql.all(
@@ -132,7 +158,10 @@ export class TaskQueue {
 
 	private async fingerprint(kind: TaskKind, resource: string): Promise<string> {
 		if (kind === "image-build") return digest({ image: this.projects.image });
-		if (kind === "release-export") return digest(await this.projects.releases.release(resource));
+		if (kind === "release-export") {
+			const { name: _name, ...content } = await this.projects.releases.release(resource);
+			return digest({ content, format: "domjudge", version: 1 });
+		}
 		if (kind === "contest-export") return digest(await this.database.get("contest", resource));
 		return digest({
 			project: await this.database.get("project", resource),
@@ -144,6 +173,8 @@ export class TaskQueue {
 	}
 
 	private async assertWritable(): Promise<void> {
+		if (this.cleanup.size || this.scheduling?.scheduler.status(this.scheduling.userId).paused)
+			throw new ManualProjectError("沙箱停止未确认，已暂停新执行；请等待清理恢复或联系管理员。", 503);
 		if (this.scheduling && (this.closed || !(await this.scheduling.enabled())))
 			throw new ManualProjectError("任务服务不可用。", 403);
 	}
@@ -278,6 +309,7 @@ export class TaskQueue {
 			result: includeResult && row.result ? JSON.parse(String(row.result)) : undefined,
 			error: row.error ? String(row.error) : undefined,
 			ownerPid: row.owner_pid ? Number(row.owner_pid) : undefined,
+			cleanupPending: Boolean(await this.database.get("sandbox-cleanup", id)),
 			queue,
 		};
 	}
@@ -383,7 +415,9 @@ export class TaskQueue {
 	}
 
 	private async pump(): Promise<void> {
+		await this.retryCleanup();
 		if (this.closed || (this.scheduling && !(await this.scheduling.enabled()))) return;
+		if (this.cleanup.size || this.scheduling?.scheduler.status(this.scheduling.userId).paused) return;
 		const expired = (await this.database.sql.all("SELECT id FROM tasks WHERE state='queued' AND created_at<=$1", [
 			new Date(Date.now() - this.policy.queueTimeoutMs).toISOString(),
 		])) as Array<{ id: string }>;
@@ -407,6 +441,41 @@ export class TaskQueue {
 			[localLimit],
 		);
 		for (const task of queued) await this.dispatch(task, localLimit);
+	}
+
+	private async retryCleanup(): Promise<void> {
+		for (const [id, pending] of this.cleanup) {
+			const record = pending.record;
+			if (record.attempts >= 8 || Date.now() < record.nextRetryAt) continue;
+			try {
+				await confirmSandboxCleanup(record);
+				await this.database.transaction(async () => {
+					await this.finish(id, record.finalState, undefined, record.error);
+					await this.database.delete("sandbox-cleanup", id);
+				});
+				this.cleanup.delete(id);
+				this.releaseSlot(id);
+				this.releaseAdmission(id);
+				pending.resume?.();
+			} catch {
+				record.attempts++;
+				record.nextRetryAt = Date.now() + Math.min(30_000, 1000 * 2 ** record.attempts);
+				const message =
+					record.attempts >= 8
+						? "沙箱持续清理失败：已暂停新执行并保留目录。请管理员恢复 Docker 后重启服务以重试清理。"
+						: "沙箱停止未确认：已保留执行名额和目录，正在重试容器清理。";
+				await this.database.transaction(async () => {
+					await this.database.put("sandbox-cleanup", id, record);
+					await this.database.sql.execute("UPDATE tasks SET error=$1,updated_at=$2 WHERE id=$3", [
+						message,
+						new Date().toISOString(),
+						id,
+					]);
+					await this.emit(id, "cleanup-pending", message, { attempt: record.attempts });
+				});
+				if (record.attempts === 1 || record.attempts === 8) console.error(message);
+			}
+		}
 	}
 
 	private async dispatch(queued: { id: string }, localLimit: number): Promise<void> {
@@ -512,6 +581,35 @@ export class TaskQueue {
 				await end("cancelled", undefined, "任务已取消。");
 			else await end("succeeded", result);
 		} catch (error) {
+			if (error instanceof SandboxCleanupError) {
+				const cancelled = controller.signal.aborted;
+				const record: CleanupRecord = {
+					taskId: task.id,
+					containers: error.containers,
+					directories: error.directories,
+					finalState: timedOut ? "failed" : this.closed ? "interrupted" : cancelled ? "cancelled" : "failed",
+					error: timedOut
+						? "任务运行超过时间上限。"
+						: cancelled
+							? "任务已取消，容器清理已确认。"
+							: "沙箱执行失败，容器清理已确认。",
+					attempts: 0,
+					nextRetryAt: Date.now() + 1000,
+				};
+				const resume = this.scheduling?.scheduler.pause(`cleanup:${this.scheduling.userId}:${task.id}`);
+				this.cleanup.set(task.id, { record, resume });
+				await events.flush().catch(() => undefined);
+				await this.database.transaction(async () => {
+					await this.database.put("sandbox-cleanup", task.id, record);
+					await this.database.sql.execute(
+						"UPDATE tasks SET error=$1,cancel_requested=1,updated_at=$2 WHERE id=$3",
+						[error.message, new Date().toISOString(), task.id],
+					);
+					await this.emit(task.id, "cleanup-pending", error.message);
+				});
+				console.error(error.message);
+				return;
+			}
 			await events.flush().catch(() => undefined);
 			const cancelled = await this.cancellationRequested(task.id, controller.signal);
 			await end(
@@ -530,8 +628,10 @@ export class TaskQueue {
 		} finally {
 			if (timeout) clearTimeout(timeout);
 			this.controllers.delete(task.id);
-			this.releaseSlot(task.id);
-			if (settled || this.closed) this.releaseAdmission(task.id);
+			if (!this.cleanup.has(task.id)) {
+				this.releaseSlot(task.id);
+				if (settled || this.closed) this.releaseAdmission(task.id);
+			}
 			this.wake();
 		}
 	}

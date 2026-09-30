@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { authFetch } from "../src/auth-client.ts";
-import { manageProjectCases } from "../src/project-case-operations.ts";
+import { addProjectTextCase, manageProjectCases } from "../src/project-case-operations.ts";
 import { ProjectSession } from "../src/project-session.ts";
 import { projectFixture } from "./project-fixture.ts";
 
@@ -55,5 +55,45 @@ it("submits the confirmed project's revision and ignores a response after switch
 	respond(new Response(JSON.stringify(projectFixture({ id: "a", revision: 8 }))));
 	await expect(flight).rejects.toMatchObject({ name: "AbortError" });
 	expect(session.getSnapshot().project?.id).toBe("b");
+	session.dispose();
+});
+
+it("preserves a text case draft if authentication pauses before dispatch", async () => {
+	const session = new ProjectSession(async (project) => project);
+	session.open(projectFixture());
+	session.pause();
+	const draft = { input: "1 2", output: "3", subtaskId: 1 };
+	let cleared = false;
+	const flight = addProjectTextCase(session, "", draft).then(() => {
+		cleared = true;
+	});
+	await expect(flight).rejects.toMatchObject({ name: "AbortError" });
+	expect(cleared).toBe(false);
+	expect(authFetch).not.toHaveBeenCalled();
+	session.resume();
+	expect(authFetch).not.toHaveBeenCalled();
+	session.dispose();
+});
+it("preserves a text case draft on a late successful response after authentication pauses", async () => {
+	let respond!: (response: Response) => void;
+	vi.mocked(authFetch).mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				respond = resolve;
+			}),
+	);
+	const session = new ProjectSession(async (project) => project);
+	session.open(projectFixture());
+	let cleared = false;
+	const flight = addProjectTextCase(session, "", { input: "1 2", output: "3", subtaskId: 1 }).then(() => {
+		cleared = true;
+	});
+	await vi.waitFor(() => expect(authFetch).toHaveBeenCalledOnce());
+	session.pause();
+	respond(new Response(JSON.stringify({ inputFile: "1.in", project: projectFixture() })));
+	await expect(flight).rejects.toMatchObject({ name: "AbortError" });
+	expect(cleared).toBe(false);
+	session.resume();
+	expect(authFetch).toHaveBeenCalledOnce();
 	session.dispose();
 });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
 import type { SandboxCase, SandboxInput } from "./manual-sandbox.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
-import { sandboxRuntimeArgs } from "./sandbox-runtime.ts";
+import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 const roles = ["reference", "oracle", "interactor", "validator", "generator"] as const;
 type Role = (typeof roles)[number];
@@ -56,11 +56,11 @@ function docker(
 	});
 }
 
-async function remove(names: string[]): Promise<void> {
+async function remove(names: string[], stage?: string): Promise<void> {
 	if (!names.length) return;
-	const result = await docker(["rm", "-f", ...names]);
-	if (result.code !== 0 && result.stderr.split("\n").some((line) => line && !line.includes("No such container")))
-		throw new Error(`交互容器清理失败：${result.stderr}`);
+	const results = await Promise.allSettled(names.map(removeDockerContainer));
+	if (results.some((result) => result.status === "rejected"))
+		throw new SandboxCleanupError(names, stage ? [stage] : []);
 }
 
 interface Program {
@@ -182,7 +182,7 @@ async function runSingle(
 			if (input.context?.signal.aborted) abort();
 		});
 	} finally {
-		await remove([name]);
+		await remove([name], input.stage);
 	}
 }
 
@@ -383,14 +383,17 @@ async function dialogue(
 		});
 		return result;
 	} finally {
-		await remove(names);
-		for (const participant of participants) {
-			participant.process.kill("SIGKILL");
-			participant.process.stdout.destroy();
-			participant.process.stderr.destroy();
-			participant.process.stdin.destroy();
+		try {
+			await remove(names, input.stage);
+		} finally {
+			for (const participant of participants) {
+				participant.process.kill("SIGKILL");
+				participant.process.stdout.destroy();
+				participant.process.stderr.destroy();
+				participant.process.stdin.destroy();
+			}
+			await Promise.all(participants.map((participant) => participant.completion));
 		}
-		await Promise.all(participants.map((participant) => participant.completion));
 		const logs = participants.map((item, index) => ({
 			role: index ? "interactor" : contestant.role,
 			stderr: item.stderr,
@@ -479,7 +482,7 @@ export async function runInteractiveSandbox(
 			if (created.code !== 0) throw new Error(created.stderr);
 			input.context?.signal.throwIfAborted();
 			const result = await docker(["start", "--attach", name], 60_000, input.context?.signal);
-			await remove([name]);
+			await remove([name], input.stage);
 			input.context?.signal.throwIfAborted();
 			check({
 				stage: `compile:${role}`,
@@ -550,9 +553,10 @@ export async function runInteractiveSandbox(
 		}
 		report.success = cases.length > 0 && report.checks.every((item) => item.passed);
 	} catch (error) {
+		if (error instanceof SandboxCleanupError) throw error;
 		check({ stage: "interaction:system", passed: false, verdict: "SYSTEM_ERROR", message: String(error) });
 	} finally {
-		await remove(interactiveContainerNames(taskId));
+		await remove(interactiveContainerNames(taskId), input.stage);
 		await writeFile(join(input.stage, "result.json"), JSON.stringify(report));
 	}
 	input.context?.signal.throwIfAborted();

@@ -17,6 +17,7 @@ import type { ExecutionContext } from "./execution-context.ts";
 import { ManualProjectError, type ManualProjectStore, type ManualRelease } from "./manual-projects.ts";
 import { hashFile } from "./project-files.ts";
 import { releaseName } from "./releases.ts";
+import { cleanupSandboxStage } from "./sandbox-runtime.ts";
 
 export type { ContestDraft, ContestFormat, ContestRelease } from "@setdraft/contracts";
 
@@ -420,7 +421,7 @@ export class ContestStore {
 				await pdfs?.cleanup();
 			} finally {
 				try {
-					if (stage) await rm(stage, { recursive: true, force: true });
+					if (stage) await cleanupSandboxStage(stage);
 				} finally {
 					if (releaseRoot) {
 						try {
@@ -429,7 +430,7 @@ export class ContestStore {
 								await this.projects.database.removeOwnerFiles("contest-bundle", archiveId);
 							}
 						} finally {
-							await rm(releaseRoot, { recursive: true, force: true });
+							await cleanupSandboxStage(releaseRoot);
 						}
 					}
 				}

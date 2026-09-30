@@ -6,6 +6,12 @@ import { requestJson as jsonRequest } from "./api-client.ts";
 import { authFetch } from "./auth-client.ts";
 import { copyText, createClientId } from "./browser-capabilities.ts";
 import { ChatMarkdown } from "./ChatMarkdown.tsx";
+import {
+	type ActiveChatRequest,
+	activeChatRequest,
+	cancelChatRequest,
+	resumeChatRequest,
+} from "./chat-request-lifecycle.ts";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
 import { transferFiles } from "./file-transfer.ts";
@@ -97,9 +103,7 @@ export function AiChatPage(props: Props) {
 	const [message, setMessage] = useState<UiMessage>("正在读取本地对话…");
 	const [messageTone, setMessageTone] = useState<"pending" | "passed" | "failed">("pending");
 	const controllerRef = useRef<AbortController | undefined>(undefined);
-	const activeRequestRef = useRef<
-		{ chatId: string; requestId: string; cancellation?: Promise<ChatRequest> } | undefined
-	>(undefined);
+	const activeRequestRef = useRef<ActiveChatRequest | undefined>(undefined);
 	const messagesRef = useRef<HTMLDivElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const followOutputRef = useRef(true);
@@ -351,7 +355,7 @@ export function AiChatPage(props: Props) {
 		try {
 			const current = chat ?? (await create(true));
 			controller.signal.throwIfAborted();
-			activeRequestRef.current = { chatId: current.id, requestId };
+			activeRequestRef.current = activeChatRequest({ chatId: current.id, requestId });
 			activeChat = current;
 			previousMessageCount = current.messages.length;
 			const form = new FormData();
@@ -426,7 +430,9 @@ export function AiChatPage(props: Props) {
 					if (completed) break;
 					const status = await jsonRequest<ChatRequest>(
 						apiUrl(props.apiOrigin, `/chats/${current.id}/requests/${requestId}`),
+						{ signal: controller.signal },
 					);
+					controller.signal.throwIfAborted();
 					if (status.state === "failed") throw new Error(status.error ?? "模型请求失败。");
 					attempts = 0;
 				} catch (error) {
@@ -490,11 +496,11 @@ export function AiChatPage(props: Props) {
 		setStreamFailed(false);
 		const controller = new AbortController();
 		controllerRef.current = controller;
-		activeRequestRef.current = failedRequest;
+		activeRequestRef.current = activeChatRequest(failedRequest);
 		try {
 			const base = `/chats/${failedRequest.chatId}/requests/${failedRequest.requestId}`;
-			const state = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base));
-			if (state.state === "failed") await jsonRequest(apiUrl(props.apiOrigin, `${base}/retry`), { method: "POST" });
+			await resumeChatRequest(activeRequestRef.current, props.apiOrigin, controller.signal);
+			controller.signal.throwIfAborted();
 			let after = 0;
 			let completed = false;
 			let retries = 0;
@@ -519,7 +525,10 @@ export function AiChatPage(props: Props) {
 						} else throw new Error(event.message);
 					});
 					if (!completed) {
-						const status = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base));
+						const status = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base), {
+							signal: controller.signal,
+						});
+						controller.signal.throwIfAborted();
 						if (status.state === "failed") throw new Error(status.error ?? "模型请求失败。");
 					}
 					retries = 0;
@@ -557,17 +566,7 @@ export function AiChatPage(props: Props) {
 		}
 	}
 
-	async function cancelRequest(active: { chatId: string; requestId: string }): Promise<ChatRequest> {
-		const base = `/chats/${active.chatId}/requests/${active.requestId}`;
-		const signal = AbortSignal.timeout(10_000);
-		let state = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, `${base}/cancel`), { method: "POST", signal });
-		for (let attempt = 0; attempt < 50; attempt++) {
-			if (state.state === "done" || state.state === "failed") return state;
-			await new Promise((resolve) => setTimeout(resolve, 100));
-			state = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base), { signal });
-		}
-		throw new Error("尚未确认后台停止，请重新打开对话核对请求状态。");
-	}
+	const cancelRequest = (active: ActiveChatRequest) => cancelChatRequest(active, props.apiOrigin);
 
 	async function stopGeneration(): Promise<void> {
 		const active = activeRequestRef.current;
@@ -577,7 +576,7 @@ export function AiChatPage(props: Props) {
 		showMessage("正在确认后台停止…");
 		try {
 			const state = await active.cancellation;
-			if (state?.state === "failed") setFailedRequest(active);
+			if (state?.state === "failed") setFailedRequest({ chatId: active.chatId, requestId: active.requestId });
 			showMessage(
 				state?.state === "done"
 					? "回复已完成并保存。"
@@ -586,7 +585,7 @@ export function AiChatPage(props: Props) {
 						: (state?.error ?? "请求已结束。"),
 			);
 		} catch (cause) {
-			setFailedRequest(active);
+			setFailedRequest({ chatId: active.chatId, requestId: active.requestId });
 			showMessage(cause instanceof Error ? cause.message : "无法确认后台停止，请重新打开对话核对。", "failed");
 		}
 	}

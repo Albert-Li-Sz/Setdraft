@@ -1,5 +1,5 @@
 import type { ContestPdfOptions, ManualProject } from "@setdraft/contracts";
-import { preparePdfMarkdown, typstString } from "./markdown-typst.ts";
+import { preparePdfMarkdown, preparePdfMarkdownParts, typstString } from "./markdown-typst.ts";
 
 export interface PdfProblem
 	extends Pick<
@@ -35,9 +35,18 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 			assets.set(name, Buffer.from(attachment.contentBase64, "base64"));
 			images.set(`file://${attachment.name}`, `/${name}`);
 		}
-		const markdown = (value: string) => typstString(preparePdfMarkdown(value, images));
 		const interactive = problem.judgingMode === "interactive";
 		const sections = problem.statementSections;
+		const [description, input, output, interaction, notes] = preparePdfMarkdownParts(
+			[
+				sections?.description ?? problem.statement,
+				interactive ? "" : (sections?.input ?? ""),
+				interactive ? "" : (sections?.output ?? ""),
+				interactive ? (sections?.interaction ?? "") : "",
+				sections?.notes ?? "",
+			],
+			images,
+		).map(typstString);
 		const limits =
 			language === "en"
 				? [
@@ -53,11 +62,11 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
   limits: (${limits.map(([key, value]) => `(key: ${typstString(key)}, value: ${typstString(value)})`).join(", ")},),
   samples: (${problem.samples.map((sample) => `(input: ${typstString(sample.input)}, output: ${typstString(sample.output)}),`).join("\n")}),
 ), statement: (
-  description: ${markdown(sections?.description ?? problem.statement)},
-  input: ${markdown(interactive ? "" : (sections?.input ?? ""))},
-  output: ${markdown(interactive ? "" : (sections?.output ?? ""))},
-  interaction: ${markdown(interactive ? (sections?.interaction ?? "") : "")},
-  notes: ${markdown(sections?.notes ?? "")},
+  description: ${description},
+  input: ${input},
+  output: ${output},
+  interaction: ${interaction},
+  notes: ${notes},
 ))`;
 	});
 	const source = (selected: string[], standalone: boolean) => `#import "/xcpc/lib.typ": contest-conf

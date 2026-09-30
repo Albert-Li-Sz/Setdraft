@@ -48,6 +48,7 @@ export class WorkspaceRegistry {
 		);
 	}
 	async start(): Promise<void> {
+		const resume = this.sandbox.pause("startup-recovery");
 		await this.configuration.load();
 		// Persist the catalog once, including an empty catalog, so old config files never resurrect it.
 		if (!this.configuration.getConfiguration().error && (await this.identity.getSetting("ai-config")) === undefined)
@@ -56,6 +57,7 @@ export class WorkspaceRegistry {
 			const workspace = await this.open(user);
 			if (!user.enabled) await Promise.all([workspace.tasks.cancelAll(), workspace.chatRequests.cancelAll()]);
 		}
+		resume();
 	}
 	async get(user: AuthUser): Promise<UserWorkspace> {
 		if (!(await this.identity.getUser(user.id)).enabled) throw new AuthError("请重新登录。", 401, "AUTH_REQUIRED");

@@ -33,7 +33,7 @@ const stateNames: Record<BackgroundTask["state"], string> = {
 	interrupted: "服务中断",
 };
 
-function TaskState({ state }: { state: BackgroundTask["state"] }) {
+function TaskState({ state, cleanupPending }: { state: BackgroundTask["state"]; cleanupPending?: boolean }) {
 	const { t } = useLocale();
 	const active = state === "running" || state === "queued";
 	return (
@@ -42,7 +42,7 @@ function TaskState({ state }: { state: BackgroundTask["state"] }) {
 				name={active ? "loader" : state === "succeeded" ? "check" : "close"}
 				className={active ? "loading-icon" : undefined}
 			/>
-			{t(stateNames[state])}
+			{t(cleanupPending ? "停止未确认" : stateNames[state])}
 		</span>
 	);
 }
@@ -135,6 +135,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 			"stale",
 			"interrupted",
 			"cancelling",
+			"cleanup-pending",
 		])
 			source.addEventListener(type, receive as EventListener);
 		return () => source.close();
@@ -203,7 +204,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									</small>
 									<QueueStatus task={item} />
 								</span>
-								<TaskState state={item.state} />
+								<TaskState state={item.state} cleanupPending={item.cleanupPending} />
 							</button>
 						))}
 					</section>
@@ -225,7 +226,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									<p>
 										{task.resourceTitle} · {new Date(task.createdAt).toLocaleString(locale)}
 									</p>
-									<TaskState state={task.state} />
+									<TaskState state={task.state} cleanupPending={task.cleanupPending} />
 									<QueueStatus task={task} detail />
 								</div>
 								<div className="heading-actions">
@@ -236,7 +237,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 										<button
 											className="button secondary"
 											type="button"
-											disabled={busy}
+											disabled={busy || task.cleanupPending}
 											onClick={() => void action("cancel")}
 										>
 											{t("取消任务")}

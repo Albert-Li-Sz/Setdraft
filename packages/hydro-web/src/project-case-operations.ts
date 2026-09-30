@@ -8,6 +8,30 @@ export interface CaseOperationScope {
 	expectedRevision?: number;
 }
 
+export async function addProjectTextCase(
+	session: ProjectSession,
+	apiOrigin: string,
+	value: { name?: string; input: string; output?: string; subtaskId: number },
+): Promise<{ inputFile: string; outputFile?: string; project: ProjectSnapshot }> {
+	const current = session.getSnapshot().project;
+	const signal = session.signal;
+	if (!current) throw new Error("请先创建题目。");
+	await session.flush();
+	signal.throwIfAborted();
+	const revision = session.getSnapshot().project?.revision ?? current.revision;
+	const result = await requestJson<{ inputFile: string; outputFile?: string; project: ProjectSnapshot }>(
+		apiUrl(apiOrigin, `/projects/${current.id}/cases`),
+		{
+			method: "POST",
+			signal,
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ ...value, expectedRevision: revision }),
+		},
+	);
+	signal.throwIfAborted();
+	return result;
+}
+
 export async function manageProjectCases(
 	session: ProjectSession,
 	apiOrigin: string,

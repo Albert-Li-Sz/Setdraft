@@ -799,6 +799,13 @@ export class ManualProjectStore {
 			await this.load(id);
 			const releases = (await this.database.list<ManualRelease>("release")).filter((item) => item.projectId === id);
 			for (const release of releases) {
+				if (
+					await this.database.sql.one(
+						"SELECT 1 FROM tasks WHERE resource LIKE $1 AND state IN ('queued','running')",
+						[`release:${release.id}:%`],
+					)
+				)
+					throw new ManualProjectError("项目的发布包正在导出，请等待完成或取消任务。", 409);
 				await this.database.delete("release", release.id);
 				await this.database.removeOwnerFiles("release-file", release.id);
 			}

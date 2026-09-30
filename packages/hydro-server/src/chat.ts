@@ -304,6 +304,10 @@ export class ChatService {
 				await this.database.sql.execute("DELETE FROM chat_request_events WHERE request_id=$1", [request.id]);
 			}
 			await this.database.sql.execute("DELETE FROM chat_requests WHERE chat_id=$1", [id]);
+			await this.database.sql.execute(
+				"DELETE FROM documents WHERE kind='chat-cancellation' AND body->>'chatId'=$1",
+				[id],
+			);
 			await this.database.delete("chat", id);
 			await this.database.removeOwnerFiles("chat-image", id);
 		});

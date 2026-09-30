@@ -6,6 +6,7 @@ import type { ExecutionContext } from "./execution-context.ts";
 import { writeLegacyProblemExport } from "./legacy-exports.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import { ManualProjectError } from "./project-error.ts";
+import { SandboxCleanupError } from "./sandbox-runtime.ts";
 
 export function releaseName(value: unknown): string {
 	if (typeof value !== "string" || !value.trim() || [...value.trim()].length > 80)
@@ -33,10 +34,12 @@ export class ReleaseStore {
 	}
 
 	async rename(id: string, value: unknown): Promise<ManualRelease> {
-		const release = await this.release(id);
-		release.name = releaseName(value);
-		await this.projects.database.put("release", id, release);
-		return release;
+		return this.projects.database.transaction(async () => {
+			const release = await this.release(id);
+			release.name = releaseName(value);
+			await this.projects.database.put("release", id, release);
+			return release;
+		});
 	}
 
 	async releaseReference(id: string): Promise<ManualProgram> {
@@ -61,6 +64,7 @@ export class ReleaseStore {
 				...statement,
 			});
 		} catch (error) {
+			if (error instanceof SandboxCleanupError) throw error;
 			throw new ManualProjectError(error instanceof Error ? error.message : "DOMjudge 导出失败。", 422);
 		}
 		if (statement)

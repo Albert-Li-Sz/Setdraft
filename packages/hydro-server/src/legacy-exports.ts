@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
+import { extractAttachmentReferences, parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import { formatHydroStatement } from "@setdraft/authoring/statement";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 
@@ -129,7 +129,7 @@ export async function writeLegacyProblemExport(
 		);
 	}
 	const project = JSON.parse(await readFile(join(releaseRoot, "source", "project.json"), "utf8")) as ManualProject;
-	if (/file:\/\//iu.test(formatHydroStatement(project))) {
+	if (extractAttachmentReferences(formatHydroStatement(project)).length) {
 		throw new Error(
 			"FPS、QDUOJ 暂不支持题面附件引用，无法完整导出；请使用 Hydro 包，或将含图片的题面导出为 PDF 后使用 DOMjudge 包。",
 		);

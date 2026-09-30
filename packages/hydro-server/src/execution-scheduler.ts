@@ -22,6 +22,7 @@ export class ExecutionScheduler {
 	private readonly perUserLimit: number;
 	private readonly active = new Map<string, { userId: string; exclusive: boolean }>();
 	private readonly waiting: Ticket[] = [];
+	private readonly pauses = new Set<string>();
 	private readonly turns = new Map<string, number>();
 	private turn = 0;
 	private readonly reservations = new Map<string, { userId: string; exclusive: boolean }>();
@@ -63,12 +64,24 @@ export class ExecutionScheduler {
 	}
 	status(userId: string) {
 		return {
+			paused: this.pauses.size > 0,
 			concurrency: this.limit,
 			running: this.active.size,
 			outstanding: this.reservations.size,
 			userRunning: [...this.active.values()].some((item) => item.userId === userId),
 			userAtCapacity: [...this.active.values()].filter((item) => item.userId === userId).length >= this.perUserLimit,
 			maintenance: [...this.active.values(), ...this.waiting].some((item) => item.exclusive),
+		};
+	}
+	/** Fail closed during an unconfirmed container stop, across every workspace sharing this scheduler. */
+	pause(key: string): () => void {
+		this.pauses.add(key);
+		let resumed = false;
+		return () => {
+			if (resumed) return;
+			resumed = true;
+			this.pauses.delete(key);
+			this.pump();
 		};
 	}
 	acquire(userId: string, key: string, signal: AbortSignal, exclusive = false): Promise<() => void> {
@@ -102,6 +115,7 @@ export class ExecutionScheduler {
 		});
 	}
 	private pump(): void {
+		if (this.pauses.size) return;
 		while (this.waiting.length && this.active.size < this.limit) {
 			const active = [...this.active.values()];
 			if (active.some((item) => item.exclusive)) return;

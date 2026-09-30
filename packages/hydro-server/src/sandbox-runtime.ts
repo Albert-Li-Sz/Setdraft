@@ -1,7 +1,29 @@
 import { execFile } from "node:child_process";
 import { rm } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { sandboxPolicy } from "./sandbox-policy.ts";
+
+const pendingCleanup = new Map<string, SandboxCleanupError>();
+
+export class SandboxCleanupError extends Error {
+	readonly containers: string[];
+	readonly directories: string[];
+	constructor(containers: string[], directories: string[]) {
+		super("沙箱停止未确认：容器清理失败，执行名额和工作目录已保留，正在重试清理。");
+		this.containers = [...new Set(containers)];
+		this.directories = [...new Set(directories.map((path) => resolve(path)))];
+		for (const name of this.containers) pendingCleanup.set(name, this);
+	}
+}
+
+export async function confirmSandboxCleanup(record: { containers: string[]; directories: string[] }): Promise<void> {
+	const results = await Promise.allSettled(record.containers.map(removeDockerContainer));
+	const failed = results.find((result) => result.status === "rejected");
+	if (failed?.status === "rejected") throw failed.reason;
+	for (const name of record.containers) pendingCleanup.delete(name);
+	for (const directory of record.directories) await cleanupSandboxStage(directory);
+}
 
 /** A missing container is already clean; every other Docker error must be reported. */
 export async function removeDockerContainer(name: string): Promise<void> {
@@ -48,6 +70,21 @@ export function sandboxRuntimeArgs(budget = sandboxPolicy()): string[] {
 
 /** Temporary cleanup must not turn an already committed result into a reported failure. */
 export async function cleanupSandboxStage(path: string): Promise<void> {
+	const target = resolve(path);
+	for (const error of new Set(pendingCleanup.values())) {
+		if (
+			error.directories.some(
+				(directory) =>
+					directory === target ||
+					directory.startsWith(`${target}${sep}`) ||
+					target.startsWith(`${directory}${sep}`),
+			)
+		) {
+			if (!error.directories.includes(target)) error.directories.push(target);
+			console.warn("Sandbox directory retained until container cleanup is confirmed:", target);
+			return;
+		}
+	}
 	try {
 		await rm(path, { recursive: true, force: true });
 	} catch (error) {

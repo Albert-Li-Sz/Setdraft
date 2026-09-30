@@ -48,6 +48,87 @@ async function waitFor(
 }
 
 describe("persisted chat requests", () => {
+	it("keeps future-attempt cancellation sticky across a queue restart and ignores an old stop", async () => {
+		const client = vi.fn(
+			async ({ signal }: { signal?: AbortSignal }) =>
+				await new Promise<string>((_resolve, reject) => {
+					if (signal?.aborted) reject(new Error("aborted"));
+					else signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				}),
+		);
+		const chat = await configuredChat(client);
+		const database = new WorkspaceDatabase(root);
+		const conversation = await chat.create();
+		const id = randomUUID();
+		let queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
+		try {
+			await queue.submit(conversation.id, id, "stop and retry");
+			await vi.waitFor(() => expect(client).toHaveBeenCalledTimes(1));
+			await queue.cancel(conversation.id, id);
+			await waitFor(queue, conversation.id, id, "failed");
+			const cancelledAttempt = randomUUID();
+			await queue.cancel(conversation.id, id, cancelledAttempt);
+			await queue.close();
+			queue = new ChatRequestQueue(database, chat);
+			await queue.ready;
+			expect(await queue.retry(conversation.id, id, cancelledAttempt)).toMatchObject({
+				state: "failed",
+				error: "已取消",
+				attemptId: cancelledAttempt,
+			});
+			expect(client).toHaveBeenCalledTimes(1);
+			const nextAttempt = randomUUID();
+			await queue.retry(conversation.id, id, nextAttempt);
+			await vi.waitFor(() => expect(client).toHaveBeenCalledTimes(2));
+			await queue.cancel(conversation.id, id, id);
+			expect(await queue.get(id, conversation.id)).toMatchObject({ state: "running", attemptId: nextAttempt });
+			await queue.cancel(conversation.id, id, nextAttempt);
+			await waitFor(queue, conversation.id, id, "failed");
+			const thirdAttempt = randomUUID();
+			await queue.retry(conversation.id, id, thirdAttempt);
+			await vi.waitFor(() => expect(client).toHaveBeenCalledTimes(3));
+			await queue.cancel(conversation.id, id, thirdAttempt);
+			await waitFor(queue, conversation.id, id, "failed");
+			expect((await queue.get(id, conversation.id)).error).toBe("已取消");
+		} finally {
+			await queue.close();
+		}
+	});
+
+	it("reclaims expired pre-submission cancellations without completing a model request", async () => {
+		const client = vi.fn(async () => "unused");
+		const chat = await configuredChat(client);
+		const database = new WorkspaceDatabase(root);
+		const policy = { ...chatPolicy({}), maxRetainedRequests: 1, retentionMs: 60_000 };
+		const queue = new ChatRequestQueue(database, chat, {
+			scheduler: new ExecutionScheduler(1, policy),
+			policy,
+			userId: "alice",
+			enabled: async () => true,
+		});
+		await queue.ready;
+		const conversation = await chat.create();
+		const a = randomUUID(),
+			b = randomUUID();
+		try {
+			await queue.cancel(conversation.id, a);
+			await expect(queue.cancel(conversation.id, b)).rejects.toMatchObject({ statusCode: 429 });
+			expect(await queue.submit(conversation.id, a, "late")).toMatchObject({ state: "failed", error: "已取消" });
+			const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+			try {
+				expect(await queue.cancel(conversation.id, b)).toMatchObject({ state: "failed", error: "已取消" });
+			} finally {
+				clock.mockRestore();
+			}
+			expect(await database.sql.all("SELECT sequence FROM chat_request_events WHERE request_id=$1", [a])).toEqual(
+				[],
+			);
+			expect(client).not.toHaveBeenCalled();
+		} finally {
+			await queue.close();
+		}
+	});
 	it("persists cancellation arriving before submission, including after a queue restart", async () => {
 		const client = vi.fn(async () => "should not run");
 		const chat = await configuredChat(client);

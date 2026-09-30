@@ -10,6 +10,8 @@ export type DocumentKind =
 	| "contest"
 	| "contest-release"
 	| "chat"
+	| "chat-cancellation"
+	| "sandbox-cleanup"
 	| "ai-config"
 	| "task-options"
 	| "search-cache";
@@ -129,6 +131,7 @@ export class WorkspaceDatabase {
 		return true;
 	}
 	async pruneBlobs(): Promise<{ removed: number; bytes: number }> {
+		await this.pruneOrphanReleaseFiles();
 		let removed = 0,
 			bytes = 0;
 		const root = join(this.root, "blobs");
@@ -151,6 +154,18 @@ export class WorkspaceDatabase {
 			}
 		}
 		return { removed, bytes };
+	}
+
+	/** Repair historical ownerless exports before blob GC; shares the short commit lock with deletion. */
+	async pruneOrphanReleaseFiles(): Promise<number> {
+		return this.transaction(
+			async () =>
+				(
+					await this.sql.execute(
+						"DELETE FROM files WHERE owner_kind='release-file' AND NOT EXISTS (SELECT 1 FROM documents AS r JOIN documents AS p ON p.kind='project' AND p.id=r.body->>'projectId' WHERE r.kind='release' AND r.id=files.owner_id)",
+					)
+				).rowCount,
+		);
 	}
 	async indexFile(ownerKind: string, ownerId: string, name: string, path: string): Promise<void> {
 		await this.commitFiles([{ ownerKind, ownerId, name, source: { path } }]);
@@ -190,6 +205,12 @@ export class WorkspaceDatabase {
 			await this.transaction(async () => {
 				// Validate/update documents first, so a conflict snapshot never includes provisional file references.
 				await commit?.();
+				for (const file of files) {
+					if (file.ownerKind !== "release-file") continue;
+					const release = await this.get<{ projectId: string }>("release", file.ownerId);
+					if (!release || !(await this.get("project", release.projectId)))
+						throw new Error("发布记录或所属项目已删除，导出文件未提交。");
+				}
 				for (const owner of replaceOwners) await this.removeOwnerFiles(owner.ownerKind, owner.ownerId);
 				for (const { file, temporary, digest, size, blob } of staged) {
 					// A crash before COMMIT leaves only an unreferenced complete blob, safe for later GC.

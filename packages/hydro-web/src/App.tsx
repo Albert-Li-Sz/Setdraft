@@ -21,7 +21,7 @@ import {
 	waitForTask,
 } from "./platform.ts";
 import { projectContextSnapshot } from "./problem.ts";
-import { type CaseOperationScope, manageProjectCases } from "./project-case-operations.ts";
+import { addProjectTextCase, type CaseOperationScope, manageProjectCases } from "./project-case-operations.ts";
 import { UploadProgressDialog } from "./UploadProgressDialog.tsx";
 import { useProjectSession } from "./use-project-session.ts";
 import { WorkspaceHome } from "./WorkspaceHome.tsx";
@@ -414,20 +414,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		if (!current) throw new Error("请先创建题目。");
 		setBusy("upload");
 		try {
-			await saveNow();
-			signal.throwIfAborted();
-			const revision = projectRef.current?.revision ?? current.revision;
-			const result = await requestJson<{
-				inputFile: string;
-				outputFile?: string;
-				project: ProjectSnapshot;
-			}>(apiUrl(apiOrigin, `/projects/${current.id}/cases`), {
-				method: "POST",
-				signal,
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ ...value, expectedRevision: revision }),
-			});
-			signal.throwIfAborted();
+			const result = await addProjectTextCase(session, apiOrigin, value);
 			setCurrentProject(result.project);
 			setReport(undefined);
 			showNotice(
@@ -442,7 +429,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				"passed",
 			);
 		} catch (error) {
-			if (signal.aborted) return;
+			signal.throwIfAborted();
 			if (error instanceof RevisionConflict) setConflictSnapshot(error.current);
 			showNotice(error instanceof Error ? error.message : "添加测试点失败。", "failed");
 			throw error;
