@@ -19,6 +19,7 @@ const taskNames: Record<BackgroundTask["kind"], string> = {
 	generate: "生成数据",
 	finalize: "完整验证与打包",
 	"contest-export": "竞赛导出",
+	"release-export": "发布包导出",
 	"image-build": "构建沙箱镜像",
 };
 

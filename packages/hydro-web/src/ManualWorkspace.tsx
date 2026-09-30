@@ -1,5 +1,5 @@
 import { interactiveReferenceTemplate, interactorTemplate } from "@setdraft/contracts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { authFetch } from "./auth-client.ts";
 import { copyText } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
@@ -50,7 +50,12 @@ interface Props {
 	onEdit(change: (current: ProjectSnapshot) => ProjectSnapshot): void;
 	onUpload(files: File[]): Promise<void>;
 	onAddCase(value: { name?: string; input: string; output?: string; subtaskId: number }): Promise<void>;
-	onManageCases(action: "batch-delete" | "renumber" | "clear-generated", stems?: string[]): Promise<void>;
+	signal: AbortSignal;
+	onManageCases(
+		action: "batch-delete" | "renumber" | "clear-generated",
+		stems?: string[],
+		expectedRevision?: number,
+	): Promise<void>;
 	onUploadAttachments(files: File[]): Promise<void>;
 	onDeleteFile(name: string): Promise<void>;
 	onGenerate(): Promise<void>;
@@ -231,6 +236,13 @@ export function ManualWorkspace(props: Props) {
 	}>();
 	const [caseAction, setCaseAction] = useState<UiMessage>("");
 	const caseSubmissionRef = useRef(false);
+	const mountedRef = useRef(true);
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
 	const isAcm = project.scoringMode === "acm";
 	async function previewCase(origin: "manual" | "generated", stem: string): Promise<void> {
 		try {
@@ -254,8 +266,15 @@ export function ManualWorkspace(props: Props) {
 
 	async function renumber(): Promise<void> {
 		try {
-			const response = await authFetch(apiUrl(props.apiOrigin, `/projects/${project.id}/cases/renumber`));
-			const value = (await response.json()) as { changes?: Array<{ from: string; to: string }>; message?: string };
+			const response = await authFetch(apiUrl(props.apiOrigin, `/projects/${project.id}/cases/renumber`), {
+				signal: props.signal,
+			});
+			const value = (await response.json()) as {
+				revision: number;
+				changes?: Array<{ from: string; to: string }>;
+				message?: string;
+			};
+			if (!mountedRef.current || props.signal.aborted) return;
 			if (!response.ok) throw new Error(value.message ?? "编号预览失败。");
 			const changes = value.changes?.filter((item) => item.from !== item.to) ?? [];
 			if (!changes.length) {
@@ -271,11 +290,13 @@ export function ManualWorkspace(props: Props) {
 				)
 			)
 				return;
-			await props.onManageCases("renumber");
+			if (!mountedRef.current || props.signal.aborted) return;
+			await props.onManageCases("renumber", undefined, value.revision);
 			setSelectedCases([]);
 			setCaseAction("重新编号完成。");
 		} catch (error) {
-			setCaseAction(error instanceof Error ? error.message : "重新编号失败。");
+			if (mountedRef.current && !props.signal.aborted)
+				setCaseAction(error instanceof Error ? error.message : "重新编号失败。");
 		}
 	}
 	const selectedCaseSubtaskId = project.subtasks.some((item) => item.id === caseSubtaskId)
@@ -564,79 +585,81 @@ export function ManualWorkspace(props: Props) {
 												});
 										}}
 									>
-										<div className="manual-case-form-heading">
-											<div>
-												<h2>{t("手动添加测试点")}</h2>
-												<p>{t("输入留空会创建真正的空文件；空格与换行会原样保存。")}</p>
+										<fieldset disabled={caseSubmitting || !!props.busy} className="manual-case-fields">
+											<div className="manual-case-form-heading">
+												<div>
+													<h2>{t("手动添加测试点")}</h2>
+													<p>{t("输入留空会创建真正的空文件；空格与换行会原样保存。")}</p>
+												</div>
+												<span>{t("每个文本栏最多 1 MiB")}</span>
 											</div>
-											<span>{t("每个文本栏最多 1 MiB")}</span>
-										</div>
-										<div className="manual-case-form-meta">
-											<label className="field">
-												<span>{t("输入文件名")}</span>
-												<input
-													value={caseName}
-													onChange={(event) => setCaseName(event.target.value)}
-													placeholder={t("留空自动编号，如 3.in")}
-												/>
-											</label>
-											{!isAcm && (
+											<div className="manual-case-form-meta">
 												<label className="field">
-													<span>{t("所属子任务")}</span>
-													<select
-														value={selectedCaseSubtaskId}
-														onChange={(event) => setCaseSubtaskId(Number(event.target.value))}
-													>
-														{project.subtasks.map((subtask) => (
-															<option key={subtask.id} value={subtask.id}>
-																{t("子任务 {0}", subtask.id)}
-															</option>
-														))}
-													</select>
+													<span>{t("输入文件名")}</span>
+													<input
+														value={caseName}
+														onChange={(event) => setCaseName(event.target.value)}
+														placeholder={t("留空自动编号，如 3.in")}
+													/>
 												</label>
-											)}
-										</div>
-										<div className="manual-case-form-text">
-											<label className="field">
-												<span>{t("测试输入")}</span>
-												<textarea
-													value={caseInput}
-													onChange={(event) => setCaseInput(event.target.value)}
-													placeholder={t("在这里输入测试数据；无输入题可留空")}
-													spellCheck={false}
-												/>
-											</label>
-											{!interactive && (
+												{!isAcm && (
+													<label className="field">
+														<span>{t("所属子任务")}</span>
+														<select
+															value={selectedCaseSubtaskId}
+															onChange={(event) => setCaseSubtaskId(Number(event.target.value))}
+														>
+															{project.subtasks.map((subtask) => (
+																<option key={subtask.id} value={subtask.id}>
+																	{t("子任务 {0}", subtask.id)}
+																</option>
+															))}
+														</select>
+													</label>
+												)}
+											</div>
+											<div className="manual-case-form-text">
 												<label className="field">
-													<span>{t("期望输出（可选）")}</span>
-													<span className="manual-case-output-toggle">
-														<input
-															type="checkbox"
-															checked={includeCaseOutput}
-															onChange={(event) => setIncludeCaseOutput(event.target.checked)}
-														/>
-														{t("填写期望输出；留空则建立零字节 .out")}
-													</span>
+													<span>{t("测试输入")}</span>
 													<textarea
-														value={caseOutput}
-														onChange={(event) => setCaseOutput(event.target.value)}
-														disabled={!includeCaseOutput}
-														placeholder={includeCaseOutput ? t("可留空") : t("未勾选时由标准程序生成")}
+														value={caseInput}
+														onChange={(event) => setCaseInput(event.target.value)}
+														placeholder={t("在这里输入测试数据；无输入题可留空")}
 														spellCheck={false}
 													/>
 												</label>
-											)}
-										</div>
-										<div className="manual-case-form-actions">
-											{caseError && <p role="alert">{t(caseError)}</p>}
-											<button
-												className="button primary"
-												type="submit"
-												disabled={!!props.busy || caseSubmitting || project.subtasks.length === 0}
-											>
-												{caseSubmitting ? t("保存中…") : t("添加测试点")}
-											</button>
-										</div>
+												{!interactive && (
+													<label className="field">
+														<span>{t("期望输出（可选）")}</span>
+														<span className="manual-case-output-toggle">
+															<input
+																type="checkbox"
+																checked={includeCaseOutput}
+																onChange={(event) => setIncludeCaseOutput(event.target.checked)}
+															/>
+															{t("填写期望输出；留空则建立零字节 .out")}
+														</span>
+														<textarea
+															value={caseOutput}
+															onChange={(event) => setCaseOutput(event.target.value)}
+															disabled={!includeCaseOutput}
+															placeholder={includeCaseOutput ? t("可留空") : t("未勾选时由标准程序生成")}
+															spellCheck={false}
+														/>
+													</label>
+												)}
+											</div>
+											<div className="manual-case-form-actions">
+												{caseError && <p role="alert">{t(caseError)}</p>}
+												<button
+													className="button primary"
+													type="submit"
+													disabled={!!props.busy || caseSubmitting || project.subtasks.length === 0}
+												>
+													{caseSubmitting ? t("保存中…") : t("添加测试点")}
+												</button>
+											</div>
+										</fieldset>
 									</form>
 									<div className="manual-section-heading">
 										<div>

@@ -41,7 +41,7 @@ const dockerAvailable = (() => {
 async function json<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T }> {
 	const response = await authenticatedFetch(`${origin}/api${path}`, init);
 	const body = (await response.json()) as T;
-	if (response.status !== 202 || !/\/(generate|finalize|export)$/u.test(path))
+	if (response.status !== 202 || !/\/(generate|finalize|export|exports\/domjudge)$/u.test(path))
 		return { status: response.status, body };
 	const taskId = (body as { task: { id: string } }).task.id;
 	for (let attempt = 0; attempt < 1200; attempt++) {

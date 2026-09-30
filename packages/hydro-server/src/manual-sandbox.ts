@@ -1,10 +1,14 @@
 import { spawn } from "node:child_process";
-import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CppLanguage, ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
+import { StringDecoder } from "node:string_decoder";
+import type { CppLanguage, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { interactiveContainerNames, runInteractiveSandbox } from "./interactive-sandbox.ts";
-import { sandboxRuntimeArgs } from "./sandbox-runtime.ts";
+import { readSandboxFile } from "./sandbox-files.ts";
+import { readSandboxCheck, readSandboxReport } from "./sandbox-report.ts";
+import { removeDockerContainer, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 export interface SandboxCase {
 	id: string;
@@ -57,8 +61,7 @@ def check(stage, passed, message, case_id=None, verdict=None, score=None, durati
     if duration_ms is not None: item['durationMs'] = duration_ms
     if log_path is not None: item['logPath'] = log_path
     checks.append(item)
-    with open(root / 'events.jsonl', 'a', encoding='utf-8') as stream:
-        stream.write(json.dumps(item, ensure_ascii=False) + '\n')
+    print('SETDRAFT_CHECK ' + json.dumps(item, ensure_ascii=False), flush=True)
     return passed
 
 def run(command, input_path, output_path, timeout, memory_mb, cwd):
@@ -277,16 +280,8 @@ export type {
 } from "@setdraft/contracts";
 export { cppLanguages } from "@setdraft/contracts";
 
-export function removeTaskContainer(taskId: string): Promise<void> {
-	return new Promise((done) => {
-		const cleaner = spawn("docker", ["rm", "-f", `setdraft-task-${taskId}`, ...interactiveContainerNames(taskId)], {
-			stdio: "ignore",
-			timeout: 10_000,
-			killSignal: "SIGKILL",
-		});
-		cleaner.once("error", () => done());
-		cleaner.once("close", () => done());
-	});
+export async function removeTaskContainer(taskId: string): Promise<void> {
+	await Promise.all([`setdraft-task-${taskId}`, ...interactiveContainerNames(taskId)].map(removeDockerContainer));
 }
 
 function runDocker(
@@ -294,7 +289,6 @@ function runDocker(
 	timeoutMs: number,
 	signal?: AbortSignal,
 	taskId?: string,
-	stage?: string,
 	context?: ExecutionContext,
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -304,35 +298,54 @@ function runDocker(
 		const stopContainer = () => {
 			if (stopping) return;
 			stopping = taskId ? removeTaskContainer(taskId) : Promise.resolve();
+			void stopping.catch(() => {});
 			child.kill("SIGKILL");
 		};
 		const timeout = setTimeout(stopContainer, timeoutMs);
 		signal?.addEventListener("abort", stopContainer, { once: true });
-		let eventOffset = 0;
-		const progress = stage
-			? setInterval(async () => {
-					try {
-						const content = await readFile(join(stage, "events.jsonl"), "utf8");
-						const next = content.slice(eventOffset);
-						const end = next.lastIndexOf("\n");
-						if (end < 0) return;
-						for (const line of next.slice(0, end).split("\n")) {
-							const item = JSON.parse(line) as ManualCheck;
-							context?.emit("check", item.message, item);
-						}
-						eventOffset += end + 1;
-					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "ENOENT") context?.emit("log", String(error));
+		const decoder = new StringDecoder("utf8");
+		let pending = "";
+		let outputBytes = 0;
+		let eventCount = 0;
+		let errorBytes = 0;
+		let failure: Error | undefined;
+		child.stdout.on("data", (chunk: Buffer) => {
+			outputBytes += chunk.length;
+			if (outputBytes > 8 * 1024 * 1024 || failure) {
+				failure ??= new Error("沙箱进度输出超过容量上限。");
+				stopContainer();
+				return;
+			}
+			pending += decoder.write(chunk);
+			try {
+				let end = pending.indexOf("\n");
+				while (end >= 0) {
+					const line = pending.slice(0, end);
+					pending = pending.slice(end + 1);
+					if (line.startsWith("SETDRAFT_CHECK ")) {
+						if (++eventCount > 50_000) throw new Error("沙箱进度条目过多。");
+						const item = readSandboxCheck(JSON.parse(line.slice(15)));
+						context?.emit("check", item.message, item);
 					}
-				}, 500)
-			: undefined;
-		progress?.unref();
+					end = pending.indexOf("\n");
+				}
+				if (pending.length > 32 * 1024) throw new Error("沙箱进度行过长。");
+			} catch (error) {
+				failure = error instanceof Error ? error : new Error("沙箱进度无效。");
+				stopContainer();
+			}
+		});
 		const cleanup = () => {
 			clearTimeout(timeout);
-			if (progress) clearInterval(progress);
 			signal?.removeEventListener("abort", stopContainer);
 		};
 		child.stderr.on("data", (chunk: Buffer) => {
+			errorBytes += chunk.length;
+			if (errorBytes > 1024 * 1024) {
+				failure ??= new Error("沙箱错误输出超过容量上限。");
+				stopContainer();
+				return;
+			}
 			if (errors.reduce((sum, item) => sum + item.byteLength, 0) < 64 * 1024) errors.push(chunk);
 			context?.emit("log", chunk.toString("utf8"));
 		});
@@ -343,9 +356,21 @@ function runDocker(
 		child.once("close", async (code) => {
 			cleanup();
 			// Do not return the scheduler slot while Docker is still removing a cancelled container.
-			await stopping;
+			try {
+				if (stopping && taskId) {
+					await stopping.catch(() => undefined);
+					await removeTaskContainer(taskId);
+				}
+			} catch (error) {
+				reject(error);
+				return;
+			}
 			if (code === 0 && !stopping) resolve();
-			else reject(new Error(Buffer.concat(errors).toString("utf8").slice(0, 4000) || `Docker exited with ${code}.`));
+			else
+				reject(
+					failure ??
+						new Error(Buffer.concat(errors).toString("utf8").slice(0, 4000) || `Docker exited with ${code}.`),
+				);
 		});
 		if (signal?.aborted) stopContainer();
 	});
@@ -354,6 +379,7 @@ function runDocker(
 export async function runManualSandbox(input: SandboxInput): Promise<ManualSandboxReport> {
 	if (input.interactor) return runInteractiveSandbox(input);
 	const context = input.context;
+	const taskId = context?.id ?? randomUUID();
 	context?.signal.throwIfAborted();
 	context?.emit("stage", input.mode === "generate" ? "编译并生成测试数据" : "执行完整验证");
 	await mkdir(input.stage, { recursive: true });
@@ -393,7 +419,8 @@ export async function runManualSandbox(input: SandboxInput): Promise<ManualSandb
 		[
 			"run",
 			"--rm",
-			...(context ? ["--name", `setdraft-task-${context.id}`] : []),
+			"--name",
+			`setdraft-task-${taskId}`,
 			...sandboxRuntimeArgs(),
 			"--mount",
 			`type=bind,source=${input.stage},target=/work`,
@@ -406,9 +433,20 @@ export async function runManualSandbox(input: SandboxInput): Promise<ManualSandb
 		],
 		timeoutMs,
 		context?.signal,
-		context?.id,
-		input.stage,
+		taskId,
 		context,
 	);
-	return JSON.parse(await readFile(join(input.stage, "result.json"), "utf8")) as ManualSandboxReport;
+	const report = readSandboxReport(
+		JSON.parse(
+			(await readSandboxFile(input.stage, "result.json", 8 * 1024 * 1024, context?.signal)).toString("utf8"),
+		),
+	);
+	if (
+		report.mode !== input.mode ||
+		(report.success &&
+			(report.caseCount !== (input.cases?.length ?? 0) ||
+				report.generatedCount !== (input.mode === "generate" ? totalCases : 0)))
+	)
+		throw new Error("沙箱报告与任务不一致。");
+	return report;
 }

@@ -1,5 +1,21 @@
+import { execFile } from "node:child_process";
 import { rm } from "node:fs/promises";
+import { promisify } from "node:util";
 import { sandboxPolicy } from "./sandbox-policy.ts";
+
+/** A missing container is already clean; every other Docker error must be reported. */
+export async function removeDockerContainer(name: string): Promise<void> {
+	try {
+		await promisify(execFile)("docker", ["rm", "-f", name], {
+			timeout: 10_000,
+			killSignal: "SIGKILL",
+			maxBuffer: 64 * 1024,
+		});
+	} catch (error) {
+		const stderr = (error as { stderr?: string }).stderr ?? "";
+		if (!stderr.includes("No such container")) throw new Error(`沙箱容器清理失败：${name}`);
+	}
+}
 
 /** Match a non-root service UID so Linux bind-mount output remains removable by the service. */
 export function sandboxUser(uid = process.getuid?.(), gid = process.getgid?.()): string {

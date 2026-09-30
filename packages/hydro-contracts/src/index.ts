@@ -272,7 +272,7 @@ export interface ChatRequestEvent {
 	data: unknown;
 }
 
-export type TaskKind = "generate" | "finalize" | "contest-export" | "image-build";
+export type TaskKind = "generate" | "finalize" | "contest-export" | "release-export" | "image-build";
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "stale" | "interrupted";
 
 export interface TaskRecord {

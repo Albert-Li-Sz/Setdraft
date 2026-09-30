@@ -492,7 +492,7 @@ export async function createHydroServer(
 			if (caseBatchRoute) {
 				const id = caseBatchRoute[1];
 				if (request.method === "GET" && caseBatchRoute[2] === "renumber")
-					sendJson(response, 200, { changes: await projects.renumberPreview(id) });
+					sendJson(response, 200, await projects.renumberPreviewSnapshot(id));
 				else if (request.method === "POST") {
 					const value = await readJson(request, maxRequestBytes);
 					if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -675,11 +675,20 @@ export async function createHydroServer(
 			if (exportRoute) {
 				if (request.method === "POST") {
 					const format = exportRoute[2] as "domjudge" | "fps" | "qduoj";
-					const file =
-						format === "domjudge"
-							? await projects.releases.exportDomjudge(exportRoute[1])
-							: await projects.releases.exportLegacy(exportRoute[1], format);
-					sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/${format}` });
+					if (format === "domjudge") {
+						try {
+							const file = await projects.releases.releaseFile(exportRoute[1], "domjudge");
+							sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/domjudge` });
+						} catch (error) {
+							if (!(error instanceof ManualProjectError) || error.statusCode !== 404) throw error;
+							sendJson(response, 202, {
+								task: await tasks.submit("release-export", exportRoute[1], "domjudge"),
+							});
+						}
+					} else {
+						const file = await projects.releases.exportLegacy(exportRoute[1], format);
+						sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/${format}` });
+					}
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -28,6 +28,7 @@ import type { ManualProjectStore } from "./manual-projects.ts";
 import { runManualSandbox, type SandboxCase } from "./manual-sandbox.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, fileEntries, hashFile, parseGeneratorScript } from "./project-files.ts";
+import { copySandboxFile } from "./sandbox-files.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
 import { cleanupSandboxStage } from "./sandbox-runtime.ts";
 
@@ -69,6 +70,7 @@ export class ProjectPipeline {
 	): Promise<{ project: ManualProjectSnapshot; report: ManualSandboxReport }> {
 		const unlock = await this.projects.lock(id, context);
 		let stage: string | undefined;
+		let imported: string | undefined;
 
 		try {
 			const project = await this.projects.load(id);
@@ -114,7 +116,22 @@ export class ProjectPipeline {
 			});
 			context?.signal.throwIfAborted();
 			if (!report.success) return { project: await this.projects.get(id), report };
-			const generated = await fileEntries(join(stage, "generated"));
+			imported = await mkdtemp(join(this.projects.projectDirectory(id), ".import-"));
+			const budget = { remainingBytes: this.projects.maxProjectBytes };
+			for (const [index] of commands.entries()) {
+				for (const extension of ["in", "out"]) {
+					const name = `${startNumber + index}.${extension}`;
+					await copySandboxFile(
+						stage,
+						`generated/${name}`,
+						join(imported, name),
+						this.projects.maxFileBytes,
+						budget,
+						context?.signal,
+					);
+				}
+			}
+			const generated = await fileEntries(imported);
 			const previousBytes = (await this.projects.database.fileEntries("generated", id)).reduce(
 				(sum, file) => sum + file.size,
 				0,
@@ -129,7 +146,7 @@ export class ProjectPipeline {
 			project.generatedFromHash = await this.generatedHash(id, project, manual);
 			project.revision++;
 			project.updatedAt = new Date().toISOString();
-			const directory = join(stage, "generated");
+			const directory = imported;
 			await this.projects.database.commitFiles(
 				generated.map((file) => ({
 					ownerKind: "generated",
@@ -144,6 +161,7 @@ export class ProjectPipeline {
 		} finally {
 			unlock();
 			if (stage) await cleanupSandboxStage(stage);
+			if (imported) await cleanupSandboxStage(imported);
 		}
 	}
 
@@ -391,6 +409,7 @@ export class ProjectPipeline {
 				await mkdir(join(path, ".."), { recursive: true });
 				await writeFile(path, content);
 			}
+			const outputBudget = { remainingBytes: this.projects.maxProjectBytes };
 			for (const item of cases) {
 				await copyFile(
 					emptyInput
@@ -398,9 +417,13 @@ export class ProjectPipeline {
 						: await this.projects.dataFile(id, item.origin, item.inputFile),
 					join(hydroRoot, "testdata", item.inputFile),
 				);
-				await copyFile(
-					join(stage, "verified", item.outputFile ?? `${item.id}.out`),
+				await copySandboxFile(
+					stage,
+					`verified/${item.outputFile ?? `${item.id}.out`}`,
 					join(hydroRoot, "testdata", item.outputFile ?? `${item.id}.out`),
+					this.projects.maxFileBytes,
+					outputBudget,
+					context?.signal,
 				);
 			}
 			const directoryReport = await validateHydroDirectory(hydroRoot, { judgeLimits: this.projects.judgeLimits });
@@ -473,12 +496,18 @@ export class ProjectPipeline {
 				await copyFile(source, target);
 				sourceFiles.set(relative, target);
 			}
-			for (const entry of await readdir(join(stage, "logs"), { withFileTypes: true }).catch(() => [])) {
-				if (!entry.isFile()) continue;
-				const relative = `logs/${entry.name}`;
+			const logBudget = { remainingBytes: 64 * 1024 * 1024 };
+			const logPaths = new Set(report.checks.flatMap((check) => (check.logPath ? [check.logPath] : [])));
+			if (interactive) {
+				for (const item of cases)
+					for (const role of project.oracle ? ["reference", "oracle"] : ["reference"])
+						logPaths.add(`logs/${role}-${item.id}.json`);
+			}
+			for (const relative of logPaths) {
+				if (!/^logs\/[A-Za-z0-9._-]+$/u.test(relative)) throw new Error("沙箱日志路径无效。");
 				const target = join(sourceRoot, relative);
 				await mkdir(join(target, ".."), { recursive: true });
-				await copyFile(join(stage, "logs", entry.name), target);
+				await copySandboxFile(stage, relative, target, this.projects.maxFileBytes, logBudget, context?.signal);
 				sourceFiles.set(relative, target);
 			}
 			const fileHashes = Object.fromEntries(

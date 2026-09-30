@@ -705,6 +705,15 @@ export class ManualProjectStore {
 		return await this.snapshot(id);
 	}
 
+	async renumberPreviewSnapshot(
+		id: string,
+	): Promise<{ revision: number; changes: Array<{ from: string; to: string }> }> {
+		return await this.database.transaction(async () => {
+			const project = await this.load(id);
+			return { revision: project.revision, changes: await this.renumberPreview(id) };
+		});
+	}
+
 	async renumberPreview(id: string): Promise<Array<{ from: string; to: string }>> {
 		const project = await this.load(id);
 		const cases = (await this.caseList(project)).cases;

@@ -57,7 +57,7 @@ export class ReleaseStore {
 			await writeDomjudgeProblemArchive(this.projects.releaseDirectory(id), release, this.projects.image, {
 				signal: context?.signal,
 				taskId: context?.id,
-				containerName: context ? `hydro-task-${context.id}-checker` : undefined,
+				containerName: context ? `setdraft-task-${context.id}` : undefined,
 				...statement,
 			});
 		} catch (error) {
@@ -120,6 +120,13 @@ export class ReleaseStore {
 	async deleteRelease(id: string): Promise<void> {
 		const release = await this.release(id);
 		await this.projects.database.transaction(async () => {
+			if (
+				await this.projects.database.sql.one(
+					"SELECT 1 FROM tasks WHERE resource=$1 AND state IN ('queued','running')",
+					[`release:${id}:domjudge`],
+				)
+			)
+				throw new ManualProjectError("发布包正在导出，请等待完成或取消任务。", 409);
 			await this.projects.assertNotBusy(release.projectId);
 			await this.projects.database.delete("release", id);
 			await this.projects.database.removeOwnerFiles("release-file", id);

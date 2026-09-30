@@ -9,6 +9,7 @@ it.each(["provided", "empty"] as const)(
 		const html = renderToStaticMarkup(
 			<ManualWorkspace
 				apiOrigin=""
+				signal={new AbortController().signal}
 				project={projectFixture({ judgingMode: "interactive", interactionInputMode })}
 				busy={undefined}
 				deleting={false}

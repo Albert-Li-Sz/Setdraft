@@ -15,6 +15,37 @@ function deferred<T>() {
 afterEach(() => vi.useRealTimers());
 
 describe("project editing session", () => {
+	it("preserves newly assigned server cases while saving a concurrent program edit", async () => {
+		const save = vi.fn(async (project: ProjectSnapshot) => ({ ...project, revision: project.revision + 1 }));
+		const session = new ProjectSession(save);
+		session.open(projectFixture({ caseSubtasks: { "manual:1": 1 } }));
+		session.edit((project) => ({ ...project, reference: { ...project.reference, code: "new program" } }));
+		session.accept(projectFixture({ revision: 2, caseSubtasks: { "manual:1": 1, "manual:2": 2 } }));
+		await session.flush();
+		expect(save.mock.calls[0][0].caseSubtasks).toEqual({ "manual:1": 1, "manual:2": 2 });
+		expect(save.mock.calls[0][0].reference.code).toBe("new program");
+		session.dispose();
+	});
+
+	it("rebases dictionary edits by key and keeps server changes to untouched program fields", () => {
+		const session = new ProjectSession(async (project) => project);
+		session.open(projectFixture({ caseSubtasks: { "manual:1": 1, "manual:3": 1 } }));
+		session.edit((project) => ({
+			...project,
+			caseSubtasks: { "manual:1": 2 },
+			reference: { ...project.reference, code: "local" },
+		}));
+		session.accept(
+			projectFixture({
+				revision: 2,
+				caseSubtasks: { "manual:1": 1, "manual:2": 2, "manual:3": 1 },
+				reference: { language: "python3", code: "remote" },
+			}),
+		);
+		expect(session.getSnapshot().project?.caseSubtasks).toEqual({ "manual:1": 2, "manual:2": 2 });
+		expect(session.getSnapshot().project?.reference).toEqual({ language: "python3", code: "local" });
+		session.dispose();
+	});
 	it("serializes edits made during a save using the returned revision", async () => {
 		const first = deferred<ProjectSnapshot>();
 		const save = vi.fn(async (project: ProjectSnapshot) => ({ ...project, revision: project.revision + 1 }));

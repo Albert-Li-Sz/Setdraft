@@ -48,6 +48,30 @@ async function waitFor(
 }
 
 describe("persisted chat requests", () => {
+	it("persists cancellation arriving before submission, including after a queue restart", async () => {
+		const client = vi.fn(async () => "should not run");
+		const chat = await configuredChat(client);
+		const database = new WorkspaceDatabase(root);
+		const conversation = await chat.create();
+		const id = randomUUID();
+		const queue = new ChatRequestQueue(database, chat);
+		expect(await queue.cancel(conversation.id, id)).toMatchObject({ state: "failed", error: "已取消" });
+		expect(await queue.cancel(conversation.id, id)).toMatchObject({ state: "failed", error: "已取消" });
+		await queue.close();
+		const recovered = new ChatRequestQueue(database, chat);
+		try {
+			expect(await recovered.submit(conversation.id, id, "late submission")).toMatchObject({
+				state: "failed",
+				error: "已取消",
+			});
+			await recovered.idle();
+			expect(client).not.toHaveBeenCalled();
+			expect((await chat.get(conversation.id)).messages).toHaveLength(0);
+			await expect(recovered.retry(conversation.id, id)).rejects.toThrow("提交前取消");
+		} finally {
+			await recovered.close();
+		}
+	});
 	it("recovers accepted backlog above a lowered capacity without admitting new work", async () => {
 		const chat = await configuredChat(async () => "ok");
 		const database = new WorkspaceDatabase(root);

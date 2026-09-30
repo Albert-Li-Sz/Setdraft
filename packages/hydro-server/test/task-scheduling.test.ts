@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TaskState } from "@setdraft/contracts";
+import type { ManualRelease, TaskState } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
@@ -52,6 +53,76 @@ async function generated(projects: ManualProjectStore, id: string) {
 }
 
 describe("sandbox admission and durable dispatch", () => {
+	it("deduplicates release exports at admission and cancels them through the shared scheduler", async () => {
+		const policy = { ...sandboxPolicy({}), concurrency: 1, maxOutstanding: 1, maxOutstandingPerUser: 1 };
+		const scheduler = new ExecutionScheduler(1, policy);
+		const blocker = await scheduler.acquire("other", "blocker", new AbortController().signal);
+		const { projects, queue } = await fixture("alice", scheduler, policy);
+		const project = await projects.create("acm");
+		const id = randomUUID();
+		const release: ManualRelease = {
+			id,
+			name: "v1",
+			projectId: project.id,
+			revision: 1,
+			scoringMode: "acm",
+			checkerMode: "text",
+			projectHash: "test",
+			title: "Test",
+			slug: "test",
+			createdAt: new Date().toISOString(),
+			report: {
+				mode: "finalize",
+				success: true,
+				checks: [{ stage: "reference", passed: true, message: "ok" }],
+				caseCount: 1,
+				generatedCount: 0,
+				oracleCount: 0,
+				checkerUsed: true,
+				validatorUsed: false,
+				issues: [],
+				projectHash: "test",
+				revision: 1,
+				verifiedAt: new Date().toISOString(),
+			},
+		};
+		await projects.database.put("release", id, release);
+		let aborted = false;
+		const run = vi.spyOn(projects.releases, "exportDomjudge").mockImplementation(async (_id, context) => {
+			if (!context) throw new Error("Execution context required");
+			await new Promise<void>((resolve) =>
+				context.signal.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						resolve();
+					},
+					{ once: true },
+				),
+			);
+			context.signal.throwIfAborted();
+			return { path: "unused", size: 0, name: "test.domjudge.zip" };
+		});
+		try {
+			const jobs = await Promise.all(
+				Array.from({ length: 8 }, () => queue.submit("release-export", id, "domjudge")),
+			);
+			expect(new Set(jobs.map((task) => task.id)).size).toBe(1);
+			expect(scheduler.status("alice")).toMatchObject({ running: 1, outstanding: 1 });
+			expect(run).not.toHaveBeenCalled();
+			await expect(projects.releases.deleteRelease(id)).rejects.toMatchObject({ statusCode: 409 });
+			blocker();
+			await reaches(queue, jobs[0].id, "running");
+			await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+			await queue.cancelAll();
+			await reaches(queue, jobs[0].id, "cancelled");
+			await queue.idle();
+			expect(aborted).toBe(true);
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+		} finally {
+			blocker();
+		}
+	});
 	it("dispatches multiple projects for one user when configured", async () => {
 		const policy = { ...sandboxPolicy({}), concurrency: 3, concurrencyPerUser: 2 };
 		const scheduler = new ExecutionScheduler(3, policy);

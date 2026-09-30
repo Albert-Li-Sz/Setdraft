@@ -1527,6 +1527,12 @@ a svg {
 	border-radius: 14px;
 	background: var(--surface-subtle);
 }
+.manual-case-fields {
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
 .manual-case-form-heading {
 	display: flex;
 	align-items: flex-start;

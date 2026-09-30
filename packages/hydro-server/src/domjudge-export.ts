@@ -7,7 +7,7 @@ import { isContestReadyRelease } from "@setdraft/contracts";
 import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
-import { cleanupSandboxStage, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
+import { cleanupSandboxStage, removeDockerContainer, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 interface SourceManifest {
 	cases: Array<{ inputFile: string; outputFile: string }>;
@@ -76,16 +76,21 @@ END { if (!valid || score < 0 || score > 100) exit 1; if (score == 100) exit 42;
 	"",
 ].join("\n");
 
-function spawnDocker(args: string[], timeoutMs: number, signal?: AbortSignal, containerName?: string): Promise<void> {
+function spawnDocker(
+	args: string[],
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+	containerName: string,
+): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const command = containerName ? [...args.slice(0, 1), "--name", containerName, ...args.slice(1)] : args;
+		const command = [...args.slice(0, 1), "--name", containerName, ...args.slice(1)];
 		const child = spawn("docker", command, { stdio: ["ignore", "pipe", "pipe"] });
 		const errors: Buffer[] = [];
+		let stopping: Promise<void> | undefined;
 		const stop = () => {
-			if (containerName) {
-				const cleaner = spawn("docker", ["rm", "-f", containerName], { stdio: "ignore" });
-				cleaner.on("error", () => {});
-			}
+			if (stopping) return;
+			stopping = removeDockerContainer(containerName);
+			void stopping.catch(() => {});
 			child.kill("SIGKILL");
 		};
 		const timer = setTimeout(stop, timeoutMs);
@@ -101,14 +106,24 @@ function spawnDocker(args: string[], timeoutMs: number, signal?: AbortSignal, co
 			cleanup();
 			reject(error);
 		});
-		child.once("close", (code) => {
+		child.once("close", async (code) => {
 			cleanup();
-			if (code === 0) resolve();
+			try {
+				if (stopping) {
+					await stopping.catch(() => undefined);
+					await removeDockerContainer(containerName);
+				}
+			} catch (error) {
+				reject(error);
+				return;
+			}
+			if (code === 0 && !stopping) resolve();
 			else
 				reject(
 					new Error(Buffer.concat(errors).toString("utf8").slice(0, 4000) || `DOMjudge Checker 验证失败：${code}`),
 				);
 		});
+		if (signal?.aborted) stop();
 	});
 }
 
@@ -117,12 +132,13 @@ async function verifyOutputValidator(
 	image: string,
 	caseCount: number,
 	signal?: AbortSignal,
-	containerName?: string,
+	containerName = `setdraft-export-${randomUUID()}`,
 ): Promise<void> {
 	const verify = [
-		"import pathlib, subprocess, tempfile",
-		"root = pathlib.Path('/work')",
-		"validator = root / 'output_validators' / 'checker'",
+		"import pathlib, shutil, subprocess, tempfile",
+		"root = pathlib.Path('/package')",
+		"validator = pathlib.Path(tempfile.mkdtemp()) / 'checker'",
+		"shutil.copytree(root / 'output_validators' / 'checker', validator)",
 		"subprocess.run([str(validator / 'build')], check=True, cwd=validator, timeout=60)",
 		"checker = validator / 'checker'",
 		"run = validator / 'run'",
@@ -161,13 +177,13 @@ async function verifyOutputValidator(
 			"--rm",
 			...sandboxRuntimeArgs(),
 			"--mount",
-			`type=bind,source=${directory},target=/work`,
+			`type=bind,source=${directory},target=/package,readonly`,
 			"--workdir",
-			"/work",
+			"/tmp",
 			"--entrypoint",
 			"python3",
 			image,
-			"/work/verify.py",
+			"/package/verify.py",
 		],
 		Math.max(120_000, caseCount * 45_000),
 		signal,

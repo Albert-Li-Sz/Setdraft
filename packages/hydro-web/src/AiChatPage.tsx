@@ -97,7 +97,9 @@ export function AiChatPage(props: Props) {
 	const [message, setMessage] = useState<UiMessage>("正在读取本地对话…");
 	const [messageTone, setMessageTone] = useState<"pending" | "passed" | "failed">("pending");
 	const controllerRef = useRef<AbortController | undefined>(undefined);
-	const activeRequestRef = useRef<{ chatId: string; requestId: string } | undefined>(undefined);
+	const activeRequestRef = useRef<
+		{ chatId: string; requestId: string; cancellation?: Promise<ChatRequest> } | undefined
+	>(undefined);
 	const messagesRef = useRef<HTMLDivElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
 	const followOutputRef = useRef(true);
@@ -348,6 +350,8 @@ export function AiChatPage(props: Props) {
 		controllerRef.current = controller;
 		try {
 			const current = chat ?? (await create(true));
+			controller.signal.throwIfAborted();
+			activeRequestRef.current = { chatId: current.id, requestId };
 			activeChat = current;
 			previousMessageCount = current.messages.length;
 			const form = new FormData();
@@ -379,7 +383,6 @@ export function AiChatPage(props: Props) {
 					})
 				: await submit();
 			if (!response.ok) throw new Error(responseError(await response.json()));
-			activeRequestRef.current = { chatId: current.id, requestId };
 			setInput("");
 			setImages([]);
 			let completed = false;
@@ -437,8 +440,24 @@ export function AiChatPage(props: Props) {
 			await refreshList();
 			showMessage("回复已保存到本地对话。", "passed");
 		} catch (error) {
+			let stoppedMessage = "发送已停止。";
+			if (controller.signal.aborted && activeRequestRef.current) {
+				try {
+					const active = activeRequestRef.current;
+					active.cancellation ??= cancelRequest(active);
+					const state = await active.cancellation;
+					stoppedMessage =
+						state.state === "done"
+							? "回复已完成并保存。"
+							: state.error === "已取消"
+								? "已停止生成。"
+								: (state.error ?? "请求已结束。");
+				} catch (cause) {
+					stoppedMessage = cause instanceof Error ? cause.message : "无法确认后台停止，请在任务列表核对。";
+				}
+			}
 			showMessage(
-				controller.signal.aborted ? "已停止生成。" : error instanceof Error ? error.message : "模型请求失败。",
+				controller.signal.aborted ? stoppedMessage : error instanceof Error ? error.message : "模型请求失败。",
 				controller.signal.aborted ? "pending" : "failed",
 			);
 			setStreamFailed(partialText.length > 0);
@@ -514,7 +533,22 @@ export function AiChatPage(props: Props) {
 			await refreshList();
 			showMessage("回复已保存到本地对话。", "passed");
 		} catch (error) {
-			showMessage(error instanceof Error ? error.message : "重试失败。", "failed");
+			if (controller.signal.aborted && activeRequestRef.current) {
+				try {
+					const active = activeRequestRef.current;
+					active.cancellation ??= cancelRequest(active);
+					const state = await active.cancellation;
+					showMessage(
+						state.state === "done"
+							? "回复已完成并保存。"
+							: state.error === "已取消"
+								? "已停止生成。"
+								: (state.error ?? "请求已结束。"),
+					);
+				} catch (cause) {
+					showMessage(cause instanceof Error ? cause.message : "无法确认后台停止，请重新打开对话核对。", "failed");
+				}
+			} else showMessage(error instanceof Error ? error.message : "重试失败。", "failed");
 			setStreamFailed(true);
 		} finally {
 			activeRequestRef.current = undefined;
@@ -523,30 +557,37 @@ export function AiChatPage(props: Props) {
 		}
 	}
 
+	async function cancelRequest(active: { chatId: string; requestId: string }): Promise<ChatRequest> {
+		const base = `/chats/${active.chatId}/requests/${active.requestId}`;
+		const signal = AbortSignal.timeout(10_000);
+		let state = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, `${base}/cancel`), { method: "POST", signal });
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if (state.state === "done" || state.state === "failed") return state;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			state = await jsonRequest<ChatRequest>(apiUrl(props.apiOrigin, base), { signal });
+		}
+		throw new Error("尚未确认后台停止，请重新打开对话核对请求状态。");
+	}
+
 	async function stopGeneration(): Promise<void> {
 		const active = activeRequestRef.current;
+		if (active) active.cancellation ??= cancelRequest(active);
 		controllerRef.current?.abort();
 		if (!active) return;
+		showMessage("正在确认后台停止…");
 		try {
-			await authFetch(apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}/cancel`), {
-				method: "POST",
-			});
-			for (let attempt = 0; attempt < 20; attempt++) {
-				const response = await authFetch(
-					apiUrl(props.apiOrigin, `/chats/${active.chatId}/requests/${active.requestId}`),
-				);
-				if (response.ok) {
-					const state = (await response.json()) as { state: string };
-					if (state.state === "failed") {
-						setFailedRequest(active);
-						break;
-					}
-					if (state.state === "done") break;
-				}
-				await new Promise((resolve) => setTimeout(resolve, 100));
-			}
-		} catch {
+			const state = await active.cancellation;
+			if (state?.state === "failed") setFailedRequest(active);
+			showMessage(
+				state?.state === "done"
+					? "回复已完成并保存。"
+					: state?.error === "已取消"
+						? "已停止生成。"
+						: (state?.error ?? "请求已结束。"),
+			);
+		} catch (cause) {
 			setFailedRequest(active);
+			showMessage(cause instanceof Error ? cause.message : "无法确认后台停止，请重新打开对话核对。", "failed");
 		}
 	}
 

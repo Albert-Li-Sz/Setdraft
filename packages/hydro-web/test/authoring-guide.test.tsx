@@ -14,7 +14,8 @@ describe("authoring guide", () => {
 		expect(html).toContain("全交互");
 		expect(html).toContain("半对拍");
 		expect(html).toContain("booklet.pdf");
-		expect(html).toContain("尚未完成");
+		expect(html).toContain("完整平台验收尚未通过");
+		expect(html).toContain('href="hydro-acceptance-2026-09-30.md"');
 		expect(html).toContain('href="#workspace"');
 	});
 });

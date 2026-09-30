@@ -21,6 +21,7 @@ import {
 	waitForTask,
 } from "./platform.ts";
 import { projectContextSnapshot } from "./problem.ts";
+import { type CaseOperationScope, manageProjectCases } from "./project-case-operations.ts";
 import { UploadProgressDialog } from "./UploadProgressDialog.tsx";
 import { useProjectSession } from "./use-project-session.ts";
 import { WorkspaceHome } from "./WorkspaceHome.tsx";
@@ -89,6 +90,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			return session.getSnapshot().project;
 		},
 	};
+	const operationSignal = session.signal;
 	const saveNow = () => session.flush();
 	useEffect(() => {
 		if (paused) {
@@ -450,26 +452,11 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	}
 
 	async function manageCases(
+		scope: CaseOperationScope,
 		action: "batch-delete" | "renumber" | "clear-generated",
 		stems?: string[],
 	): Promise<void> {
-		const current = projectRef.current;
-		const signal = session.signal;
-		if (!current) return;
-		await saveNow();
-		signal.throwIfAborted();
-		const target = projectRef.current ?? current;
-		const path =
-			action === "clear-generated" ? `/projects/${target.id}/generated` : `/projects/${target.id}/cases/${action}`;
-		const snapshot = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, path), {
-			method: action === "clear-generated" ? "DELETE" : "POST",
-			signal,
-			headers: { "content-type": "application/json", "x-expected-revision": String(target.revision) },
-			...(action !== "clear-generated"
-				? { body: JSON.stringify({ stems, expectedRevision: target.revision }) }
-				: {}),
-		});
-		signal.throwIfAborted();
+		const snapshot = await manageProjectCases(session, apiOrigin, scope, action, stems);
 		setCurrentProject(snapshot);
 		setReport(undefined);
 		showNotice(
@@ -687,7 +674,14 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								onEdit={editProject}
 								onUpload={uploadFiles}
 								onAddCase={addTextCase}
-								onManageCases={manageCases}
+								signal={operationSignal}
+								onManageCases={(action, stems, expectedRevision) =>
+									manageCases(
+										{ projectId: project.id, signal: operationSignal, expectedRevision },
+										action,
+										stems,
+									)
+								}
 								onUploadAttachments={uploadAttachments}
 								onDeleteFile={deleteFile}
 								onGenerate={generate}

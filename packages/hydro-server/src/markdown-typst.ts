@@ -16,7 +16,14 @@ export function typstString(value: string): string {
 export function preparePdfMarkdown(markdown: string, images: ReadonlyMap<string, string> = new Map()): string {
 	const tree = parser.parse(markdown);
 	const definitions = new Map<string, Definition>();
-	for (const node of tree.children) if (node.type === "definition") definitions.set(node.identifier, node);
+	let definitionCount = 0;
+	const collect = (node: RootContent, depth: number): void => {
+		if (++definitionCount > 30_000 || depth > 80)
+			throw new Error("PDF Markdown 结构过于复杂，请简化嵌套或拆分内容。");
+		if (node.type === "definition" && !definitions.has(node.identifier)) definitions.set(node.identifier, node);
+		if ("children" in node) for (const child of node.children) collect(child, depth + 1);
+	};
+	for (const node of tree.children) collect(node, 0);
 	const edits: Array<{ start: number; end: number; text: string }> = [];
 	let count = 0;
 	const visit = (node: RootContent, depth: number): void => {

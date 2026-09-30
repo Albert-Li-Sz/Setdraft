@@ -129,6 +129,11 @@ export async function writeLegacyProblemExport(
 		);
 	}
 	const project = JSON.parse(await readFile(join(releaseRoot, "source", "project.json"), "utf8")) as ManualProject;
+	if (/file:\/\//iu.test(formatHydroStatement(project))) {
+		throw new Error(
+			"FPS、QDUOJ 暂不支持题面附件引用，无法完整导出；请使用 Hydro 包，或将含图片的题面导出为 PDF 后使用 DOMjudge 包。",
+		);
+	}
 	const manifest = JSON.parse(await readFile(join(releaseRoot, "source", "manifest.json"), "utf8")) as SourceManifest;
 	if (manifest.cases.length === 0) throw new Error("发布记录没有测试点。");
 	const target = join(releaseRoot, format === "fps" ? "fps.xml" : "qduoj.zip");

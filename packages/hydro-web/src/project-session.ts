@@ -2,6 +2,32 @@ import { type ProjectSnapshot, readProjectSnapshot } from "@setdraft/contracts";
 import { RevisionConflict } from "./api-client.ts";
 import { editableProject } from "./problem.ts";
 
+function rebaseValue(base: unknown, local: unknown, remote: unknown): unknown {
+	if (JSON.stringify(base) === JSON.stringify(local)) return remote;
+	if (
+		base &&
+		local &&
+		remote &&
+		typeof base === "object" &&
+		typeof local === "object" &&
+		typeof remote === "object" &&
+		!Array.isArray(base) &&
+		!Array.isArray(local) &&
+		!Array.isArray(remote)
+	) {
+		const before = base as Record<string, unknown>;
+		const draft = local as Record<string, unknown>;
+		const result = { ...(remote as Record<string, unknown>) };
+		for (const key of new Set([...Object.keys(before), ...Object.keys(draft)])) {
+			if (JSON.stringify(before[key]) === JSON.stringify(draft[key])) continue;
+			if (!(key in draft)) delete result[key];
+			else result[key] = rebaseValue(before[key], draft[key], result[key]);
+		}
+		return result;
+	}
+	return local;
+}
+
 export interface ProjectSessionState {
 	project?: ProjectSnapshot;
 	status: "saved" | "dirty" | "saving" | "conflict" | "error";
@@ -21,6 +47,7 @@ export class ProjectSession {
 	private blocked = false;
 	private paused = false;
 	private remote?: ProjectSnapshot;
+	private baseline?: ProjectSnapshot;
 	private controller = new AbortController();
 	private timer?: ReturnType<typeof setTimeout>;
 	private flight?: Promise<void>;
@@ -61,18 +88,23 @@ export class ProjectSession {
 		this.flight = undefined;
 		this.blocked = false;
 		this.remote = undefined;
+		this.baseline = project;
 		this.publish({ project, status: "saved" });
 	}
 
-	accept(project: ProjectSnapshot): void {
+	accept(project: ProjectSnapshot, baseline = this.baseline): void {
 		if (this.state.project?.id !== project.id || this.blocked) return;
 		readProjectSnapshot(project);
 		if (project.revision < this.state.project.revision) return;
 		const dirty = this.version > this.savedVersion;
+		const patch: Record<string, unknown> = {};
+		if (dirty && baseline) {
+			for (const key of Object.keys(editableProject(project)) as Array<keyof ProjectSnapshot>)
+				patch[key] = rebaseValue(baseline[key], this.state.project[key], project[key]);
+		}
+		this.baseline = project;
 		this.publish({
-			project: dirty
-				? { ...project, ...editableProject(this.state.project), oracle: this.state.project.oracle }
-				: project,
+			project: { ...project, ...patch },
 			status: dirty ? "dirty" : "saved",
 		});
 	}
@@ -139,7 +171,7 @@ export class ProjectSession {
 							throw new Error("服务端返回的题目版本无效。");
 						if (this.blocked) throw new Error(this.state.error);
 						this.savedVersion = sentVersion;
-						this.accept(saved);
+						this.accept(saved, project);
 					} catch (error) {
 						if (generation !== this.generation) return;
 						if (error instanceof RevisionConflict) this.conflict(error.current);

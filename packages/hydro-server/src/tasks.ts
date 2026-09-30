@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
+import { isContestReadyRelease } from "@setdraft/contracts";
 import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
 import { EventWriter } from "./event-writer.ts";
@@ -30,6 +31,7 @@ export class TaskQueue {
 	private readonly slots = new Map<string, () => void>();
 	private readonly admissions = new Map<string, () => void>();
 	private readonly running = new Set<Promise<void>>();
+	private readonly releaseSubmissions = new Map<string, Promise<TaskRecord>>();
 	readonly policy: SandboxPolicy;
 
 	constructor(
@@ -130,6 +132,7 @@ export class TaskQueue {
 
 	private async fingerprint(kind: TaskKind, resource: string): Promise<string> {
 		if (kind === "image-build") return digest({ image: this.projects.image });
+		if (kind === "release-export") return digest(await this.projects.releases.release(resource));
 		if (kind === "contest-export") return digest(await this.database.get("contest", resource));
 		return digest({
 			project: await this.database.get("project", resource),
@@ -146,20 +149,52 @@ export class TaskQueue {
 	}
 
 	async submit(kind: TaskKind, resourceId: string, format?: ContestFormat, releaseName?: string): Promise<TaskRecord> {
+		if (kind !== "release-export") return this.submitTask(kind, resourceId, format, releaseName);
+		const key = `${resourceId}:${format}`;
+		const pending = this.releaseSubmissions.get(key);
+		if (pending) return pending;
+		const flight = this.submitTask(kind, resourceId, format, releaseName).finally(() =>
+			this.releaseSubmissions.delete(key),
+		);
+		this.releaseSubmissions.set(key, flight);
+		return flight;
+	}
+
+	private async submitTask(
+		kind: TaskKind,
+		resourceId: string,
+		format?: ContestFormat,
+		releaseName?: string,
+	): Promise<TaskRecord> {
 		await this.ready;
 		await this.assertWritable();
 		const resourceTitle =
 			kind === "image-build"
 				? undefined
-				: kind === "contest-export"
-					? (await this.contests.get(resourceId)).title
-					: (await this.projects.get(resourceId)).title;
+				: kind === "release-export"
+					? (await this.projects.releases.release(resourceId)).title
+					: kind === "contest-export"
+						? (await this.contests.get(resourceId)).title
+						: (await this.projects.get(resourceId)).title;
+		if (kind === "release-export") {
+			if (format !== "domjudge") throw new ManualProjectError("发布格式无效。", 422);
+			const release = await this.projects.releases.release(resourceId);
+			if (release.scoringMode !== "acm" || !isContestReadyRelease(release))
+				throw new ManualProjectError("只有通过 ACM 完整验证的题目可导出 DOMjudge 包。", 422);
+			const existing = await this.database.sql.one<{ id: string }>(
+				"SELECT id FROM tasks WHERE resource=$1 AND state IN ('queued','running')",
+				[`release:${resourceId}:${format}`],
+			);
+			if (existing) return await this.get(existing.id);
+		}
 		const now = new Date().toISOString();
 		const task: TaskRecord = {
 			id: randomUUID(),
 			kind,
 			resource:
-				kind === "image-build" ? "image" : `${kind === "contest-export" ? "contest" : "project"}:${resourceId}`,
+				kind === "image-build"
+					? "image"
+					: `${kind === "release-export" ? "release" : kind === "contest-export" ? "contest" : "project"}:${resourceId}${kind === "release-export" ? `:${format ?? "domjudge"}` : ""}`,
 			format,
 			releaseName,
 			resourceTitle,
@@ -181,6 +216,13 @@ export class TaskQueue {
 			});
 		} catch (error) {
 			this.releaseAdmission(task.id);
+			if ((error as { code?: string }).code === "23505" && kind === "release-export") {
+				const existing = await this.database.sql.one<{ id: string }>(
+					"SELECT id FROM tasks WHERE resource=$1 AND state IN ('queued','running')",
+					[task.resource],
+				);
+				if (existing) return await this.get(existing.id);
+			}
 			if ((error as { code?: string }).code === "23505")
 				throw new ManualProjectError("该题目或竞赛已有排队或运行中的任务。", 409);
 			throw error;
@@ -331,7 +373,7 @@ export class TaskQueue {
 		const task = await this.get(id);
 		if (!["failed", "cancelled", "stale", "interrupted"].includes(task.state))
 			throw new ManualProjectError("当前任务不可重试。", 409);
-		return await this.submit(task.kind, task.resource.split(":").at(-1) ?? "", task.format, task.releaseName);
+		return await this.submit(task.kind, task.resource.split(":")[1] ?? "", task.format, task.releaseName);
 	}
 
 	async isRunning(resource: string): Promise<boolean> {
@@ -409,7 +451,7 @@ export class TaskQueue {
 	}
 
 	private async execute(task: TaskRecord, controller: AbortController): Promise<void> {
-		const resourceId = task.resource.split(":").at(-1) ?? "";
+		const resourceId = task.resource.split(":")[1] ?? "";
 		let timeout: NodeJS.Timeout | undefined;
 		let timedOut = false;
 		let settled = false;
@@ -456,7 +498,11 @@ export class TaskQueue {
 			if (task.kind === "generate") result = await this.projects.pipeline.generate(resourceId, context);
 			else if (task.kind === "finalize")
 				result = await this.projects.pipeline.finalize(resourceId, context, task.releaseName);
-			else if (task.kind === "contest-export")
+			else if (task.kind === "release-export") {
+				if (task.format !== "domjudge") throw new ManualProjectError("发布格式无效。", 422);
+				const file = await this.projects.releases.exportDomjudge(resourceId, context);
+				result = { name: file.name, download: `/api/releases/${resourceId}/domjudge` };
+			} else if (task.kind === "contest-export")
 				result = await this.contests.export(resourceId, task.format ?? "hydro", context, task.releaseName);
 			else result = await this.buildImage(context);
 			await events.flush();

@@ -171,7 +171,7 @@ export class ChatRequestQueue {
 		this.pruning = (async () => {
 			const removed = await this.database.transaction(async () => {
 				const rows = await this.database.sql.all<{ id: string }>(
-					"SELECT id FROM chat_requests WHERE state IN ('done','failed') AND (updated_at<$1 OR id IN (SELECT id FROM chat_requests WHERE state IN ('done','failed') ORDER BY updated_at DESC,id DESC OFFSET $2)) FOR UPDATE",
+					"SELECT id FROM chat_requests WHERE state IN ('done','failed') AND (updated_at<$1 OR (fingerprint<>'' AND id IN (SELECT id FROM chat_requests WHERE state IN ('done','failed') AND fingerprint<>'' ORDER BY updated_at DESC,id DESC OFFSET $2))) FOR UPDATE",
 					[new Date(Date.now() - this.policy.retentionMs).toISOString(), this.policy.maxRetainedRequests],
 				);
 				for (const row of rows) {
@@ -285,6 +285,7 @@ export class ChatRequestQueue {
 				id,
 			])) as { chat_id: string; fingerprint: string } | undefined;
 			if (existing) {
+				if (existing.chat_id === chatId && existing.fingerprint === "") return await this.get(id, chatId);
 				if (existing.chat_id !== chatId || existing.fingerprint !== fingerprint)
 					throw new ChatError("请求 ID 已用于其他消息。", 409);
 				return await this.get(id, chatId);
@@ -352,10 +353,12 @@ export class ChatRequestQueue {
 			const request = await this.get(id, chatId);
 			if (request.state !== "failed") throw new ChatError("此请求不可重试。", 409);
 			if (this.controllers.has(id)) throw new ChatError("请求正在结束，请稍后重试。", 409);
-			const row = await this.database.sql.one<{ payload: string }>("SELECT payload FROM chat_requests WHERE id=$1", [
-				id,
-			]);
+			const row = await this.database.sql.one<{ payload: string; fingerprint: string }>(
+				"SELECT payload,fingerprint FROM chat_requests WHERE id=$1",
+				[id],
+			);
 			if (!row) throw new ChatError("请求不存在。", 404);
+			if (!row.fingerprint) throw new ChatError("消息已在提交前取消，请重新发送。", 409);
 			const payload = JSON.parse(row.payload) as StoredPayload;
 			this.chat.validateInput(
 				await this.chat.get(chatId),
@@ -387,37 +390,64 @@ export class ChatRequestQueue {
 	}
 
 	async cancel(chatId: string, id: string): Promise<ChatRequest> {
-		await this.assertWritable(true);
-		const request = await this.get(id, chatId);
-		if (request.state === "queued") {
-			const cancelled = await this.database.transaction(async () => {
-				const cancelled = await this.database.sql.execute(
-					"UPDATE chat_requests SET state='failed',error='已取消',updated_at=$1 WHERE id=$2 AND state='queued'",
+		await this.ready;
+		return this.withRequestLock(id, async () => {
+			await this.assertWritable(true);
+			if (!/^[a-f0-9-]{36}$/u.test(id)) throw new ChatError("请求 ID 无效。", 422);
+			await this.chat.get(chatId);
+			await this.database.transaction(async () => {
+				const row = await this.database.sql.one<{ chat_id: string }>(
+					"SELECT chat_id FROM chat_requests WHERE id=$1",
+					[id],
+				);
+				if (row) {
+					if (row.chat_id !== chatId) throw new ChatError("请求不存在。", 404);
+					return;
+				}
+				const retained = await this.database.sql.one<{ count: number }>(
+					"SELECT count(*)::integer AS count FROM chat_requests WHERE fingerprint=''",
+					[],
+				);
+				if ((retained?.count ?? 0) >= this.policy.maxRetainedRequests)
+					throw new ChatError("提交前取消记录已达上限，请稍后重试。", 429);
+				const now = new Date().toISOString();
+				await this.database.sql.execute(
+					"INSERT INTO chat_requests (id,chat_id,payload,fingerprint,state,error,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)",
+					[id, chatId, "{}", "", "failed", "已取消", now],
+				);
+				await this.emit(id, "error", { message: "已取消" });
+			});
+			const request = await this.get(id, chatId);
+			if (request.state === "queued") {
+				const cancelled = await this.database.transaction(async () => {
+					const cancelled = await this.database.sql.execute(
+						"UPDATE chat_requests SET state='failed',error='已取消',updated_at=$1 WHERE id=$2 AND state='queued'",
+						[new Date().toISOString(), id],
+					);
+					if (cancelled.rowCount) {
+						await this.emit(id, "error", { message: "已取消" });
+						return true;
+					}
+					return false;
+				});
+				if (cancelled) {
+					this.controllers.get(id)?.abort();
+					this.releaseAdmission(id);
+					return await this.get(id, chatId);
+				}
+			}
+			const current = await this.get(id, chatId);
+			if (current.state === "running") {
+				const requested = await this.database.sql.execute(
+					"UPDATE chat_requests SET cancel_requested=1,updated_at=$1 WHERE id=$2 AND state='running'",
 					[new Date().toISOString(), id],
 				);
-				if (cancelled.rowCount) {
-					await this.emit(id, "error", { message: "已取消" });
-					return true;
-				}
-				return false;
-			});
-			if (cancelled) {
+				if (!requested.rowCount) return await this.get(id, chatId);
 				this.controllers.get(id)?.abort();
-				this.releaseAdmission(id);
 				return await this.get(id, chatId);
 			}
-		}
-		const current = await this.get(id, chatId);
-		if (current.state === "running") {
-			const requested = await this.database.sql.execute(
-				"UPDATE chat_requests SET cancel_requested=1,updated_at=$1 WHERE id=$2 AND state='running'",
-				[new Date().toISOString(), id],
-			);
-			if (!requested.rowCount) throw new ChatError("请求已经结束。", 409);
-			this.controllers.get(id)?.abort();
-			return await this.get(id, chatId);
-		}
-		throw new ChatError("请求已经结束。", 409);
+			return current;
+		});
 	}
 
 	private async loadImages(payload: StoredPayload, id: string): Promise<ChatImageUpload[]> {

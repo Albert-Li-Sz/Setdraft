@@ -3,7 +3,14 @@ import { authFetch } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
 import { EmptyState } from "./EmptyState.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
-import { apiUrl, isContestReadyRelease, type ManualRelease, requestJson } from "./platform.ts";
+import {
+	apiUrl,
+	type BackgroundTask,
+	isContestReadyRelease,
+	type ManualRelease,
+	requestJson,
+	waitForTask,
+} from "./platform.ts";
 
 export function ProjectReleases({
 	apiOrigin,
@@ -87,10 +94,12 @@ export function ProjectReleases({
 		setWorking(true);
 		setMessage("正在导出…");
 		try {
-			const result = await requestJson<{ download: string }>(
+			const submitted = await requestJson<{ download: string } | { task: BackgroundTask }>(
 				apiUrl(apiOrigin, `/releases/${release.id}/exports/${format}`),
 				{ method: "POST" },
 			);
+			const result =
+				"task" in submitted ? await waitForTask<{ download: string }>(apiOrigin, submitted.task.id) : submitted;
 			window.location.href = apiUrl(apiOrigin, result.download.replace(/^\/api/u, ""));
 			setMessage(uiMessage("{0} 包已生成。", format.toUpperCase()));
 		} catch (cause) {
