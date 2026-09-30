@@ -43,7 +43,7 @@ it("escapes control characters without changing literal Unicode escape sequences
 	expect(typstString(String.raw`\u0000 "#read"`)).toBe('"\\\\u0000 \\"#read\\""');
 });
 
-it("compiles a Chinese booklet, math, tables and standalone ordinary/interactive PDFs", async () => {
+it("compiles a Chinese booklet, math and standalone ordinary/interactive PDFs", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "setdraft-pdf-test-"));
 	try {
 		const result = await compileContestPdfs(directory, pdfFixture);

@@ -66,7 +66,7 @@ sandboxIt.each(["acm", "oi"] as const)(
 		const released = projects.releaseDirectory(result.release.id);
 		const config = await readFile(join(released, "hydro", "interactive-doubling", "testdata", "config.yaml"), "utf8");
 		expect(config).toContain("type: interactive");
-		expect(config).toContain("lang: cc.cc20");
+		expect(config).toContain("lang: auto");
 		expect(config).not.toContain("multi_pass");
 		expect(
 			await readFile(join(released, "hydro", "interactive-doubling", "testdata", "interactive-empty.in")),

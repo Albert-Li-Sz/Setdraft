@@ -30,6 +30,7 @@ export interface HydroProblemSpec {
 	multiPass?: number;
 	answerMode?: "single" | "multi";
 	interactor?: string;
+	/** Legacy hint accepted for compatibility; new exports always use Hydro's auto detection. */
 	interactorLanguage?: string;
 	slug: string;
 	title: string;

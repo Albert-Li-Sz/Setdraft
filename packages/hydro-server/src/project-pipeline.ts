@@ -227,7 +227,7 @@ export class ProjectPipeline {
 			...(interactive
 				? {
 						interactor: project.interactorSource,
-						interactorLanguage: `cc.cc${(project.interactorStandard ?? "cpp17").slice(3)}`,
+						interactorLanguage: "auto",
 					}
 				: {}),
 			slug: project.slug,

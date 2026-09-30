@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { buildHydroDirectoryArchive, buildHydroProblemArchive } from "../src/archive.ts";
 import { buildHydroProblemFiles, writeHydroProblemDirectory } from "../src/builder.ts";
 import { compareHydroDefaultOutput } from "../src/default-checker.ts";
@@ -148,11 +149,70 @@ describe("Hydro authoring contract", () => {
 			expect(report.valid, JSON.stringify(report.issues)).toBe(true);
 			const archive = readStoredZipEntries(await buildHydroDirectoryArchive(directory));
 			expect(archive.get("a-plus-b/testdata/config.yaml")?.toString()).toContain("multi_pass: 2");
+			expect(archive.get("a-plus-b/testdata/config.yaml")?.toString()).toContain("lang: auto");
 			expect(archive.get("a-plus-b/testdata/interactor.cc")?.toString()).toBe(spec.interactor);
 			await rm(join(directory, "testdata/interactor.cc"));
 			expect(
 				(await validateHydroDirectory(directory)).issues.some((item) => item.code === "MISSING_INTERACTOR"),
 			).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each([undefined, "auto", "cc.cc17", "cc.cc20"])(
+		"exports auto-detected interactive language for legacy hint %s",
+		async (interactorLanguage) => {
+			const root = await mkdtemp(join(tmpdir(), "hydro-interactive-auto-"));
+			try {
+				const spec: HydroProblemSpec = {
+					...validSpec,
+					type: "interactive",
+					interactorLanguage,
+					interactor: '#include "testlib.h"\nint main(int argc,char**argv){registerInteraction(argc,argv);}',
+				};
+				const directory = await writeHydroProblemDirectory(spec, root);
+				const report = await validateHydroDirectory(directory);
+				expect(report.valid, JSON.stringify(report.issues)).toBe(true);
+				const archive = await buildHydroDirectoryArchive(directory);
+				expect(archive).toEqual(buildHydroProblemArchive(spec));
+				const config = readStoredZipEntries(archive).get("a-plus-b/testdata/config.yaml");
+				expect(parse(Buffer.from(config ?? []).toString())).toMatchObject({
+					type: "interactive",
+					interactor: { file: "interactor.cc", lang: "auto" },
+				});
+			} finally {
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("preserves legacy interactive directories while rejecting unsupported languages", async () => {
+		const root = await mkdtemp(join(tmpdir(), "hydro-interactive-legacy-"));
+		try {
+			const spec: HydroProblemSpec = {
+				...validSpec,
+				type: "interactive",
+				interactor: '#include "testlib.h"\nint main(int argc,char**argv){registerInteraction(argc,argv);}',
+			};
+			expect(validateHydroProblemSpec({ ...spec, interactorLanguage: "py" }).issues).toEqual(
+				expect.arrayContaining([expect.objectContaining({ code: "INVALID_INTERACTOR_LANGUAGE" })]),
+			);
+			const directory = await writeHydroProblemDirectory(spec, root);
+			const configPath = join(directory, "testdata/config.yaml");
+			const config = await readFile(configPath, "utf8");
+			await writeFile(configPath, config.replace("lang: auto", "lang: cc.cc17"));
+			expect((await validateHydroDirectory(directory)).valid).toBe(true);
+			expect(
+				readStoredZipEntries(await buildHydroDirectoryArchive(directory))
+					.get("a-plus-b/testdata/config.yaml")
+					?.toString(),
+			).toContain("lang: cc.cc17");
+			await writeFile(configPath, config.replace("lang: auto", "lang: py"));
+			expect((await validateHydroDirectory(directory)).issues).toEqual(
+				expect.arrayContaining([expect.objectContaining({ code: "INVALID_INTERACTOR_LANGUAGE" })]),
+			);
+			await expect(buildHydroDirectoryArchive(directory)).rejects.toThrow("validation");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

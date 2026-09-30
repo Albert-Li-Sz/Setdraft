@@ -38,9 +38,7 @@ export function buildHydroProblemFiles(
 		...(spec.type === "submit_answer" && spec.answerMode === "multi" ? { subType: "multi" } : {}),
 		...(spec.type === "interactive"
 			? {
-					interactor: spec.interactorLanguage
-						? { file: "interactor.cc", lang: spec.interactorLanguage }
-						: "interactor.cc",
+					interactor: { file: "interactor.cc", lang: "auto" },
 				}
 			: {}),
 		checker_type: spec.checker?.type ?? "default",

@@ -41,8 +41,8 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 		const limits =
 			language === "en"
 				? [
-						["Time limit", problem.timeLimit],
-						["Memory limit", problem.memoryLimit],
+						["Time Limit", problem.timeLimit],
+						["Memory Limit", problem.memoryLimit],
 					]
 				: [
 						["时间限制", problem.timeLimit],

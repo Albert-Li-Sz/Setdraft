@@ -111,14 +111,12 @@
   #v(3mm)
 
   #if problem.at("limits", default: none) != none and problem.limits.len() > 0 [
-    #set text(size: 11pt)
     #table(
-      columns: (4.2cm, 9.8cm),
+      columns: 2,
       align: (left, left),
       stroke: none,
-      ..problem.limits.map(l => (strong(l.key + ":"), l.value)).flatten(),
+      ..problem.limits.map(l => (l.key + ": ", l.value + " ")).flatten(),
     )
-    #v(0.6em)
   ]
 
   #let format = problem.at("format", default: "latex")
@@ -236,44 +234,46 @@
     set par(spacing: 0.8em)
     maketitle(title: title, subtitle: subtitle, date: date, author: author)
 
-    if cover-notes != "" {
-      v(1em)
-      md(cover-notes)
-    }
-
-    if enable-problem-list {
+    if enable-problem-list or cover-notes != "" {
       figure(
         placement: bottom,
         [
-          #text(size: 12pt, font: fonts.sans)[#translations.at(titlepage-lang).problem-list]
+          #if enable-problem-list [
+            #text(size: 12pt, font: fonts.sans)[#translations.at(titlepage-lang).problem-list]
 
-          #set table(stroke: (x, y) => (
-            if y == 0 {
-              if problems.len() == 1 {
-                (top: 0.4pt, bottom: 0.4pt, left: 0.4pt, right: 0.4pt)
+            #set table(stroke: (x, y) => (
+              if y == 0 {
+                if problems.len() == 1 {
+                  (top: 0.4pt, bottom: 0.4pt, left: 0.4pt, right: 0.4pt)
+                } else {
+                  (top: 0.4pt, left: 0.4pt, right: 0.4pt)
+                }
+              } else if y == problems.len() - 1 {
+                (bottom: 0.4pt, left: 0.4pt, right: 0.4pt)
               } else {
-                (top: 0.4pt, left: 0.4pt, right: 0.4pt)
+                (left: 0.4pt, right: 0.4pt)
               }
-            } else if y == problems.len() - 1 {
-              (bottom: 0.4pt, left: 0.4pt, right: 0.4pt)
-            } else {
-              (left: 0.4pt, right: 0.4pt)
-            }
-          ))
+            ))
 
-          #table(
-            columns: (1.4cm, 6cm),
-            align: center,
-            ..problems.enumerate().map(((i, e)) => (
-              e.problem.at("label", default: str.from-unicode(int(i) + 65)), e.problem.display_name
-            )).flatten()
-          )
+            #table(
+              columns: (1.4cm, 6cm),
+              align: center,
+              ..problems.enumerate().map(((i, e)) => (
+                e.problem.at("label", default: str.from-unicode(int(i) + 65)), e.problem.display_name
+              )).flatten()
+            )
 
-          #v(0.8cm)
+            #v(0.8cm)
 
-          #context (translations.at(titlepage-lang).problem-set-info)(problems.len(), counter(page).final().at(0))
+            #context (translations.at(titlepage-lang).problem-set-info)(problems.len(), counter(page).final().at(0))
 
-          #translations.at(titlepage-lang).missing-warning
+            #translations.at(titlepage-lang).missing-warning
+          ]
+
+          #if cover-notes != "" [
+            #if enable-problem-list { v(0.8cm) }
+            #align(center)[#md(cover-notes)]
+          ]
         ],
       )
     }

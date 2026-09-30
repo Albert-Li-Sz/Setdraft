@@ -18,8 +18,7 @@ export const pdfFixture: ContestPdfDocument = {
 			memoryLimit: "256m",
 			statement: "",
 			statementSections: {
-				description:
-					"给定两个整数，计算它们的和。\n\n$1 \\le a,b \\le 10^9$，答案为 $a+b$。\n\n| 范围 | 分值 |\n| --- | --- |\n| 全部数据 | 100 |",
+				description: "给定两个整数，计算它们的和。\n\n$1 \\le a,b \\le 10^9$，答案为 $a+b$。",
 				input: "一行两个整数 $a,b$。",
 				output: "输出 $a+b$。",
 				interaction: "隐藏的交互协议",

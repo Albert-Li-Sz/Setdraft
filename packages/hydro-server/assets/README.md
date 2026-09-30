@@ -10,13 +10,18 @@ The upstream AGPL-3.0 license is retained in `xcpc/LICENSE` and
 `../../../LICENSES/AGPL-3.0.txt`. See the repository `COPYING.md` for the
 integrated application's licensing and network corresponding-source offer.
 
-`xcpc/lib.typ` is the Setdraft adaptation (2026-09-29). It retains the original
+`xcpc/lib.typ` is the Setdraft adaptation (2026-09-30). It retains the original
 font lists, dimensions, cover, problem list, headers/footers, sample tables and
 section order. Imports use vendored packages. Markdown disables raw Typst,
 images are restricted to validated attachments, and links allow HTTP(S) or
 internal labels only. It accepts only Markdown statements. Additions are an
 interaction section and sample labels, explicit contest problem labels, and
-optional cover notes. Empty cover notes leave the upstream layout unchanged.
+optional cover notes. Cover notes are centered below the cover's problem list
+and completeness notice, or at the bottom of the cover when the list is hidden.
+Empty cover notes leave the upstream layout unchanged. Automatic time/memory
+limits follow the upstream example's LaTeX `tabular{ll}`: plain 12pt text and
+natural-width, left-aligned columns, not the template's optional fixed-width,
+bold 11pt `problem.limits` table.
 The application does not accept user-supplied Typst or a complete LaTeX document.
 
 `xcpc/fonts` contains the eight unmodified upstream font files. The compiler
@@ -30,8 +35,11 @@ Font notices and checksums are in
 
 The regression test `test/contest-pdf-template.test.ts` verifies template/font
 hashes and compares page counts and complete PDF bytes against the original
-template with the same compiler and fonts, with creation dates disabled for
-deterministic comparisons. It covers Chinese/English, multiple
+template with automatic limits omitted and the same compiler and fonts, with
+creation dates disabled for deterministic comparisons. Separate geometry
+regressions compare automatic limits with the original template's LaTeX
+`tabular{ll}` and verify cover notes remain in the bottom information area.
+The tests cover Chinese/English, multiple
 samples, multipage problems, cover/list/header switches and single-problem PDFs.
 `test/contest-pdf.test.ts` also checks the actual worker's embedded font names
 against the eight original fonts, including Chinese interactive sample labels.

@@ -34,8 +34,10 @@
 
 ## 导出
 
-Hydro 使用 `type: interactive`，并写入 `interactor: { file: interactor.cc, lang: cc.cc17 }` 等所选标准；
-交互源码位于 `testdata`。不增加普通 checker 或 `multi_pass`。目标 Hydro 需要已配置相应语言。
+Hydro 使用 `type: interactive`，统一写入 `interactor: { file: interactor.cc, lang: auto }`；
+交互源码位于 `testdata`。Hydro 根据 `.cc` 扩展名使用目标站的 `cc` 编译配置，不依赖固定的版本语言 ID。
+编辑器选择的 C++ 标准仍用于本地验证和 DOMjudge，Hydro 实际编译标准由目标站配置决定，源码须与之兼容。
+不增加普通 checker 或 `multi_pass`。旧发布包不自动改写，需要重新发布才能获得 `auto` 配置。
 
 DOMjudge 基线是官方 9.0.1，只支持 ACM：
 
@@ -80,7 +82,10 @@ node ../../scripts/test-server.mjs test/interactive-project.test.ts test/interac
 
 ## 真实平台验收门槛
 
-本地回归不是完整的平台验收。目前尚无可用的独立 Hydro、DOMjudge 9.0.1 实例，实际导入和提交验收待完成。
+本地回归不是完整的平台验收。2026-09-30 已在 Hydro v5.0.7 实例完成实际导入与核心提交测试，
+统一 `auto` 的新包已直接导入并通过有输入/空输入 AC、WA、CPU TLE 和 OI 计分补测，无需手动适配语言 ID。
+不 flush 和裁判异常的判定尚未满足全部门槛；详见
+[Hydro 实例验收记录](hydro-acceptance-2026-09-30.md)。DOMjudge 9.0.1 的实际导入和提交验收仍待完成。
 不要把 ZIP 结构通过或本地适配器通过记作平台验收通过。
 
 在独立测试实例上，分别为有输入和空输入题执行以下步骤，并记录平台版本、发布包哈希、题目 ID、提交 ID 与判定：

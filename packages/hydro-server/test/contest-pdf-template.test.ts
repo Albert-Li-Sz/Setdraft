@@ -29,6 +29,87 @@ function render(source: string) {
 	return renderContestPdf(compiler, `#set document(date: none)\n${source}`);
 }
 
+interface LayoutSpan {
+	text: string;
+	size: string;
+	position: { page: number; x: string; y: string };
+}
+
+async function layoutSpans(source: string): Promise<LayoutSpan[]> {
+	compiler.addSource(
+		"/layout.typ",
+		`#show text: it => context [#metadata((text: it.text, size: text.size, position: here().position())) <layout-span>#it]\n${source}`,
+	);
+	return compiler.runWithWorld({ mainFilePath: "/layout.typ" }, async (world) => {
+		const compilation = await world.compile({ diagnostics: "full" });
+		expect(compilation.hasError, JSON.stringify(compilation.diagnostics)).toBe(false);
+		return world.query<LayoutSpan[]>({ selector: "<layout-span>", field: "value" });
+	});
+}
+
+function span(spans: LayoutSpan[], text: string): LayoutSpan {
+	const found =
+		spans.find((entry) => entry.text.trim() === text) ??
+		(text.endsWith(":") ? spans.find((entry) => entry.text.trim() === text.slice(0, -1)) : undefined);
+	if (!found) throw new Error(`Missing layout span: ${text}`);
+	return found;
+}
+
+it.each([true, false])(
+	"places cover notes in the bottom information block with problemList=%s",
+	async (problemList) => {
+		const spans = await layoutSpans(
+			buildContestPdfSources({ ...pdfFixture, options: { ...pdfFixture.options, problemList } }).booklet,
+		);
+		const note = span(spans, "请检查试题册是否完整。比赛时长：");
+		expect(note.position.page).toBe(1);
+		expect(Number.parseFloat(note.position.y)).toBeGreaterThan(600);
+		if (problemList)
+			expect(Number.parseFloat(note.position.y)).toBeGreaterThan(
+				Number.parseFloat(span(spans, "试题列表").position.y),
+			);
+	},
+);
+
+it.each([
+	{ language: "zh", time: "时间限制", memory: "内存限制" },
+	{ language: "en", time: "Time Limit", memory: "Memory Limit" },
+] as const)("matches the supplied example's natural-width LaTeX tabular limits: $language", async (labels) => {
+	const first = pdfFixture.problems[0];
+	const document: ContestPdfDocument = {
+		...pdfFixture,
+		options: { ...pdfFixture.options, language: labels.language },
+		problems: [{ ...first, timeLimit: "1 second", memoryLimit: "512 megabytes" }],
+	};
+	const actual = await layoutSpans(buildContestPdfSources(document).problems.get("A")!);
+	const description = String.raw`\begin{tabular}{ll}
+${labels.time}: & 1 second \\
+${labels.memory}: & 512 megabytes \\
+\end{tabular}`;
+	const expected = await layoutSpans(`#import "/xcpc/original-local.typ": contest-conf
+#show: contest-conf.with(enable-titlepage: false, enable-header-footer: false,
+  problems: ((problem: (display_name: ${JSON.stringify(first.title)}, format: "latex", samples: ()),
+    statement: (description: ${JSON.stringify(description)}, input: "", output: "", notes: "")),))`);
+	for (const text of [`${labels.time}:`, `${labels.memory}:`, "1 second", "512 megabytes"]) {
+		const actualSpan = span(actual, text);
+		const expectedSpan = span(expected, text);
+		expect(actualSpan.size).toBe("12pt");
+		expect(actualSpan.position).toEqual(expectedSpan.position);
+	}
+});
+
+it("keeps scoring tables out of the preview fixture without stripping author-written tables", async () => {
+	expect(pdfFixture.problems[0].statementSections?.description).not.toContain("全部数据");
+	const first = pdfFixture.problems[0];
+	const description = "| 范围 | 分值 |\n| --- | --- |\n| 全部数据 | 100 |";
+	const source = buildContestPdfSources({
+		...pdfFixture,
+		problems: [{ ...first, statementSections: { ...first.statementSections!, description } }],
+	}).booklet;
+	expect(source).toContain("全部数据");
+	expect((await render(source)).pages).toBe(2);
+});
+
 it("retains the pinned upstream template and all eight original font files byte for byte", () => {
 	expect(createHash("sha256").update(upstream).digest("hex")).toBe(
 		"c130ad6e5b30c4315e5373ffec1bd95d7058dc731954611d3a6e56f945d8759f",
@@ -43,7 +124,7 @@ it.each([
 	{ language: "zh", titlePage: false, problemList: true, headerFooter: true },
 	{ language: "en", titlePage: true, problemList: false, headerFooter: false },
 ] as const)(
-	"matches the upstream page count and complete PDF bytes with the original WASM compiler: %j",
+	"matches upstream cover/statement/sample PDF bytes with automatic limit headers excluded: %j",
 	async (options) => {
 		const first = pdfFixture.problems[0];
 		const document: ContestPdfDocument = {
@@ -66,7 +147,9 @@ it.each([
 			],
 		};
 		const sources = buildContestPdfSources(document);
-		for (const source of [sources.booklet, ...sources.problems.values()]) {
+		for (const generated of [sources.booklet, ...sources.problems.values()]) {
+			// Automatic headers follow the upstream demo's LaTeX tabular, checked separately above.
+			const source = generated.replace(/^ {2}limits:.*$/gmu, "  limits: (),");
 			const baseline = source
 				.replace('"/xcpc/lib.typ"', '"/xcpc/original-local.typ"')
 				.replace(/^ {2}cover-notes:.*\n/mu, "");

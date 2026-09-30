@@ -167,12 +167,12 @@ function validateConfig(
 	}
 	if (value.type === "interactive") {
 		const interactor = isRecord(value.interactor) ? value.interactor.file : value.interactor;
-		if (isRecord(value.interactor) && !/^cc\.cc(?:11|14|17|20|23|26)$/u.test(String(value.interactor.lang)))
+		if (isRecord(value.interactor) && !/^(?:auto|cc\.cc(?:11|14|17|20|23|26))$/u.test(String(value.interactor.lang)))
 			addIssue(
 				issues,
 				"INVALID_INTERACTOR_LANGUAGE",
 				"testdata/config.yaml.interactor.lang",
-				"Use a supported C++ language.",
+				"Use auto or a supported C++ language.",
 			);
 		if (
 			typeof interactor !== "string" ||
