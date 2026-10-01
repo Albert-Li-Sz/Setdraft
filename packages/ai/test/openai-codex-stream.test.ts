@@ -13,6 +13,7 @@ import {
 } from "../src/api/openai-codex-responses.ts";
 import type { Context, Model } from "../src/types.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
+import { assertStopped } from "./assert-success.ts";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -631,7 +632,7 @@ describe("openai-codex streaming", () => {
 			sessionId,
 			transport: "sse",
 		});
-		await streamResult.result();
+		await streamResult.result().then(assertStopped);
 	});
 
 	it("omits SSE cache affinity when cacheRetention is none", async () => {
@@ -678,7 +679,9 @@ describe("openai-codex streaming", () => {
 			cacheRetention: "none",
 			sessionId: "one-off-summary",
 			transport: "sse",
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(capturedHeaders?.has("session-id")).toBe(false);
 		expect(capturedHeaders?.has("x-client-request-id")).toBe(false);
@@ -730,7 +733,9 @@ describe("openai-codex streaming", () => {
 			onPayload: (payload) => {
 				capturedPayload = payload as { prompt_cache_key?: string };
 			},
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(capturedPayload?.prompt_cache_key).toBe("x".repeat(64));
 	});
@@ -777,7 +782,9 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			transport: "sse",
 			sessionId,
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(capturedHeaders?.get("session-id")).toBe("x".repeat(64));
 		expect(capturedHeaders?.get("x-client-request-id")).toBe("x".repeat(64));
@@ -839,7 +846,9 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			reasoning: "xhigh",
 			transport: "sse",
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(requestedReasoning).toEqual({ effort: "xhigh", summary: "auto" });
 	});
@@ -894,7 +903,9 @@ describe("openai-codex streaming", () => {
 				],
 			}),
 			{ apiKey: token, transport: "sse", toolChoice: "required" },
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		expect(requestedToolChoice).toBe("required");
 	});
@@ -960,7 +971,9 @@ describe("openai-codex streaming", () => {
 					requestedTools = (payload as { tools?: typeof requestedTools }).tools;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		expect(requestedTools).toMatchObject([
 			{ type: "function", name: "optional", strict: null },
@@ -1064,7 +1077,7 @@ describe("openai-codex streaming", () => {
 			reasoningEffort: "minimal",
 			transport: "sse",
 		});
-		await streamResult.result();
+		await streamResult.result().then(assertStopped);
 		expect(requestedReasoning).toEqual({ effort: "low", summary: "auto" });
 	});
 
@@ -1264,7 +1277,7 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			transport: "sse",
 		});
-		await streamResult.result();
+		await streamResult.result().then(assertStopped);
 	});
 	it("forwards auto transport from streamSimple options and uses cached websocket context", async () => {
 		const token = mockToken();
@@ -1461,21 +1474,136 @@ describe("openai-codex streaming", () => {
 		await streamOpenAICodexResponses(model, context, {
 			...options,
 			apiKey: mockToken("account-a"),
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 		await streamOpenAICodexResponses(model, context, {
 			...options,
 			apiKey: mockToken("account-b"),
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 		await streamOpenAICodexResponses(model, context, {
 			...options,
 			apiKey: mockToken("account-a"),
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(connectedHeaders.map((headers) => headers["chatgpt-account-id"])).toEqual(["account-a", "account-b"]);
 		expect(connectedHeaders.map((headers) => headers.authorization)).toEqual([
 			`Bearer ${mockToken("account-a")}`,
 			`Bearer ${mockToken("account-b")}`,
 		]);
+		expect(global.fetch).not.toHaveBeenCalled();
+		expect(getOpenAICodexWebSocketDebugStats("shared-session")).toMatchObject({
+			connectionsCreated: 2,
+			connectionsReused: 1,
+		});
+	});
+
+	it("scopes cached websockets to the gateway as well as the account", async () => {
+		// Regression for #7284: rotating accounts must not reuse a socket authenticated by another account.
+		const connectedHeaders: Record<string, string>[] = [];
+		const urls: string[] = [];
+		let responseId = 0;
+
+		class MockWebSocket {
+			static OPEN = 1;
+			readyState = MockWebSocket.OPEN;
+			private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+			constructor(_url: string, protocols?: string | string[] | { headers?: Record<string, string> }) {
+				const headers =
+					protocols && typeof protocols === "object" && !Array.isArray(protocols) ? protocols.headers : undefined;
+				connectedHeaders.push(headers ?? {});
+				urls.push(_url);
+				queueMicrotask(() => this.dispatch("open", {}));
+			}
+
+			addEventListener(type: string, listener: (event: unknown) => void): void {
+				let listeners = this.listeners.get(type);
+				if (!listeners) {
+					listeners = new Set();
+					this.listeners.set(type, listeners);
+				}
+				listeners.add(listener);
+			}
+
+			removeEventListener(type: string, listener: (event: unknown) => void): void {
+				this.listeners.get(type)?.delete(listener);
+			}
+
+			send(): void {
+				queueMicrotask(() => {
+					this.dispatch("message", {
+						data: JSON.stringify({
+							type: "response.completed",
+							response: {
+								id: `resp_${++responseId}`,
+								status: "completed",
+								usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+							},
+						}),
+					});
+				});
+			}
+
+			close(): void {
+				this.readyState = 3;
+			}
+
+			private dispatch(type: string, event: unknown): void {
+				for (const listener of this.listeners.get(type) ?? []) listener(event);
+			}
+		}
+
+		vi.stubGlobal("WebSocket", MockWebSocket);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("unexpected fetch", { status: 500 })),
+		);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://gateway-a.test/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context = normalizeContext({ systemPrompt: "", messages: [] });
+		const options = { sessionId: "shared-session", transport: "websocket-cached" as const };
+
+		await streamOpenAICodexResponses(model, context, {
+			...options,
+			apiKey: mockToken("account-a"),
+		})
+			.result()
+			.then(assertStopped);
+		await streamOpenAICodexResponses({ ...model, baseUrl: "https://gateway-b.test/v1" }, context, {
+			...options,
+			apiKey: mockToken("account-a"),
+		})
+			.result()
+			.then(assertStopped);
+		await streamOpenAICodexResponses(model, context, {
+			...options,
+			apiKey: mockToken("account-a"),
+		})
+			.result()
+			.then(assertStopped);
+
+		expect(connectedHeaders.map((headers) => headers["chatgpt-account-id"])).toEqual(["account-a", "account-a"]);
+		expect(connectedHeaders.map((headers) => headers.authorization)).toEqual([
+			`Bearer ${mockToken("account-a")}`,
+			`Bearer ${mockToken("account-a")}`,
+		]);
+		expect(urls.map((url) => new URL(url).hostname)).toEqual(["gateway-a.test", "gateway-b.test"]);
 		expect(global.fetch).not.toHaveBeenCalled();
 		expect(getOpenAICodexWebSocketDebugStats("shared-session")).toMatchObject({
 			connectionsCreated: 2,
@@ -1566,8 +1694,8 @@ describe("openai-codex streaming", () => {
 			transport: "auto" as const,
 		};
 
-		await streamOpenAICodexResponses(model, context, options).result();
-		await streamOpenAICodexResponses(model, context, options).result();
+		await streamOpenAICodexResponses(model, context, options).result().then(assertStopped);
+		await streamOpenAICodexResponses(model, context, options).result().then(assertStopped);
 
 		expect(connections).toBe(2);
 		expect(closedConnections).toBe(2);
@@ -2003,7 +2131,9 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			sessionId,
 			transport: "websocket-cached",
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(connections).toBe(2);
 		expect(sentConnectionIds).toEqual([1, 2]);
@@ -2158,7 +2288,9 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			sessionId: "session-1",
 			transport: "websocket-cached",
-		}).result();
+		})
+			.result()
+			.then(assertStopped);
 
 		expect(sentBodies).toHaveLength(2);
 		const firstBody = sentBodies[0] as { input: unknown[]; previous_response_id?: string; store?: boolean };
@@ -2565,7 +2697,9 @@ describe("openai-codex streaming", () => {
 				messages: [{ role: "user", content: largeText, timestamp: 1 }],
 			}),
 			{ apiKey: token, transport: "sse" },
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		expect(capturedEncoding).toBe("zstd");
 		expect(capturedBody).toBeInstanceOf(Uint8Array);
@@ -2583,7 +2717,9 @@ describe("openai-codex streaming", () => {
 				messages: [{ role: "user", content: "hi", timestamp: 1 }],
 			}),
 			{ apiKey: token, transport: "sse" },
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		expect(capturedEncoding).toBe("zstd");
 		expect(capturedBody).toBeInstanceOf(Uint8Array);

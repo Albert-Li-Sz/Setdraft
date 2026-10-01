@@ -6,6 +6,7 @@ import type {
 	ChatCompletionContentPartText,
 	ChatCompletionCreateParamsNonStreaming,
 } from "openai/resources/chat/completions.js";
+import { calculateCost } from "../models.ts";
 import type {
 	AssistantImages,
 	ImageContent,
@@ -191,6 +192,6 @@ function parseUsage(
 			total: 0,
 		},
 	};
-	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+	calculateCost(model, usage);
 	return usage;
 }

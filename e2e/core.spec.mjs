@@ -350,3 +350,26 @@ test("downloads a fixed Hydro package and compiles, previews and downloads a rea
 	await expect(page.getByRole("img", { name: "PDF 第 2 页" })).toBeVisible();
 	await page.getByRole("img", { name: "PDF 第 2 页" }).screenshot({ path: testInfo.outputPath("pdf-preview-page-2.png") });
 });
+
+
+test("retains image and text drafts when the first chat message is rejected before admission", async ({ page, app }) => {
+ await setup(page, app);
+ await json(page, app, "/ai/config", {method:"PUT",data:{provider:"openai-completions",modelId:"faux-model",apiKey:"faux-key",contextWindow:8192,maxTokens:1024}});
+ await page.goto(`${app.url}/#chat`);
+ await page.getByLabel("消息内容",{exact:true}).fill("image draft");
+ await page.locator('input[type="file"].manual-chat-upload-input').setInputFiles({name:"draft.png",mimeType:"image/png",buffer:Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6YQAAAAASUVORK5CYII=","base64")});
+ await expect(page.locator(".manual-chat-pending-image")).toHaveCount(1);
+ await page.getByRole("dialog").getByRole("button",{name:"关闭",exact:true}).click();
+ await page.route("**/api/chats/*/messages",route=>route.fulfill({status:422,contentType:"application/json",body:JSON.stringify({message:"admission rejected"})}));
+ await page.getByRole("button",{name:"发送",exact:true}).click();
+ await page.getByRole("dialog").getByRole("button",{name:"关闭",exact:true}).click();
+ await expect(page.getByLabel("消息内容",{exact:true})).toHaveValue("image draft");
+ await expect(page.locator(".manual-chat-pending-image")).toHaveCount(1);
+ await expect(page.getByRole("button",{name:"发送",exact:true})).toBeEnabled();
+ await page.unroute("**/api/chats/*/messages");
+ await page.getByRole("button",{name:"发送",exact:true}).click();
+ await expect(page.locator(".manual-chat-message.assistant")).toContainText("测试回复");
+ await expect(page.locator(".manual-chat-pending-image")).toHaveCount(0);
+ const chat=(await json(page,app,"/chats")).chats[0];const conversation=await json(page,app,`/chats/${chat.id}`);
+ expect(conversation.messages[0].images).toHaveLength(1);
+});

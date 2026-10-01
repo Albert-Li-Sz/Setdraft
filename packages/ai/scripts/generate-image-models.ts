@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { IMAGE_MODELS } from "../src/image-models.generated.ts";
+import { normalizeModelCost } from "./model-pricing.ts";
 import { writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -12,7 +14,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 function readStrictOption(args: string[]): boolean {
 	for (const arg of args) {
-		if (arg !== "--strict") throw new Error(`Unknown argument: ${arg}`);
+		if (arg !== "--strict" && arg !== "--normalize-stored-pricing") throw new Error(`Unknown argument: ${arg}`);
 	}
 	return args.includes("--strict");
 }
@@ -74,12 +76,12 @@ export function parseOpenRouterImageModels(
 			baseUrl: OPENROUTER_BASE_URL,
 			input,
 			output,
-			cost: {
+			cost: normalizeModelCost({
 				input: parseFloat(model.pricing?.prompt || "0") * 1_000_000,
 				output: parseFloat(model.pricing?.completion || "0") * 1_000_000,
 				cacheRead: parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
 				cacheWrite: parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
-			},
+			}),
 		});
 	}
 
@@ -147,7 +149,7 @@ ${providerEntries}
 
 async function main(): Promise<void> {
 	const strict = readStrictOption(process.argv.slice(2));
-	const models = await fetchOpenRouterImageModels(strict);
+	const models = process.argv.includes("--normalize-stored-pricing") ? Object.values(IMAGE_MODELS.openrouter).map(model => ({ ...model, cost: normalizeModelCost(model.cost) })) : await fetchOpenRouterImageModels(strict);
 	const output = generateImageModelsFile(models);
 	const outputPath = join(packageRoot, "src", "image-models.generated.ts");
 	writeFileSync(outputPath, output, "utf-8");

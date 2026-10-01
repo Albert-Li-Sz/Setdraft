@@ -174,6 +174,7 @@ async function handleStreaming<TApi extends Api>(model: Model<TApi>, options?: S
 
 	const response = await s.result();
 
+	expect(response.stopReason, response.errorMessage).toBe("stop");
 	expect(textStarted).toBe(true);
 	expect(textChunks.length).toBeGreaterThan(0);
 	expect(textCompleted).toBe(true);
@@ -218,12 +219,7 @@ async function handleThinking<TApi extends Api>(model: Model<TApi>, options?: St
 }
 
 async function handleImage<TApi extends Api>(model: Model<TApi>, options?: StreamOptionsWithExtras) {
-	// Check if the model supports images
-	if (!model.input.includes("image")) {
-		console.log(`Skipping image test - model ${model.id} doesn't support images`);
-		return;
-	}
-
+	expect(model.input).toContain("image");
 	// Read the test image
 	const imagePath = join(__dirname, "data", "red-circle.png");
 	const imageBuffer = readFileSync(imagePath);
@@ -255,8 +251,10 @@ async function handleImage<TApi extends Api>(model: Model<TApi>, options?: Strea
 	const response = await complete(model, context, options);
 
 	// Check the response mentions red and circle
+	expect(response.stopReason, response.errorMessage).toBe("stop");
 	expect(response.content.length > 0).toBeTruthy();
 	const textContent = response.content.find((b) => b.type === "text");
+	expect(textContent).toBeDefined();
 	if (textContent && textContent.type === "text") {
 		const lowerContent = textContent.text.toLowerCase();
 		expect(lowerContent).toContain("red");

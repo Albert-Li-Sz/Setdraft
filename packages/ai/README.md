@@ -31,3 +31,13 @@ review the generated diff, and run the checks before committing it. The package 
 
 The implementation retains the upstream provider implementations and their MIT license. See
 the repository [dependency notes](../../UPSTREAM.md) for how this package is used here.
+
+
+Offline tests run by default with an empty temporary home, no provider credentials,
+local LLM discovery disabled and external network requests blocked. Set
+`SETDRAFT_AI_ONLINE_TESTS=1` explicitly to run authorized provider integration tests.
+Model and usage costs with `unknown: true` have zero numeric placeholders; display
+an unavailable estimate and preserve the marker when accumulating costs.
+Stored catalog prices can be normalized without fetching a new catalog with
+`node scripts/generate-models.ts --normalize-stored-pricing` and
+`node scripts/generate-image-models.ts --normalize-stored-pricing`.

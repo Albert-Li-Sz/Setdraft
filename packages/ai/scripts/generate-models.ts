@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { normalizeModelCost } from "./model-pricing.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -30,6 +31,7 @@ import {
 	type ModelDataStructure,
 	MODEL_DATA_MANIFEST_FILE,
 	readModelDataProviderIds,
+	readModelDataStructure,
 	validateGeneratedModelData,
 	validateModelDataDirectory,
 } from "./model-data.ts";
@@ -45,12 +47,14 @@ const packageRoot = join(__dirname, "..");
 
 function readGeneratorOptions(args: string[]): {
 	strict: boolean;
+	normalizeStoredPricing: boolean;
 	dataOnly: boolean;
 	jsonOnly: boolean;
 	jsonOutputDir: string | undefined;
 	pretty: boolean;
 } {
 	let strict = false;
+	let normalizeStoredPricing = false;
 	let dataOnly = false;
 	let jsonOnly = false;
 	let jsonOutputDir: string | undefined;
@@ -58,6 +62,7 @@ function readGeneratorOptions(args: string[]): {
 
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
+		if (arg === "--normalize-stored-pricing") { normalizeStoredPricing = true; continue; }
 		if (arg === "--strict") {
 			strict = true;
 			continue;
@@ -85,7 +90,7 @@ function readGeneratorOptions(args: string[]): {
 
 	if (jsonOnly && !jsonOutputDir) throw new Error("--json-only requires --json-output");
 	if (dataOnly && (jsonOnly || jsonOutputDir)) throw new Error("--data-only cannot be combined with JSON catalog output");
-	return { strict, dataOnly, jsonOnly, jsonOutputDir, pretty };
+	return { strict, normalizeStoredPricing, dataOnly, jsonOnly, jsonOutputDir, pretty };
 }
 
 const generatorOptions = readGeneratorOptions(process.argv.slice(2));
@@ -2645,6 +2650,24 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 }
 
 async function generateModels() {
+ if (generatorOptions.normalizeStoredPricing) {
+  const structure = readModelDataStructure(packageRoot);
+  const directory = join(packageRoot, "src/providers/data");
+  const contents: Record<string, string> = {};
+  for (const provider of Object.keys(structure)) {
+   const filename = `${provider}.json`;
+   const groups = JSON.parse(readFileSync(join(directory, filename), "utf8")) as Record<string, Record<string, Model<Api>>>;
+   for (const models of Object.values(groups)) for (const model of Object.values(models)) model.cost = normalizeModelCost(model.cost);
+   const content = `${JSON.stringify(groups)}\n`;
+   contents[filename] = content;
+   writeFileSync(join(directory, filename), content);
+  }
+  const previous = JSON.parse(readFileSync(join(directory, MODEL_DATA_MANIFEST_FILE), "utf8")) as {generatedAt: string};
+  writeFileSync(join(directory, MODEL_DATA_MANIFEST_FILE), `${JSON.stringify(createModelDataManifest(structure, contents, previous.generatedAt))}\n`);
+  validateGeneratedModelData(packageRoot);
+  return;
+ }
+
 	// Fetch models from all upstream catalogs.
 	// models.dev: Anthropic, Google, OpenAI, Groq, Cerebras, and others
 	// OpenRouter: its tool-capable routed catalog
@@ -2661,6 +2684,8 @@ async function generateModels() {
 			!(model.provider === "xai" && XAI_BUILTIN_EXCLUDED_MODEL_IDS.has(model.id)) &&
 			!((model.provider === "opencode" || model.provider === "opencode-go") && model.id === "gpt-5.3-codex-spark"),
 	);
+
+	for (const model of allModels) model.cost = normalizeModelCost(model.cost);
 
 	// Temporary overrides until upstream model metadata is corrected.
 	for (const candidate of allModels) {
@@ -3116,6 +3141,7 @@ async function generateModels() {
 				output: model.cost.output,
 				cacheRead: model.cost.cacheRead,
 				cacheWrite: model.cost.cacheWrite,
+				...(model.cost.unknown ? { unknown: true } : {}),
 			},
 			contextWindow: AZURE_CONTEXT_WINDOW_OVERRIDES[model.id] ?? model.contextWindow,
 		}));

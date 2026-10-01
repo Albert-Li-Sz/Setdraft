@@ -96,9 +96,9 @@ def run(command, input_path, output_path, timeout, memory_mb, cwd):
     size = output_path.stat().st_size
     if status == 'ok' and size >= file_limit: status = 'output_limit'
     elif status == 'ok' and process.returncode != 0: status = 'runtime_error'
-    return {'status':status, 'code':process.returncode, 'stderr':error_path.read_text(encoding='utf-8', errors='replace')[:3000],
+    return {'status':status, 'code':process.returncode, 'stderr':error_path.open('rb').read(12000).decode('utf-8', errors='replace')[:3000],
             'durationMs':round((time.monotonic()-started)*1000), 'bytes':size,
-            'logPath':str(error_path.relative_to(root))}
+            'logPath':str(error_path.relative_to(root)), 'stderrBytes':error_path.stat().st_size}
 
 def source(role, language, code):
     folder = root / 'build' / role
@@ -153,7 +153,11 @@ def checker_score(input_path, contestant, answer, label, case_id):
     directory = root / 'run' / 'checker' / case_id / label
     result = run(commands['checker'] + [str(input_path), str(contestant), str(answer)], None,
                  directory / 'stdout', 10, 512, directory)
-    verdict = result['stderr']
+    # Display truncation must never change the machine-readable verdict.
+    if result['stderrBytes'] > 65536:
+        check('checker-system', False, 'Checker diagnostic exceeds protocol limit', case_id, verdict='SYSTEM_ERROR', log_path=result['logPath'])
+        return None
+    verdict = (root / result['logPath']).read_text(encoding='utf-8', errors='replace')
     score = normalized_checker_score(result['code'], verdict) if result['status'] in ('ok', 'runtime_error') else None
     if score is not None: return score
     check('checker-system', False, verdict or result['status'], case_id, verdict='SYSTEM_ERROR',

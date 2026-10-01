@@ -165,7 +165,8 @@ describe("AI Providers Empty Message Tests", () => {
 	});
 
 	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Completions Provider Empty Messages", () => {
-		const llm = getModel("openai", "gpt-4o-mini");
+		const llm = { ...getModel("openai", "gpt-4o-mini"), api: "openai-completions" as const, compat: undefined };
+		expect(llm.api).toBe("openai-completions");
 
 		it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
 			await testEmptyMessage(llm);

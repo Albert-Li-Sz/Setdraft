@@ -8,7 +8,7 @@ import test from "node:test";
 async function fixture() {
  const root = await mkdtemp(join(tmpdir(), "setdraft-compose-install-"));
  await mkdir(join(root,"scripts")); await mkdir(join(root,"bin"));
- for(const file of ["install.sh","scripts/setdraft-compose.sh","scripts/compose-config.mjs","scripts/deployment-config.mjs"])
+ for(const file of ["install.sh","scripts/setdraft-compose.sh","scripts/compose-config.mjs","scripts/deployment-config.mjs", "scripts/private-file.mjs", "scripts/data-path.mjs"])
   await cp(new URL(`../${file}`,import.meta.url),join(root,file));
  await writeFile(join(root,"bin/docker"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$COMMAND_LOG"

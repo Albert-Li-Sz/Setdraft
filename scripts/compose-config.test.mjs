@@ -1,11 +1,33 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
 import test from "node:test";
 import { composeConfiguration } from "./compose-config.mjs";
 import { deploymentEnvironment, loadDeployment, redact } from "./deployment-config.mjs";
+
+test("regeneration replaces broad Compose credential permissions without changing secrets", async () => {
+ const root=await mkdtemp(join(tmpdir(),"setdraft-private-config-"));
+ try {
+  await composeConfiguration(root,[],{});
+  const path=join(root,".env.compose"), before=parseEnv(await readFile(path,"utf8"));
+  await chmod(path,0o644);
+  await composeConfiguration(root,[],{});
+  assert.equal((await stat(path)).mode & 0o777,0o600);
+  const after=parseEnv(await readFile(path,"utf8"));
+  for(const key of ["SETDRAFT_DB_ADMIN_PASSWORD","SETDRAFT_DB_APP_PASSWORD","SETDRAFT_SEARCH_SECRET"]) assert.equal(after[key],before[key]);
+ } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("data roots cannot overlap a source distribution directory", async () => {
+ const root=await mkdtemp(join(tmpdir(),"setdraft-data-isolation-"));
+ try {
+  for(const path of ["docs/private","docs/..private","fixtures/private","LICENSES/private","e2e/private",join(root,"docs/absolute")])
+   await assert.rejects(loadDeployment(root,{SETDRAFT_WORKSPACE_ROOT:path}),/数据目录/u);
+  assert.equal((await loadDeployment(root,{SETDRAFT_WORKSPACE_ROOT:"private-data"})).dataRoot,join(root,"private-data"));
+ } finally {await rm(root,{recursive:true,force:true});}
+});
 
 test("OTLP configuration survives native and Compose deployment with headers redacted", async () => {
  const root = await mkdtemp(join(tmpdir(), "setdraft-otel-config-"));
@@ -166,4 +188,16 @@ test("source builds use local tags, persist across upgrades and can switch back 
   ]) await assert.rejects(composeConfiguration(root,[],overrides));
   assert.equal(await readFile(join(root,".env.compose"),"utf8"),before);
  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("rejects workspace symlink aliases into distribution roots and leaves credential symlink targets intact", async () => {
+ const root=await mkdtemp(join(tmpdir(),"setdraft-path-alias-"));
+ try {
+  await mkdir(join(root,"docs/private"),{recursive:true});
+  await symlink(join(root,"docs/private"),join(root,"data-alias"));
+  await assert.rejects(loadDeployment(root,{SETDRAFT_WORKSPACE_ROOT:"data-alias/missing"}),/数据目录/);
+  const target=join(root,"private-secret");await writeFile(target,"protected");await symlink(target,join(root,".env.compose"));
+  await assert.rejects(composeConfiguration(root,[],{}),/regular file/);assert.equal(await readFile(target,"utf8"),"protected");
+ }finally{await rm(root,{recursive:true,force:true});}
 });

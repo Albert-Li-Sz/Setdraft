@@ -455,7 +455,7 @@ static double __testlib_nan() {
 
 static bool __testlib_isInfinite(double r) {
     volatile double ra = r;
-    return (ra > 1E300 || ra < -1E300);
+    return ra == std::numeric_limits<double>::infinity() || ra == -std::numeric_limits<double>::infinity();
 }
 
 #ifdef __GNUC__
@@ -476,11 +476,8 @@ inline bool doubleCompare(double expected, double result, double MAX_DOUBLE_ERRO
     } else if (__testlib_abs(result - expected) <= MAX_DOUBLE_ERROR) {
         return true;
     } else {
-        double minv = __testlib_min(expected * (1.0 - MAX_DOUBLE_ERROR),
-                                    expected * (1.0 + MAX_DOUBLE_ERROR));
-        double maxv = __testlib_max(expected * (1.0 - MAX_DOUBLE_ERROR),
-                                    expected * (1.0 + MAX_DOUBLE_ERROR));
-        return result >= minv && result <= maxv;
+        // Division keeps the relative comparison finite near DBL_MAX.
+        return expected != 0.0 && __testlib_abs(result / expected - 1.0) <= MAX_DOUBLE_ERROR;
     }
 }
 

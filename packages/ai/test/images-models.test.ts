@@ -207,3 +207,42 @@ describe("ImagesModels", () => {
 		expect((await models.getAuth(list[0]))?.auth.apiKey).toBe("or-key");
 	});
 });
+
+it("converts an unauthenticated async image rejection into an error result", async () => {
+	const models = createImagesModels();
+	const model = testImageModel("failing", "m");
+	models.setProvider(
+		createImagesProvider({
+			id: "failing",
+			models: [model],
+			auth: { apiKey: { name: "missing", resolve: async () => undefined } },
+			api: {
+				generateImages: async () => {
+					throw new Error("async rejection");
+				},
+			},
+		}),
+	);
+	await expect(models.generateImages(model, context)).resolves.toMatchObject({
+		stopReason: "error",
+		errorMessage: "async rejection",
+	});
+});
+
+it("retries a synchronously throwing model refresh and deduplicates the retry", async () => {
+	let calls = 0;
+	const provider = createImagesProvider({
+		id: "retry",
+		models: [],
+		auth: { apiKey: { name: "test", resolve: async () => undefined } },
+		refreshModels: () => {
+			if (++calls === 1) throw new Error("first");
+			return Promise.resolve([testImageModel("retry", "m")]);
+		},
+		api: { generateImages: async (model) => okResult(model) },
+	});
+	await expect(provider.refreshModels!()).rejects.toThrow("first");
+	await Promise.all([provider.refreshModels!(), provider.refreshModels!()]);
+	expect(calls).toBe(2);
+	expect(provider.getModels()).toHaveLength(1);
+});

@@ -408,6 +408,8 @@ export interface Usage {
 	reasoning?: number;
 	totalTokens: number;
 	cost: {
+		/** True when the catalog has no usable price; numeric fields are placeholders. */
+		unknown?: boolean;
 		input: number;
 		output: number;
 		cacheRead: number;
@@ -941,6 +943,8 @@ export interface VercelGatewayRouting {
 }
 
 export interface ModelCostRates {
+	/** Unknown route pricing; zero placeholders must not be displayed as a free quote. */
+	unknown?: boolean;
 	input: number; // $/million tokens
 	output: number; // $/million tokens
 	cacheRead: number; // $/million tokens

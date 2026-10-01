@@ -243,7 +243,7 @@ describe("OpenAI Codex OAuth", () => {
 			accountId: "account-456",
 		});
 
-		expect(selectPrompts).toEqual([
+		expect(selectPrompts).toMatchObject([
 			{
 				type: "select",
 				message: "Select OpenAI Codex login method:",

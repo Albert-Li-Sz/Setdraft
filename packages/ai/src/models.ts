@@ -668,7 +668,7 @@ class ModelsImpl implements MutableModels {
 		let headers = mergeHeaders(auth.headers, options?.headers);
 		if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
 		const env = resolution.env || options?.env ? { ...(resolution.env ?? {}), ...(options?.env ?? {}) } : undefined;
-		const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
+		const requestModel = { ...model, baseUrl: auth.baseUrl ?? model.baseUrl, headers: undefined };
 		const { transformHeaders: _transformHeaders, ...providerOptions } = options ?? {};
 		const requestOptions = { ...providerOptions, apiKey, headers, env } as Omit<TOptions, "transformHeaders"> &
 			ProviderRequestOptions;
@@ -897,7 +897,7 @@ export function hasApi<TApi extends Api>(model: Model<Api>, api: TApi): model is
 	return model.api === api;
 }
 
-export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+export function calculateCost<TApi extends Api>(model: Pick<Model<TApi>, "cost">, usage: Usage): Usage["cost"] {
 	const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
 	let rates: ModelCostRates = model.cost;
 	let matchedThreshold = -1;
@@ -907,6 +907,16 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
 			matchedThreshold = tier.inputTokensAbove;
 		}
 	}
+
+	if (
+		model.cost.unknown ||
+		rates.unknown ||
+		[rates.input, rates.output, rates.cacheRead, rates.cacheWrite].some((rate) => !Number.isFinite(rate) || rate < 0)
+	) {
+		Object.assign(usage.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, unknown: true });
+		return usage.cost;
+	}
+	delete usage.cost.unknown;
 
 	// Anthropic charges 2x base input for 1h cache writes.
 	const longWrite = usage.cacheWrite1h ?? 0;

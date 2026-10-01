@@ -1,3 +1,5 @@
+import { abortable } from "./abortable.ts";
+
 /**
  * OpenAI Codex (ChatGPT OAuth) flow
  *
@@ -17,6 +19,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 	});
 }
 
+import { decodeJwtPayload } from "../../utils/jwt.ts";
 import { getProviderEnvValue } from "../../utils/provider-env.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
@@ -102,11 +105,7 @@ function parseAuthorizationInput(input: string): { code?: string; state?: string
 
 function decodeJwt(token: string): JwtPayload | null {
 	try {
-		const parts = token.split(".");
-		if (parts.length !== 3) return null;
-		const payload = parts[1] ?? "";
-		const decoded = atob(payload);
-		return JSON.parse(decoded) as JwtPayload;
+		return decodeJwtPayload(token) as JwtPayload;
 	} catch {
 		return null;
 	}
@@ -446,27 +445,31 @@ async function loginOpenAICodex(interaction: ProviderAuthInteraction): Promise<O
 	const { verifier, state, url } = await createAuthorizationFlow();
 	const server = await startLocalOAuthServer(state);
 	const manualAbort = new AbortController();
-	const onAbort = () => server.cancelWait();
+	const onAbort = () => {
+		manualAbort.abort(interaction.signal.reason);
+		server.cancelWait();
+	};
 	interaction.signal.addEventListener("abort", onAbort, { once: true });
 	if (interaction.signal.aborted) onAbort();
 	let code: string | undefined;
 	let manualCode: string | undefined;
 	let manualError: Error | undefined;
 
-	interaction.notify({
-		type: "auth_url",
-		url,
-		instructions: "A browser window should open. Complete login to finish.",
-	});
-
 	try {
-		const manualPromise = interaction
-			.prompt({
+		interaction.notify({
+			type: "auth_url",
+			url,
+			instructions: "A browser window should open. Complete login to finish.",
+		});
+
+		const manualPromise = abortable(interaction.signal, () =>
+			interaction.prompt({
 				type: "manual_code",
 				message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
 				placeholder: REDIRECT_URI,
 				signal: manualAbort.signal,
-			})
+			}),
+		)
 			.then((input) => {
 				manualCode = input;
 				server.cancelWait();
@@ -477,6 +480,7 @@ async function loginOpenAICodex(interaction: ProviderAuthInteraction): Promise<O
 			});
 
 		const result = await server.waitForCode();
+		interaction.signal.throwIfAborted();
 		if (manualError) throw manualError;
 		if (result?.code) {
 			code = result.code;
@@ -517,14 +521,17 @@ export const openaiCodexOAuth: OAuthAuth = {
 	isSubscription: true,
 
 	async login(interaction) {
-		const method = await interaction.prompt({
-			type: "select",
-			message: "Select OpenAI Codex login method:",
-			options: [
-				{ id: OPENAI_CODEX_BROWSER_LOGIN_METHOD, label: "Browser login (default)" },
-				{ id: OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD, label: "Device code login (headless)" },
-			],
-		});
+		const method = await abortable(interaction.signal, () =>
+			interaction.prompt({
+				type: "select",
+				message: "Select OpenAI Codex login method:",
+				options: [
+					{ id: OPENAI_CODEX_BROWSER_LOGIN_METHOD, label: "Browser login (default)" },
+					{ id: OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD, label: "Device code login (headless)" },
+				],
+				signal: interaction.signal,
+			}),
+		);
 
 		if (method === OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD) {
 			return loginOpenAICodexDeviceCode(interaction);

@@ -24,12 +24,9 @@ describe("shared API client", () => {
 			"题目格式无效",
 		);
 		await expect(requestJson("/api/projects/project")).rejects.toBeInstanceOf(RevisionConflict);
-		try {
-			await requestJson("/api/projects/project");
-		} catch (error) {
-			expect(error).toBeInstanceOf(ApiError);
-			expect(error).not.toBeInstanceOf(RevisionConflict);
-		}
+		const rejected = requestJson("/api/projects/project");
+		await expect(rejected).rejects.toBeInstanceOf(ApiError);
+		await expect(rejected).rejects.not.toBeInstanceOf(RevisionConflict);
 	});
 
 	it("cancels task polling promptly when the editing session is replaced", async () => {

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import type { AuthPrompt, OAuthCredential, Provider } from "./index.ts";
+import { loadOAuthCredentials, saveOAuthCredentials } from "./auth/file-credentials.ts";
+import type { AuthPrompt, Provider } from "./index.ts";
 import { builtinProviders } from "./providers/all.ts";
 
 const AUTH_FILE = "auth.json";
@@ -13,19 +13,6 @@ const PROVIDERS = builtinProviders().filter(
 
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
 	return new Promise((resolve) => rl.question(question, resolve));
-}
-
-function loadAuth(): Record<string, OAuthCredential> {
-	if (!existsSync(AUTH_FILE)) return {};
-	try {
-		return JSON.parse(readFileSync(AUTH_FILE, "utf-8")) as Record<string, OAuthCredential>;
-	} catch {
-		return {};
-	}
-}
-
-function saveAuth(auth: Record<string, OAuthCredential>): void {
-	writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), "utf-8");
 }
 
 async function answerPrompt(rl: ReturnType<typeof createInterface>, authPrompt: AuthPrompt): Promise<string> {
@@ -45,6 +32,7 @@ async function answerPrompt(rl: ReturnType<typeof createInterface>, authPrompt: 
 async function login(providerId: string): Promise<void> {
 	const provider = PROVIDERS.find((entry) => entry.id === providerId);
 	if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+	loadOAuthCredentials(AUTH_FILE);
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const credential = await provider.auth.oauth.login({
@@ -67,9 +55,9 @@ async function login(providerId: string): Promise<void> {
 				}
 			},
 		});
-		const auth = loadAuth();
+		const auth = loadOAuthCredentials(AUTH_FILE);
 		auth[providerId] = credential;
-		saveAuth(auth);
+		saveOAuthCredentials(AUTH_FILE, auth);
 		console.log(`\nCredentials saved to ${AUTH_FILE}`);
 	} finally {
 		rl.close();

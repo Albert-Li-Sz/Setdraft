@@ -1,7 +1,10 @@
 # testlib
 
-Vendored without modification from https://github.com/MikeMirzayanov/testlib at commit
+Vendored from https://github.com/MikeMirzayanov/testlib at commit
 `1e4e8a24c79c6bad3becbdb5a332ffc352b7d5dd`. The upstream MIT license is in `LICENSE`.
+
+Local patch: infinity detection uses IEEE infinity rather than a finite 1e300 cutoff.
+Relative floating-point comparison uses division to avoid overflowing near DBL_MAX.
 
 The sandbox compiles generators, validators and optional special judges with
 GCC 16.2, `-O2`, `-I/opt/testlib`, and each source's selected `-std` flag.

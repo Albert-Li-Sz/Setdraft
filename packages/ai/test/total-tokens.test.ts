@@ -94,6 +94,9 @@ function logUsage(label: string, usage: Usage) {
 
 function assertTotalTokensEqualsComponents(usage: Usage) {
 	const computed = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	expect(usage.totalTokens).toBeGreaterThan(0);
+	expect(usage.input + usage.cacheRead + usage.cacheWrite).toBeGreaterThan(0);
+	expect(usage.output).toBeGreaterThan(0);
 	expect(usage.totalTokens).toBe(computed);
 }
 

@@ -194,8 +194,8 @@ export function registerBuiltInApiProviders(): void {
 	for (const [api, streams] of BUILTIN_APIS) {
 		if (!getApiProvider(api)) {
 			registerApiProvider({ api, stream: streams.stream, streamSimple: streams.streamSimple });
+			builtinApiProviderInstances.set(api, getApiProvider(api));
 		}
-		builtinApiProviderInstances.set(api, getApiProvider(api));
 	}
 }
 

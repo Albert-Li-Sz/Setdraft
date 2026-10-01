@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writePrivateFile } from "./private-file.mjs";
 import { loadDeployment, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
 
 export async function composeConfiguration(root, args, environment = process.env) {
@@ -22,7 +23,7 @@ export async function composeConfiguration(root, args, environment = process.env
 	if (!/^\d+$/u.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error("SETDRAFT_PORT 需要 1–65535。");
 	config.values.SETDRAFT_WORKSPACE_ROOT = config.dataRoot;
 	config.values.SETDRAFT_PORT = port;
-	const previous=parseEnv(await readFile(join(root,".env.compose"),"utf8").catch(()=>""));
+	const previous=parseEnv(await readFile(join(root,".env.compose"),"utf8").catch(error => { if (error.code !== "ENOENT") throw error; return ""; }));
  const secret=key=>environment[key] || previous[key] || randomBytes(32).toString("hex");
  const namespace = config.values.SETDRAFT_IMAGE_NAMESPACE || "ghcr.io/albert-li-sz";
 	const tag = config.values.SETDRAFT_IMAGE_TAG || "latest";
@@ -59,7 +60,7 @@ export async function composeConfiguration(root, args, environment = process.env
 	for(const key of ["SETDRAFT_DB_ADMIN_PASSWORD","SETDRAFT_DB_APP_PASSWORD","SETDRAFT_SEARCH_SECRET"]) if(!/^[a-zA-Z0-9_-]{24,128}$/u.test(values[key]))throw new Error(`${key} 必须是 24–128 位字母、数字、下划线或短横线。`);
  for (const value of Object.values(values)) if (/[\r\n\0']/u.test(value)) throw new Error("Compose 配置不能包含单引号或换行。");
 	await saveDeployment(config);
-	await writeFile(join(root, ".env.compose"), Object.entries(values).map(([key, value]) => `${key}='${value}'\n`).join(""), { mode: 0o600 });
+	await writePrivateFile(join(root, ".env.compose"), Object.entries(values).map(([key, value]) => `${key}='${value}'\n`).join(""));
 	console.log(`Setdraft 数据目录：${config.dataRoot}\nWeb：${values.SETDRAFT_BIND_ADDRESS}:${port}（反向代理自行配置）`);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

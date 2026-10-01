@@ -10,7 +10,12 @@ import type {
 	ValidationIssue,
 	ValidationReport,
 } from "./types.ts";
-import { isSafeFlatName, isValidHydroLimit, validateMarkdownAttachments } from "./validation.ts";
+import {
+	isSafeFlatName,
+	isValidHydroLimit,
+	validateDependencyGraph,
+	validateMarkdownAttachments,
+} from "./validation.ts";
 
 const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -276,7 +281,7 @@ function validateConfig(
 	}
 
 	const subtaskIds = new Set<number>();
-	const dependencies: Array<{ path: string; ids: number[] }> = [];
+	const dependencies: Array<{ path: string; id: number; ids: number[] }> = [];
 	let totalScore = 0;
 	let testCases = 0;
 	let totalTimeMs = 0;
@@ -319,7 +324,7 @@ function validateConfig(
 					"Subtask dependencies must be an array of integer IDs.",
 				);
 			} else {
-				dependencies.push({ path: `${subtaskPath}.if`, ids: subtask.if as number[] });
+				dependencies.push({ path: `${subtaskPath}.if`, id: subtask.id as number, ids: subtask.if as number[] });
 			}
 		}
 		if (!Array.isArray(subtask.cases) || subtask.cases.length === 0) {
@@ -395,6 +400,10 @@ function validateConfig(
 				addIssue(issues, "UNKNOWN_SUBTASK_DEPENDENCY", dependency.path, `Unknown subtask ID: ${id}`);
 		}
 	}
+	validateDependencyGraph(
+		dependencies.map((item) => ({ id: item.id, dependsOn: item.ids })),
+		issues,
+	);
 	return { testCases, referencedFiles };
 }
 

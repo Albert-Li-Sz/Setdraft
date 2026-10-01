@@ -20,13 +20,30 @@ describe("openai-codex cache affinity e2e", () => {
 			],
 		};
 
+		let capturedHeaders: Headers | undefined;
+		let capturedPayload: Record<string, unknown> | undefined;
+		let requests = 0;
 		const response = await complete(model, context, {
 			apiKey: codexToken,
 			sessionId,
 			transport: "sse",
+			onPayload: (payload) => {
+				capturedPayload = payload as Record<string, unknown>;
+			},
+			fetch: async (input, init) => {
+				requests++;
+				capturedHeaders = new Headers(input instanceof Request ? input.headers : init?.headers);
+				return fetch(input, init);
+			},
 		});
 
-		expect(response.stopReason, response.errorMessage).not.toBe("error");
+		expect(model.api).toBe("openai-codex-responses");
+		expect(model.provider).toBe("openai-codex");
+		expect(requests).toBe(1);
+		expect(capturedPayload?.prompt_cache_key).toBe(sessionId);
+		expect(capturedHeaders?.get("session-id")).toBe(sessionId);
+		expect(capturedHeaders?.get("x-client-request-id")).toBe(sessionId);
+		expect(response.stopReason, response.errorMessage).toBe("stop");
 		expect(response.errorMessage).toBeUndefined();
 		expect(response.content.map((block) => (block.type === "text" ? block.text : "")).join("")).toContain(
 			"cache affinity e2e success",

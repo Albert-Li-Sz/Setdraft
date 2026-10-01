@@ -198,7 +198,7 @@ class ImagesModelsImpl implements MutableImagesModels {
 			});
 			const auth = resolution?.auth;
 			if (!auth) {
-				return provider.generateImages(model, context, options);
+				return await provider.generateImages(model, context, options);
 			}
 
 			const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
@@ -260,13 +260,14 @@ export function createImagesProvider(input: CreateImagesProviderOptions): Images
 		getModels: () => models,
 		refreshModels: refreshModels
 			? () => {
-					inflightRefresh ??= (async () => {
-						try {
-							models = await refreshModels();
-						} finally {
+					inflightRefresh ??= Promise.resolve()
+						.then(refreshModels)
+						.then((updated) => {
+							models = updated;
+						})
+						.finally(() => {
 							inflightRefresh = undefined;
-						}
-					})();
+						});
 					return inflightRefresh;
 				}
 			: undefined,

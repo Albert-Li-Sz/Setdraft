@@ -66,9 +66,10 @@ it("does not serve an old cached DOMjudge adapter after the export contract chan
 	await writeFile(current, "current adapter");
 	await projects.database.indexFile("release-file", release.id, "domjudge.v1.zip", old);
 	await projects.database.indexFile("release-file", release.id, "domjudge.v2.zip", old);
+	await projects.database.indexFile("release-file", release.id, "domjudge.v3.zip", old);
 	await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 404 });
 	const name = exportFileName("domjudge");
-	expect(name).toBe("domjudge.v3.zip");
+	expect(name).toBe("domjudge.v4.zip");
 	await projects.database.indexFile("release-file", release.id, name, current);
 	expect(await projects.releases.releaseFile(release.id, "domjudge")).toMatchObject({ size: 15 });
 });

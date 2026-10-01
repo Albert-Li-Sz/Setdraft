@@ -177,7 +177,7 @@ function validateModelValue(
 	} else {
 		for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
 			const cost = value.cost[field];
-			if (typeof cost !== "number" || !Number.isFinite(cost)) {
+			if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) {
 				errors.push(`${label} has invalid cost.${field}`);
 			}
 		}

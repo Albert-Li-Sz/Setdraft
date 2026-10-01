@@ -1,6 +1,6 @@
 import { assertHydroJudgeLimits, DEFAULT_HYDRO_JUDGE_LIMITS, parseHydroTimeLimitMs } from "./judge-limits.ts";
 import { inspectMarkdown, markdownAttachmentName, markdownReferences } from "./markdown.ts";
-import type { HydroJudgeLimits, HydroProblemSpec, ValidationIssue, ValidationReport } from "./types.ts";
+import type { HydroJudgeLimits, HydroProblemSpec, HydroSubtask, ValidationIssue, ValidationReport } from "./types.ts";
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_LANGUAGE = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -69,8 +69,11 @@ function validateLimit(
 		addIssue(issues, "INVALID_LIMIT", path, description);
 }
 
-function validateDependencyGraph(spec: HydroProblemSpec, issues: ValidationIssue[]): void {
-	const dependencies = new Map(spec.subtasks.map((subtask) => [subtask.id, [...(subtask.dependsOn ?? [])]]));
+export function validateDependencyGraph(
+	subtasks: readonly Pick<HydroSubtask, "id" | "dependsOn">[],
+	issues: ValidationIssue[],
+): void {
+	const dependencies = new Map(subtasks.map((subtask) => [subtask.id, [...(subtask.dependsOn ?? [])]]));
 	const visiting = new Set<number>();
 	const visited = new Set<number>();
 	const cycleNodes = new Set<number>();
@@ -173,6 +176,8 @@ export function validateHydroProblemSpec(
 	let totalTimeMs = 0;
 	for (const [subtaskIndex, subtask] of spec.subtasks.entries()) {
 		const subtaskPath = `subtasks[${subtaskIndex}]`;
+		if (!["sum", "min", "max"].includes(subtask.type))
+			addIssue(issues, "UNSUPPORTED_SUBTASK_TYPE", `${subtaskPath}.type`, "Use sum, min, or max.");
 		if (!Number.isSafeInteger(subtask.id) || subtask.id <= 0) {
 			addIssue(issues, "INVALID_SUBTASK_ID", `${subtaskPath}.id`, "Subtask IDs must be positive integers.");
 		}
@@ -334,7 +339,7 @@ export function validateHydroProblemSpec(
 			}
 		}
 	}
-	validateDependencyGraph(spec, issues);
+	validateDependencyGraph(spec.subtasks, issues);
 
 	const attachmentNames = new Set<string>();
 	for (const [index, attachment] of (spec.attachments ?? []).entries()) {

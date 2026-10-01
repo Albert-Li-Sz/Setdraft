@@ -5,7 +5,6 @@ import type {
 	ResponseInput,
 	ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-
 import { clampThinkingLevel } from "../models.ts";
 import { registerSessionResourceCleanup } from "../session-resources.ts";
 import type {
@@ -29,6 +28,7 @@ import {
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { decodeJwtPayload } from "../utils/jwt.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { getSystemMessageText } from "../utils/text.ts";
@@ -794,13 +794,13 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 			// Treat EOF as terminating the residual SSE frame.
 			if (done && buffer.trim()) buffer += "\n\n";
 
-			let idx = buffer.indexOf("\n\n");
-			while (idx !== -1) {
-				const chunk = buffer.slice(0, idx);
-				buffer = buffer.slice(idx + 2);
+			let separator = /\r?\n\r?\n/u.exec(buffer);
+			while (separator) {
+				const chunk = buffer.slice(0, separator.index);
+				buffer = buffer.slice(separator.index + separator[0].length);
 
 				const dataLines = chunk
-					.split("\n")
+					.split(/\r?\n/u)
 					.filter((l) => l.startsWith("data:"))
 					.map((l) => l.slice(5).trim());
 				if (dataLines.length > 0) {
@@ -816,7 +816,7 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 						}
 					}
 				}
-				idx = buffer.indexOf("\n\n");
+				separator = /\r?\n\r?\n/u.exec(buffer);
 			}
 
 			if (done) break;
@@ -1147,6 +1147,14 @@ async function acquireWebSocket(
 		};
 	}
 
+	// A session may switch gateways or credentials between requests.
+	accountId = JSON.stringify([
+		accountId,
+		new URL(url).href,
+		[...headers.entries()]
+			.filter(([key]) => !["session-id", "x-client-request-id"].includes(key))
+			.sort(([a], [b]) => a.localeCompare(b)),
+	]);
 	let accountEntries = websocketSessionCache.get(sessionId);
 	const cached = accountEntries?.get(accountId);
 	if (cached) {
@@ -1595,11 +1603,11 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 
 function extractAccountId(token: string): string {
 	try {
-		const parts = token.split(".");
-		if (parts.length !== 3) throw new Error("Invalid token");
-		const payload = JSON.parse(atob(parts[1]));
-		const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
-		if (!accountId) throw new Error("No account ID in token");
+		const payload = decodeJwtPayload(token);
+		const claim = payload[JWT_CLAIM_PATH];
+		const accountId =
+			claim && typeof claim === "object" && "chatgpt_account_id" in claim ? claim.chatgpt_account_id : undefined;
+		if (typeof accountId !== "string" || !accountId) throw new Error("No account ID in token");
 		return accountId;
 	} catch {
 		throw new Error("Failed to extract accountId from token");

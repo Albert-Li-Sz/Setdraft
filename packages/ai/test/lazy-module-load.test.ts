@@ -18,6 +18,7 @@ function runProbe(action: string): ProbeResult {
 	const script = `
 		import { registerHooks } from "node:module";
 
+		globalThis.fetch = async () => { throw new Error("Offline module probe"); };
 		const targets = new Set(${JSON.stringify(SDK_SPECIFIERS)});
 		const loaded = [];
 

@@ -14,7 +14,7 @@ import { processIdentity } from "../packages/hydro-server/src/process-identity.t
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function copyInstaller(fixture) {
-	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/src/process-identity.ts", "packages/hydro-server/sandbox/build-args.mjs"]) {
+	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/private-file.mjs", "scripts/data-path.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/src/process-identity.ts", "packages/hydro-server/sandbox/build-args.mjs"]) {
 		mkdirSync(dirname(join(fixture, file)), { recursive: true });
 		copyFileSync(join(root, file), join(fixture, file));
 	}

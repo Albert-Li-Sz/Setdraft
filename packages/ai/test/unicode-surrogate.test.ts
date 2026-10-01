@@ -300,7 +300,8 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 	});
 
 	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Completions Provider Unicode Handling", () => {
-		const llm = getModel("openai", "gpt-4o-mini");
+		const llm = { ...getModel("openai", "gpt-4o-mini"), api: "openai-completions" as const, compat: undefined };
+		expect(llm.api).toBe("openai-completions");
 
 		it("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testEmojiInToolResults(llm);

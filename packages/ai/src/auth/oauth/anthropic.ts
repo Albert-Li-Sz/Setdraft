@@ -1,3 +1,4 @@
+import { abortable } from "./abortable.ts";
 /**
  * Anthropic OAuth flow (Claude Pro/Max)
  *
@@ -235,7 +236,10 @@ async function loginAnthropic(interaction: ProviderAuthInteraction): Promise<OAu
 	const { verifier, challenge } = await generatePKCE();
 	const server = await startCallbackServer(verifier);
 	const manualAbort = new AbortController();
-	const onAbort = () => server.cancelWait();
+	const onAbort = () => {
+		manualAbort.abort(interaction.signal.reason);
+		server.cancelWait();
+	};
 	interaction.signal.addEventListener("abort", onAbort, { once: true });
 	if (interaction.signal.aborted) onAbort();
 	let code: string | undefined;
@@ -261,13 +265,14 @@ async function loginAnthropic(interaction: ProviderAuthInteraction): Promise<OAu
 				"Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
 		});
 
-		const manualPromise = interaction
-			.prompt({
+		const manualPromise = abortable(interaction.signal, () =>
+			interaction.prompt({
 				type: "manual_code",
 				message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
 				placeholder: REDIRECT_URI,
 				signal: manualAbort.signal,
-			})
+			}),
+		)
 			.then((input) => {
 				manualInput = input;
 				server.cancelWait();
@@ -278,6 +283,7 @@ async function loginAnthropic(interaction: ProviderAuthInteraction): Promise<OAu
 			});
 
 		const result = await server.waitForCode();
+		interaction.signal.throwIfAborted();
 		if (manualError) throw manualError;
 		if (result?.code) {
 			code = result.code;

@@ -83,7 +83,7 @@ describe.skipIf(!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY)(
 		it("handles same-provider different-model handoff with tool calls", { retry: 2 }, async () => {
 			// This tests the scenario where:
 			// 1. Model A (gpt-5-mini) generates reasoning + function_call
-			// 2. User switches to Model B (gpt-5.2-codex) - same provider, different model
+			// 2. User switches to Model B (gpt-5.5) - same provider, different model
 			// 3. transform-messages: isSameModel=false, thinking converted to text
 			// 4. But tool call ID still has OpenAI pairing history (fc_xxx paired with rs_xxx)
 			// 5. Without fix: OpenAI returns 400 "function_call without required reasoning item"
@@ -180,16 +180,17 @@ describe.skipIf(!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY)(
 			expect(responseText).toContain("42");
 		});
 
-		it("handles cross-provider handoff from Anthropic to OpenAI Codex", { retry: 2 }, async () => {
+		it("handles cross-provider handoff from Anthropic to OpenAI Responses", { retry: 2 }, async () => {
 			// This tests cross-provider handoff:
 			// 1. Anthropic model generates thinking + function_call (toolu_xxx ID)
-			// 2. User switches to OpenAI Codex
+			// 2. User switches to OpenAI Responses
 			// 3. transform-messages: isSameModel=false, thinking converted to text
 			// 4. Tool call ID is Anthropic format (toolu_xxx), no OpenAI pairing history
 			// 5. Should work because foreign IDs have no pairing expectation
 
 			const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
-			const codexModel = getModel("openai", "gpt-5.5");
+			const responsesModel = getModel("openai", "gpt-5.5");
+			expect(responsesModel.api).toBe("openai-responses");
 
 			const anthropicApiKey = getEnvApiKey("anthropic");
 			const openaiApiKey = getEnvApiKey("openai");
@@ -244,7 +245,7 @@ describe.skipIf(!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY)(
 				timestamp: Date.now(),
 			};
 
-			// Now continue with Codex (different provider)
+			// Now continue with Responses (different provider)
 			const context: Context = {
 				systemPrompt: "You are a helpful assistant. Answer concisely.",
 				messages: [userMessage, assistantResponse, toolResult, followUp],
@@ -252,7 +253,7 @@ describe.skipIf(!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY)(
 			};
 
 			let capturedPayload: any = null;
-			const response = await complete(codexModel, context, {
+			const response = await complete(responsesModel, context, {
 				apiKey: openaiApiKey,
 				reasoningEffort: "high",
 				onPayload: (payload) => {
@@ -265,7 +266,7 @@ describe.skipIf(!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY)(
 			const functionCalls = input?.filter((item: any) => item.type === "function_call") || [];
 			const reasoningItems = input?.filter((item: any) => item.type === "reasoning") || [];
 
-			console.log("Payload sent to Codex:");
+			console.log("Payload sent to Responses:");
 			console.log("- function_calls:", functionCalls.length);
 			console.log("- reasoning items:", reasoningItems.length);
 			if (functionCalls.length > 0) {

@@ -350,3 +350,28 @@ describe("Hydro authoring contract", () => {
 		expect(report.stats).toMatchObject({ statements: 1, testCases: 3, attachments: 1 });
 	});
 });
+
+it("rejects cyclic dependencies through directory validation and archive creation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "hydro-cycle-"));
+	try {
+		const directory = await writeHydroProblemDirectory(validSpec, root);
+		const path = join(directory, "testdata/config.yaml");
+		const text = await readFile(path, "utf8");
+		await writeFile(path, text.replace("id: 1", "id: 1\n    if: [1]"));
+		expect((await validateHydroDirectory(directory)).issues.map((item) => item.code)).toContain(
+			"CYCLIC_SUBTASK_DEPENDENCY",
+		);
+		await expect(buildHydroDirectoryArchive(directory)).rejects.toThrow();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it("rejects an unsupported normalized subtask scoring type", () => {
+	const spec = {
+		...validSpec,
+		subtasks: [{ ...validSpec.subtasks[0], type: "average" as HydroProblemSpec["subtasks"][number]["type"] }],
+	};
+	expect(validateHydroProblemSpec(spec).issues.map((item) => item.code)).toContain("UNSUPPORTED_SUBTASK_TYPE");
+	expect(() => buildHydroProblemFiles(spec)).toThrow();
+});

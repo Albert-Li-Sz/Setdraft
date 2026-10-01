@@ -278,12 +278,30 @@ describe("authenticated personal workspaces", () => {
 		const reader = stream.body?.getReader();
 		expect(reader).toBeDefined();
 		await reader?.read();
-		const closed = reader?.read().then(
-			() => true,
-			() => true,
-		);
+		if (!reader) throw new Error("SSE reader missing");
+		const closed = (async () => {
+			try {
+				while (!(await reader.read()).done) {}
+			} catch (error) {
+				if (!(error instanceof TypeError)) throw error;
+			}
+			return true;
+		})();
 		expect((await admin.request(`/admin/users/${user.id}`, "PATCH", { enabled: false })).status).toBe(200);
-		await expect(closed).resolves.toBe(true);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await expect(
+				Promise.race([
+					closed,
+					new Promise((_, reject) => {
+						timer = setTimeout(() => reject(new Error("SSE did not close after revocation")), 3000);
+					}),
+				]),
+			).resolves.toBe(true);
+		} finally {
+			clearTimeout(timer);
+			await reader.cancel().catch(() => {});
+		}
 		expect((await client.request("/projects")).status).toBe(401);
 		expect((await admin.request(`/admin/users/${user.id}`, "PATCH", { enabled: true })).status).toBe(200);
 		await client.authenticate("login", "alice");

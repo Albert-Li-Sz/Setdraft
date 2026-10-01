@@ -175,3 +175,13 @@ describe("generated model data validation", () => {
 		expect(() => readModelDataStructure(packageRoot)).toThrow("aggregator and provider shards do not match");
 	});
 });
+
+it("rejects negative catalog rates even when the manifest matches", () => {
+	const { dataDir, structure, values } = createFixture();
+	values["model-a"] = {
+		...(values["model-a"] as Record<string, unknown>),
+		cost: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0 },
+	};
+	writeFixtureData(dataDir, structure, values);
+	expect(() => validateModelDataDirectory(structure, dataDir)).toThrow("invalid cost.input");
+});

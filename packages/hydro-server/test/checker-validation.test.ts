@@ -45,3 +45,34 @@ it.skipIf(!dockerAvailable).each([
 	},
 	120_000,
 );
+
+it.skipIf(!dockerAvailable)(
+	"does not turn a score after a long checker diagnostic into full credit",
+	async () => {
+		const root = await mkdtemp(join(tmpdir(), "setdraft-long-checker-"));
+		const projects = new ManualProjectStore({ root, image: "setdraft/sandbox:local" });
+		try {
+			const project = await projects.create("acm");
+			await projects.update(project.id, {
+				title: "Long checker",
+				slug: "long-checker",
+				statement: "# Long checker\n\nOutput one.",
+				reference: { language: "python3", code: "print(1)" },
+				checkerMode: "custom",
+				checkerSource: `#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);ouf.maxMessageLength=1000000;int n=inf.readInt();ouf.readToken();ouf.skipBlanks();ouf.readEof();quitf(_ok, "%s score(0)", std::string(n, 'x').c_str());}`,
+			});
+			for (const size of [2990, 2999, 3000, 3001, 3400, 66000])
+				await projects.addTextCase(project.id, { input: `${size}\n` });
+			const result = await projects.pipeline.finalize(project.id);
+			expect(
+				result.report.checks.filter((check) => check.stage === "checker-self").map((check) => check.score),
+			).toEqual([0, 0, 0, 0, 0, undefined]);
+			expect(result.report.checks.filter((check) => check.stage === "checker-system")).toHaveLength(3);
+			expect(result.report.success).toBe(false);
+			expect(result.release).toBeUndefined();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+	120_000,
+);

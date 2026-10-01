@@ -1,6 +1,11 @@
-import { chmod, readFile, rename, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { parseEnv } from "node:util";
+
+import { canonicalPath, containsPath } from "./data-path.mjs";
+import { writePrivateFile } from "./private-file.mjs";
+
+const sourceDirectories = ["packages", "scripts", "deploy", "docs", "fixtures", "LICENSES", "e2e", ".github", ".husky"];
 
 const fields = [
 	"SETDRAFT_IMAGE_MODE", "SETDRAFT_IMAGE_NAMESPACE", "SETDRAFT_IMAGE_TAG", "SETDRAFT_WEB_IMAGE", "SETDRAFT_MAINTENANCE_IMAGE",
@@ -113,12 +118,11 @@ export async function loadDeployment(root, environment = process.env, overrides 
 		if (/[\r\n\0]/u.test(value) || (value.includes('"') && value.includes("'"))) throw new Error(`${key} 含不支持的字符。`);
 	}
 	const dataRoot = resolve(root, values.SETDRAFT_WORKSPACE_ROOT || ".setdraft");
-	const toRoot = relative(dataRoot, root);
-	if (!toRoot || (!toRoot.startsWith("..") && !isAbsolute(toRoot))) throw new Error("工作区不能是仓库根目录或其父目录。");
-	for (const directory of ["packages", "scripts", "deploy", "node_modules", ".git"]) {
-		const within = relative(join(root, directory), dataRoot);
-		if (!within || (!within.startsWith("..") && !isAbsolute(within)))
-			throw new Error("数据目录不能放在源代码、部署脚本或依赖目录中。");
+	const physicalRoot = await canonicalPath(root);
+	const physicalData = await canonicalPath(dataRoot);
+	if (containsPath(dataRoot, root) || containsPath(physicalData, physicalRoot)) throw new Error("工作区不能是仓库根目录或其父目录。");
+	for (const directory of [...sourceDirectories, "node_modules", ".git"]) {
+		if (containsPath(join(root, directory), dataRoot) || containsPath(await canonicalPath(join(root, directory)), physicalData)) throw new Error("数据目录不能放在源代码、部署脚本或依赖目录中。");
 	}
 	return { path, source, values, registry, debianMirror, dataRoot, root };
 }
@@ -160,10 +164,7 @@ export async function saveDeployment(config) {
 		if (pattern.test(source)) source = source.replace(pattern, () => line);
 		else source += `${source.endsWith("\n") || !source ? "" : "\n"}${line}\n`;
 	}
-	const temporary = `${config.path}.${process.pid}.tmp`;
-	await writeFile(temporary, source, { mode: 0o600 });
-	await chmod(temporary, 0o600);
-	await rename(temporary, config.path);
+	await writePrivateFile(config.path, source);
 	config.source = source;
 }
 

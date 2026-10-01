@@ -900,8 +900,8 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 	return stream(model, context, {
 		...base,
 		maxTokens,
-		thinkingEnabled: true,
-		thinkingBudgetTokens: Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024)),
+		thinkingEnabled: maxTokens > 1024,
+		thinkingBudgetTokens: Math.max(1024, Math.min(adjusted.thinkingBudget, maxTokens - 1)),
 	} satisfies AnthropicOptions);
 };
 
@@ -1171,12 +1171,18 @@ function buildParams(
 					params.output_config = { effort: options.effort };
 				}
 			} else {
-				// Budget-based thinking for older models
-				params.thinking = {
-					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
-					display,
-				};
+				// Budget-based thinking needs a minimum budget smaller than the output cap.
+				params.thinking =
+					params.max_tokens <= 1024
+						? { type: "disabled" }
+						: {
+								type: "enabled",
+								budget_tokens: Math.max(
+									1024,
+									Math.min(options.thinkingBudgetTokens ?? 1024, params.max_tokens - 1),
+								),
+								display,
+							};
 			}
 		} else if (options?.thinkingEnabled === false && model.thinkingLevelMap?.off !== null) {
 			params.thinking = { type: "disabled" };

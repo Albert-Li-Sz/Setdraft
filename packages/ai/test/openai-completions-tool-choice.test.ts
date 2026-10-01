@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.ts";
 import { getModel, normalizeContext, stream, streamSimple } from "../src/compat.ts";
 import type { AssistantMessage, Model, SimpleStreamOptions, Tool, ToolResultMessage } from "../src/types.ts";
+import { assertStopped } from "./assert-success.ts";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -85,6 +86,7 @@ async function captureSimpleParams(
 	reasoning?: SimpleStreamOptions["reasoning"],
 ): Promise<CapturedParams> {
 	let payload: unknown;
+	mockState.lastParams = undefined;
 
 	await streamSimple(
 		model,
@@ -98,7 +100,9 @@ async function captureSimpleParams(
 				payload = params;
 			},
 		},
-	).result();
+	)
+		.result()
+		.then(assertStopped);
 
 	return (payload ?? mockState.lastParams) as CapturedParams;
 }
@@ -122,6 +126,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -142,7 +147,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			} as unknown as Parameters<typeof streamSimple>[2],
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { tool_choice?: string; tools?: unknown[] };
 		expect(params.tool_choice).toBe("required");
@@ -154,6 +161,7 @@ describe("openai-completions tool_choice", () => {
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -167,7 +175,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { tool_choice?: string; tools?: unknown[] };
 		expect(params.tool_choice).toBe("none");
@@ -191,6 +201,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -210,7 +221,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			} as unknown as Parameters<typeof streamSimple>[2],
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { tools?: Array<{ function?: Record<string, unknown> }> };
 		const tool = params.tools?.[0]?.function;
@@ -236,6 +249,7 @@ describe("openai-completions tool_choice", () => {
 			constrainedSampling: { type: "json_schema", strict: "prefer" },
 		};
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -249,7 +263,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as {
 			tools?: Array<{ function?: { strict?: boolean; parameters?: { required?: string[] } } }>;
@@ -272,6 +288,7 @@ describe("openai-completions tool_choice", () => {
 			constrainedSampling: { type: "json_schema", strict: "prefer" },
 		};
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -285,7 +302,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as {
 			tools?: Array<{ function?: { strict?: boolean; parameters?: { required?: string[] } } }>;
@@ -298,6 +317,7 @@ describe("openai-completions tool_choice", () => {
 	it("maps Groq Qwen reasoning levels to default reasoning_effort", async () => {
 		const model = getModel("groq", "qwen/qwen3.6-27b")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -317,7 +337,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
 		expect(params.reasoning_effort).toBe("default");
@@ -326,6 +348,7 @@ describe("openai-completions tool_choice", () => {
 	it("keeps normal reasoning_effort for groq models without compat mapping", async () => {
 		const model = getModel("groq", "openai/gpt-oss-20b")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -345,7 +368,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
 		expect(params.reasoning_effort).toBe("medium");
@@ -363,6 +388,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -382,7 +408,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { tool_stream?: boolean };
 		expect(params.tool_stream).toBe(true);
@@ -436,6 +464,7 @@ describe("openai-completions tool_choice", () => {
 
 		for (const testCase of cases) {
 			let payload: unknown;
+			mockState.lastParams = undefined;
 
 			await streamSimple(
 				model,
@@ -455,7 +484,9 @@ describe("openai-completions tool_choice", () => {
 						payload = params;
 					},
 				},
-			).result();
+			)
+				.result()
+				.then(assertStopped);
 
 			const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
 			expect(params.thinking).toEqual({ type: "enabled", clear_thinking: false });
@@ -494,6 +525,7 @@ describe("openai-completions tool_choice", () => {
 			timestamp: Date.now(),
 		};
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -512,7 +544,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as {
 			messages?: Array<Record<string, unknown>>;
@@ -526,6 +560,7 @@ describe("openai-completions tool_choice", () => {
 	it("omits z.ai GLM-5.2 reasoning_effort when thinking is off", async () => {
 		const model = getModel("zai", "glm-5.2")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -544,7 +579,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
 		expect(params.thinking).toEqual({ type: "disabled" });
@@ -570,6 +607,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -589,7 +627,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { tool_stream?: boolean };
 		expect(params.tool_stream).toBe(true);
@@ -598,6 +638,7 @@ describe("openai-completions tool_choice", () => {
 	it("omits tool_stream when no tools are provided", async () => {
 		const model = getModel("zai", "glm-5.2")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -616,7 +657,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { tool_stream?: boolean };
 		expect(params.tool_stream).toBeUndefined();
@@ -1153,6 +1196,7 @@ describe("openai-completions tool_choice", () => {
 	it("uses system messages for non-OpenAI/Anthropic OpenRouter reasoning model instructions", async () => {
 		const model = getModel("openrouter", "deepseek/deepseek-v4-pro")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1166,7 +1210,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = payload as { messages?: Array<{ role?: string }> };
 		expect(params.messages?.[0]?.role).toBe("system");
@@ -1179,6 +1225,7 @@ describe("openai-completions tool_choice", () => {
 		]) {
 			expect(model).toBeDefined();
 			let payload: unknown;
+			mockState.lastParams = undefined;
 
 			await streamSimple(
 				model!,
@@ -1192,7 +1239,9 @@ describe("openai-completions tool_choice", () => {
 						payload = params;
 					},
 				},
-			).result();
+			)
+				.result()
+				.then(assertStopped);
 
 			const params = payload as { messages?: Array<{ role?: string }> };
 			expect(params.messages?.[0]?.role).toBe("developer");
@@ -1203,6 +1252,7 @@ describe("openai-completions tool_choice", () => {
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-5.5")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1216,7 +1266,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = payload as { messages?: Array<{ role?: string }> };
 		expect(params.messages?.[0]?.role).toBe("developer");
@@ -1282,6 +1334,7 @@ describe("openai-completions tool_choice", () => {
 			timestamp: Date.now(),
 		};
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1299,7 +1352,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as {
 			messages?: Array<Record<string, unknown>>;
@@ -1428,6 +1483,7 @@ describe("openai-completions tool_choice", () => {
 	it("sends thinking disabled for OpenCode Go Kimi K2.6 when thinking is off", async () => {
 		const model = getModel("opencode-go", "kimi-k2.6")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1440,7 +1496,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
 		expect(params.thinking).toEqual({ type: "disabled" });
@@ -1450,6 +1508,7 @@ describe("openai-completions tool_choice", () => {
 	it("sends thinking enabled for OpenCode Go Kimi K2.6 when thinking is enabled", async () => {
 		const model = getModel("opencode-go", "kimi-k2.6")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1463,7 +1522,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
 		expect(params.thinking).toEqual({ type: "enabled" });
@@ -1476,6 +1537,7 @@ describe("openai-completions tool_choice", () => {
 		for (const model of cases) {
 			expect(model).toBeDefined();
 			let payload: unknown;
+			mockState.lastParams = undefined;
 
 			await streamSimple(
 				model!,
@@ -1488,7 +1550,9 @@ describe("openai-completions tool_choice", () => {
 						payload = params;
 					},
 				},
-			).result();
+			)
+				.result()
+				.then(assertStopped);
 
 			const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
 			expect(params.thinking).toBeUndefined();
@@ -1499,6 +1563,7 @@ describe("openai-completions tool_choice", () => {
 	it("keeps disabled thinking for Moonshot Kimi K2.6 when thinking is off", async () => {
 		const model = getModel("moonshotai-cn", "kimi-k2.6")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1511,7 +1576,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
 		expect(params.thinking).toEqual({ type: "disabled" });
@@ -1523,6 +1590,7 @@ describe("openai-completions tool_choice", () => {
 
 		for (const model of cases) {
 			let payload: unknown;
+			mockState.lastParams = undefined;
 			expect(model.compat?.maxTokensField).toBe("max_tokens");
 
 			await streamSimple(
@@ -1537,7 +1605,9 @@ describe("openai-completions tool_choice", () => {
 						payload = params;
 					},
 				},
-			).result();
+			)
+				.result()
+				.then(assertStopped);
 
 			const params = (payload ?? mockState.lastParams) as { max_tokens?: number; max_completion_tokens?: number };
 			expect(params.max_tokens).toBe(123);
@@ -1568,6 +1638,7 @@ describe("openai-completions tool_choice", () => {
 
 		for (const model of cases) {
 			let payload: unknown;
+			mockState.lastParams = undefined;
 
 			await streamSimple(
 				model,
@@ -1581,7 +1652,9 @@ describe("openai-completions tool_choice", () => {
 						payload = params;
 					},
 				},
-			).result();
+			)
+				.result()
+				.then(assertStopped);
 
 			const params = (payload ?? mockState.lastParams) as { max_tokens?: number; max_completion_tokens?: number };
 			expect(params.max_tokens).toBe(123);
@@ -1595,6 +1668,7 @@ describe("openai-completions tool_choice", () => {
 		for (const model of cases) {
 			expect(model.compat?.maxTokensField).toBe("max_tokens");
 			let payload: unknown;
+			mockState.lastParams = undefined;
 
 			await streamSimple(
 				model,
@@ -1608,7 +1682,9 @@ describe("openai-completions tool_choice", () => {
 						payload = params;
 					},
 				},
-			).result();
+			)
+				.result()
+				.then(assertStopped);
 
 			const params = (payload ?? mockState.lastParams) as { max_tokens?: number; max_completion_tokens?: number };
 			expect(params.max_tokens).toBe(123);
@@ -1617,8 +1693,10 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits reasoning effort for OpenCode Grok Build", async () => {
-		const model = getModel("opencode", "grok-build-0.1")!;
+		const model = { ...getModel("opencode", "grok-build-0.1"), api: "openai-completions" as const };
+		expect(model.api).toBe("openai-completions");
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1632,7 +1710,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
 		expect(params.reasoning_effort).toBeUndefined();
@@ -1763,6 +1843,7 @@ describe("openai-completions tool_choice", () => {
 	it("uses OpenRouter reasoning object instead of reasoning_effort", async () => {
 		const model = getModel("openrouter", "deepseek/deepseek-r1")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await streamSimple(
 			model,
@@ -1782,7 +1863,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as {
 			reasoning?: { effort?: string };
@@ -1866,6 +1949,7 @@ describe("openai-completions tool_choice", () => {
 	it("uses Ant Ling compatibility metadata", async () => {
 		const model = getModel("ant-ling", "Ring-2.6-1T")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		expect(model.compat).toMatchObject({
 			supportsStore: false,
@@ -1894,7 +1978,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		const params = (payload ?? mockState.lastParams) as {
 			max_tokens?: number;
@@ -1919,6 +2005,7 @@ describe("openai-completions tool_choice", () => {
 	it("omits Ant Ling reasoning for unmapped direct reasoning efforts and non-reasoning models", async () => {
 		const ring = getModel("ant-ling", "Ring-2.6-1T")!;
 		let payload: unknown;
+		mockState.lastParams = undefined;
 
 		await stream(
 			ring,
@@ -1932,7 +2019,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
 
@@ -1949,7 +2038,9 @@ describe("openai-completions tool_choice", () => {
 					payload = params;
 				},
 			},
-		).result();
+		)
+			.result()
+			.then(assertStopped);
 
 		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
 	});

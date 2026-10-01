@@ -37,11 +37,12 @@ function xmlFields(xml: string): Record<string, string> {
 	return fields;
 }
 
+if (process.env.SETDRAFT_REQUIRE_IMPORTER === "1" && (!python || !importer))
+	throw new Error("Pinned QDUOJ importer is required.");
+
 it.skipIf(!dockerAvailable)(
 	"real verified releases import as FPS and native SPJ agrees with testlib for 81 output pairs",
 	async () => {
-		if (process.env.SETDRAFT_REQUIRE_IMPORTER === "1" && (!python || !importer))
-			throw new Error("Pinned QDUOJ importer is required.");
 		const root = await mkdtemp(join(tmpdir(), "setdraft-export-contract-"));
 		const projects = new ManualProjectStore({ root: join(root, "workspace") });
 		try {

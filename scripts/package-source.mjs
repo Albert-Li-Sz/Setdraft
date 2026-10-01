@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
-import { copyFile, lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { canonicalPath, containsPath } from "./data-path.mjs";
+import { parseEnv } from "node:util";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootFiles = [
@@ -17,6 +20,11 @@ const privateReport = /(?:^|[-_. ])(?:audit|review|remediation|acceptance)(?:[-_
 
 export async function collectSourceFiles(root) {
  const files = [];
+ const saved = parseEnv(await readFile(join(root, ".env"), "utf8").catch(error => { if (error.code !== "ENOENT") throw error; return ""; }));
+ const configured = process.env.SETDRAFT_WORKSPACE_ROOT ?? process.env.HYDRO_WORKSPACE_ROOT ?? saved.SETDRAFT_WORKSPACE_ROOT ?? saved.HYDRO_WORKSPACE_ROOT ?? ".setdraft";
+ const dataRoot = resolve(root, configured);
+ const physicalDataRoot = await canonicalPath(dataRoot);
+ if (containsPath(dataRoot, root) || containsPath(physicalDataRoot, await canonicalPath(root))) throw new Error("Data directory cannot contain source repository");
  async function visit(relative, required = false) {
   const name = relative.split("/").at(-1);
   if (omitted.has(name) || (name.startsWith(".env") && relative !== ".env.example")) return;
@@ -27,6 +35,7 @@ export async function collectSourceFiles(root) {
    throw error;
   });
   if (!info || info.isSymbolicLink()) return;
+  if (containsPath(dataRoot, join(root, relative)) || containsPath(physicalDataRoot, await canonicalPath(join(root, relative)))) return;
   if (info.isDirectory()) {
    for (const child of (await readdir(join(root, relative))).sort()) await visit(`${relative}/${child}`);
   } else if (info.isFile() && (required || extensions.test(name) || /^(?:LICENSE|README|Dockerfile|Caddyfile\.example|pre-commit)$/u.test(name))) {

@@ -40,10 +40,10 @@ test("published archive omits secrets, outputs, user data and symlinks and is re
    "packages/hydro-server/src/.env.local", "packages/hydro-server/dist/example.js", "packages/hydro-server/src/credentials.pem",
    "docs/rev0.5-acceptance-2026-10-01.md", "docs/rev0.4-remediation-plan-2026-10-01.md",
    "docs/security-audit-report.txt", "docs/Setdraft-review.md", "docs/Setdraft-Bug审计报告.md",
-   "docs/.private-reports/internal.md"];
+   "docs/.private-reports/internal.md", "docs/private/team.json", "docs/private/project.cc"];
   for (const path of [...inputs, ...excluded]) {
    await mkdir(dirname(join(temporary, path)), { recursive: true });
-   await writeFile(join(temporary, path), path);
+   await writeFile(join(temporary, path), path === ".env" ? "SETDRAFT_WORKSPACE_ROOT=docs/private\n" : path);
   }
   await symlink(join(temporary, ".env"), join(temporary, "packages/hydro-server/src/linked.json"));
   const archive = await packageSource(temporary);

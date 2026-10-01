@@ -275,8 +275,10 @@ export function AiChatPage(props: Props) {
 		setSearchPhase("");
 		setStreamFailed(false);
 		setStreamCancelled(false);
-		setImages([]);
-		setInput("");
+		if (!preserveProfileSelection) {
+			setImages([]);
+			setInput("");
+		}
 		setLoading(false);
 		followOutputRef.current = true;
 		await refreshList(selectionSignal);

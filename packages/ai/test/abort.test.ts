@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { complete, getModel, stream } from "../src/compat.ts";
-import type { Api, Context, Model, StreamOptions } from "../src/types.ts";
+import { complete, getModel, registerApiProvider, resetApiProviders, stream } from "../src/compat.ts";
+import type { Api, AssistantMessage, Context, Model, StreamOptions } from "../src/types.ts";
+import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
@@ -28,15 +29,15 @@ async function testAbortSignal<TApi extends Api>(llm: Model<TApi>, options: Stre
 	const controller = new AbortController();
 	const response = await stream(llm, context, { ...options, signal: controller.signal });
 	for await (const event of response) {
-		if (abortFired) return;
 		if (event.type === "text_delta" || event.type === "thinking_delta") {
 			text += event.delta;
 		}
-		if (text.length >= 50) {
+		if (!abortFired && text.length >= 50) {
 			controller.abort();
 			abortFired = true;
 		}
 	}
+	expect(abortFired).toBe(true);
 	const msg = await response.result();
 
 	// If we get here without throwing, the abort didn't work
@@ -348,4 +349,42 @@ describe("AI Providers Abort Tests", () => {
 			await testAbortThenNewMessage(llm);
 		});
 	});
+});
+
+it("fails the abort helper when a provider emits extra frames and ignores cancellation", async () => {
+	let followups = 0;
+	const model: Model<"openai-responses"> = { ...getModel("openai", "gpt-4o-mini"), provider: "abort-test" };
+	const fake = () => {
+		followups++;
+		const stream = new AssistantMessageEventStream();
+		const message: AssistantMessage = {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "text", text: "x".repeat(80) }],
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		stream.push({ type: "text_delta", contentIndex: 0, delta: "x".repeat(80), partial: message });
+		stream.push({ type: "text_delta", contentIndex: 0, delta: "extra frame", partial: message });
+		stream.push({ type: "done", reason: "stop", message });
+		stream.end(message);
+		return stream;
+	};
+	try {
+		registerApiProvider({ api: model.api, stream: fake, streamSimple: fake });
+		await expect(testAbortSignal(model)).rejects.toThrow();
+		expect(followups).toBe(1);
+	} finally {
+		resetApiProviders();
+	}
 });
