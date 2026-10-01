@@ -432,16 +432,24 @@ export class TaskQueue {
 			return task.state;
 		});
 		if (state === "queued") {
-			await this.recordQueueEnd(id, "cancelled");
-			this.waiting.get(id)?.abort();
-			this.controllers.get(id)?.abort();
-			this.releaseSlot(id);
-			this.releaseAdmission(id);
+			await this.releaseQueued(id, "cancelled");
 			this.wake();
 		} else {
 			this.controllers.get(id)?.abort();
 		}
 		return await this.get(id);
+	}
+
+	/** Called only after a queued terminal transaction commits; telemetry never owns resources. */
+	private async releaseQueued(id: string, result: "cancelled" | "timeout"): Promise<void> {
+		try {
+			await this.recordQueueEnd(id, result).catch(() => undefined);
+		} finally {
+			this.waiting.get(id)?.abort();
+			this.controllers.get(id)?.abort();
+			this.releaseSlot(id);
+			this.releaseAdmission(id);
+		}
 	}
 
 	private async recordQueueEnd(id: string, result: "cancelled" | "timeout"): Promise<void> {
@@ -488,10 +496,7 @@ export class TaskQueue {
 		])) as Array<{ id: string }>;
 		for (const task of expired) {
 			if (!(await this.finish(task.id, "failed", undefined, "排队超过时间上限，请稍后重试。", true))) continue;
-			await this.recordQueueEnd(task.id, "timeout");
-			this.waiting.get(task.id)?.abort();
-			this.releaseSlot(task.id);
-			this.releaseAdmission(task.id);
+			await this.releaseQueued(task.id, "timeout");
 		}
 		const cancelling = (await this.database.sql.all(
 			"SELECT id FROM tasks WHERE state='running' AND cancel_requested=1 AND owner_pid=$1",

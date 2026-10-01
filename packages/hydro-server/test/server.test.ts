@@ -1102,7 +1102,7 @@ describe("manual project API", () => {
 			expect(passed.body.report.checks).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({ stage: "answer", passed: true }),
-					expect.objectContaining({ stage: "checker-negative:value", passed: true }),
+					expect.objectContaining({ stage: "checker-probe:value", passed: true }),
 				]),
 			);
 			expect(passed.body.release?.id).toBeTruthy();
@@ -1119,7 +1119,7 @@ describe("manual project API", () => {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					checkerSource:
-						'#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);ans.readInt();ouf.readInt();quitf(_ok,"always okay");}',
+						'#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);quitf(_fail,"broken checker");}',
 				}),
 			});
 			await authenticatedFetch(`${origin}/api/projects/${project.id}/files/1.out`, { method: "DELETE" });
@@ -1130,7 +1130,7 @@ describe("manual project API", () => {
 			expect(rejected.body.report.success).toBe(false);
 			expect(rejected.body.release).toBeUndefined();
 			expect(rejected.body.report.checks).toEqual(
-				expect.arrayContaining([expect.objectContaining({ stage: "checker-negative:value", passed: false })]),
+				expect.arrayContaining([expect.objectContaining({ stage: "checker-system", passed: false })]),
 			);
 		},
 		120_000,

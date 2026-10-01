@@ -6,6 +6,7 @@ import {
 	serializeMarkdown,
 	walkMarkdown,
 } from "@setdraft/authoring/markdown";
+import type { FootnoteDefinition, RootContent } from "mdast";
 
 export function typstString(value: string): string {
 	return `"${value.replace(/["\\\u0000-\u001f\u007f-\u009f]/gu, (character) => {
@@ -75,8 +76,14 @@ export function preparePdfMarkdownParts(parts: string[], images: ReadonlyMap<str
 	return prepared;
 }
 
-/** Resolve first-wins footnotes in one logical statement; definitions never render twice. */
-export function preparePdfFootnotes(parts: string[]): { parts: string[]; footnotes: string[] } {
+interface PdfFootnote {
+	body: string;
+	/** Newly reached descendants, in the order their entries must be emitted. */
+	nested: number[];
+}
+
+/** Resolve the reachable first-wins reference graph; cycles never silently lose content. */
+export function preparePdfFootnotes(parts: string[]): { parts: string[]; footnotes: PdfFootnote[] } {
 	let document = "";
 	const ranges = parts.map((part, index) => {
 		document += `## section-${index}\n\n`;
@@ -85,34 +92,61 @@ export function preparePdfFootnotes(parts: string[]): { parts: string[]; footnot
 		return { start, end: start + part.length };
 	});
 	const tree = parseMarkdown(document);
-	const definitions = new Map<string, string>();
+	const definitions = new Map<string, FootnoteDefinition>();
 	const edits: Array<{ start: number; end: number; text: string }> = [];
 	walkMarkdown(tree, (node) => {
 		if (node.type !== "footnoteDefinition" || !node.position) return;
-		if (!definitions.has(node.identifier))
-			definitions.set(node.identifier, serializeMarkdown({ type: "root", children: node.children }));
+		if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
 		edits.push({ start: node.position.start.offset!, end: node.position.end.offset!, text: "" });
 	});
-	const footnotes: string[] = [];
+	const footnotes: PdfFootnote[] = [];
 	const numbers = new Map<string, number>();
 	const definitionRanges = [...edits];
+	const marker = (index: number, first: boolean) =>
+		`<setdraft-footnote data-note="${index}" data-first="${first ? "1" : "0"}"></setdraft-footnote>`;
+	const privateHtml = (node: RootContent) =>
+		node.type === "html" && /<\/?setdraft-footnote(?=[ \t\r\n\f\v/>])/iu.test(node.value);
+	function register(identifier: string, path: string[]): { index: number; first: boolean } {
+		if (path.includes(identifier)) throw new Error(`PDF 脚注存在循环引用：${[...path, identifier].join(" → ")}。`);
+		if (path.length >= 80) throw new Error("PDF 脚注嵌套过深，请简化引用。");
+		const existing = numbers.get(identifier);
+		if (existing !== undefined) return { index: existing, first: false };
+		const definition = definitions.get(identifier);
+		if (!definition) throw new Error(`PDF 脚注定义不存在：${identifier}。`);
+		const index = footnotes.length;
+		const note: PdfFootnote = { body: "", nested: [] };
+		numbers.set(identifier, index);
+		footnotes.push(note);
+		function render(node: RootContent): RootContent {
+			if (node.type === "footnoteReference") {
+				const nested = register(node.identifier, [...path, identifier]);
+				if (nested.first) note.nested.push(nested.index, ...footnotes[nested.index].nested);
+				return { type: "html", value: marker(nested.index, false) };
+			}
+			if (node.type === "html" && privateHtml(node)) return { type: "text", value: node.value };
+			// A footnote reference and its HTML replacement are both phrasing nodes.
+			if ("children" in node) return { ...node, children: node.children.map(render) } as RootContent;
+			return node;
+		}
+		note.body = serializeMarkdown({ type: "root", children: definition.children.map(render) });
+		return { index, first: true };
+	}
 	walkMarkdown(tree, (node) => {
-		if (node.type !== "footnoteReference" || !node.position) return;
+		if (!node.position) return;
 		const start = node.position.start.offset!,
 			end = node.position.end.offset!;
 		if (definitionRanges.some((edit) => start >= edit.start && end <= edit.end)) return;
-		const definition = definitions.get(node.identifier);
-		if (definition === undefined) return;
-		const first = !numbers.has(node.identifier);
-		if (first) {
-			numbers.set(node.identifier, footnotes.length);
-			footnotes.push(definition);
+		if (node.type === "html" && privateHtml(node)) {
+			edits.push({
+				start,
+				end,
+				text: node.value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+			});
+			return;
 		}
-		edits.push({
-			start,
-			end,
-			text: `<setdraft-footnote data-note="${numbers.get(node.identifier)}" data-first="${first ? "1" : "0"}"></setdraft-footnote>`,
-		});
+		if (node.type !== "footnoteReference") return;
+		const { index, first } = register(node.identifier, []);
+		edits.push({ start, end, text: marker(index, first) });
 	});
 	return {
 		footnotes,

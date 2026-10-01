@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
+import { checkerScore } from "./checker-protocol.ts";
 import type { SandboxCase, SandboxInput } from "./manual-sandbox.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
 import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
@@ -273,39 +274,10 @@ async function dialogue(
 				if (!team || !interactor) return;
 				if (interactor.closed) {
 					const message = interactor.stderr.trim();
-					const explicit = /\bscore\((-?\d+)\)/u.exec(message);
-					const points = /^points ([\d.]+)/u.exec(message);
-					const partial = /^partially correct \(([\d.]+)\)/u.exec(message);
-					const fraction = Number((points ?? partial)?.[1]);
-					const score = explicit
-						? Number(explicit[1])
-						: points || partial
-							? Math.floor(fraction * (fraction > 1 ? 1 : 100))
-							: 100;
-					if (!Number.isFinite(score) || score < 0 || score > 100) {
-						finish("SYSTEM_ERROR", "交互器返回无效分数。");
-						return;
-					}
-					if ((adapted ? [42, 43] : [0]).includes(interactor.code ?? -1) && /^ok\b/u.test(message)) {
-						if (team.closed)
-							finish(
-								team.code === 0 ? (score === 100 ? "AC" : "WA") : "RE",
-								team.code === 0 ? message : `选手程序异常退出：${team.stderr}`,
-								team.code === 0 ? score : 0,
-							);
-					} else if (
-						adapted
-							? [42, 43].includes(interactor.code ?? -1) && (points || partial)
-							: (points && interactor.code === 7) || (partial && interactor.code === Number(partial[1]))
-					) {
-						if (score !== 100 || team.closed)
-							finish(team.closed && team.code !== 0 ? "RE" : score === 100 ? "AC" : "WA", message, score);
-					} else if (
-						(adapted ? [43] : [1, 2]).includes(interactor.code ?? -1) &&
-						/^(wrong answer|wrong output format)\b/u.test(message)
-					) {
-						finish(team.closed && team.code !== 0 ? "RE" : "WA", message, 0);
-					} else finish("SYSTEM_ERROR", `交互器错误（${interactor.code}）：${message}`);
+					const score = checkerScore(interactor.code, message, adapted);
+					if (score === undefined) finish("SYSTEM_ERROR", `交互器错误（${interactor.code}）：${message}`);
+					else if (team.closed && team.code !== 0) finish("RE", `选手程序异常退出：${team.stderr}`, 0);
+					else if (score !== 100 || team.closed) finish(score === 100 ? "AC" : "WA", message, score);
 				}
 			};
 			for (const [index, name] of names.entries()) {

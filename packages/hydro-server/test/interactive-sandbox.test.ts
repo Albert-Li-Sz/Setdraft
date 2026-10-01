@@ -3,9 +3,12 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { interactiveReferenceTemplate, interactorTemplate } from "@setdraft/contracts";
 import { afterEach, beforeEach, expect, it as test, vi } from "vitest";
+import { awkCheckerProtocol } from "../src/checker-protocol.ts";
+import { runInteractiveSandbox } from "../src/interactive-sandbox.ts";
 import { runManualSandbox, type SandboxInput } from "../src/manual-sandbox.ts";
 
 let root: string;
@@ -16,6 +19,35 @@ try {
 	dockerAvailable = true;
 } catch {}
 const it = test.skipIf(!dockerAvailable);
+
+it.each([
+	['quitp(0.5, "score(100). diagnostic")', "", "WA", 50],
+	['quitf(_ok, "correct answer")', "exit 43", "SYSTEM_ERROR", undefined],
+	['quitp(0.5, "partial")', "exit 42", "SYSTEM_ERROR", undefined],
+] as const)(
+	"checks the real adapted interactor's exit code against its text: %s %s",
+	async (ending, forcedExit, verdict, score) => {
+		const report = await runInteractiveSandbox(
+			sandbox({
+				interactor: { language: "cpp17", code: testInteractor.replace('quitf(_ok, "correct answer")', ending) },
+			}),
+			{
+				build: "cd /program\ng++ -std=c++17 -O2 -I. interactor.cc -o interactor\n",
+				run: `/program/interactor "$1" "$3/transcript" "$2" 2> "$3/judgemessage.txt"\nstatus=$?\ncat "$3/judgemessage.txt" >&2\n${awkCheckerProtocol}\n${forcedExit}\n`,
+				testlibPath: fileURLToPath(new URL("../sandbox/testlib/testlib.h", import.meta.url)),
+			},
+		);
+		expect(report.success).toBe(false);
+		expect(report.checks).toContainEqual(
+			expect.objectContaining({
+				stage: "interaction:reference",
+				verdict,
+				...(score === undefined ? {} : { score }),
+			}),
+		);
+	},
+	90_000,
+);
 
 function sandbox(overrides: Partial<SandboxInput> = {}): SandboxInput {
 	return {
@@ -125,6 +157,25 @@ it("does not accept a partially scored reference as fully verified", async () =>
 		expect.objectContaining({ stage: "interaction:reference", verdict: "WA", score: 50 }),
 	);
 }, 90_000);
+
+it.each(["score(100). diagnostic", "中文score(100)", "score(100)中文", "rescore(100)"])(
+	"keeps diagnostic %s from turning a real partial interactor into full credit",
+	async (message) => {
+		const report = await runManualSandbox(
+			sandbox({
+				interactor: {
+					language: "cpp17",
+					code: testInteractor.replace('quitf(_ok, "correct answer")', `quitp(0.5, "${message}")`),
+				},
+			}),
+		);
+		expect(report.success).toBe(false);
+		expect(report.checks).toContainEqual(
+			expect.objectContaining({ stage: "interaction:reference", verdict: "WA", score: 50 }),
+		);
+	},
+	90_000,
+);
 
 it("keeps private input and jury sources out of the contestant filesystem", async () => {
 	const report = await runManualSandbox(

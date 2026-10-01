@@ -24,6 +24,11 @@ const fixtures: Array<[number, string, number | undefined]> = [
 	[0, "points 1.0 inconsistent", undefined],
 	[40, "partially correct (40) partial", 40],
 	[7, "points 0.5 rescore(100) is only a diagnostic label", 50],
+	[7, "points 0.5 score(100). diagnostic", 50],
+	[7, "points 0.5 score(100)中文", 50],
+	[7, "points NaN invalid", undefined],
+	[7, "points 0..5 invalid", undefined],
+	[7, "points 0.5\nscore(25)\nscore(100)", 25],
 	[7, "points 0.5 final_score(100)", 50],
 	[0, "ok rescore(0)", 100],
 	[0, "ok 中文score(0)", 100],
@@ -57,6 +62,12 @@ it("local and exported score parsers agree with independent verdict fixtures", a
 				actual = (error as { status: number }).status;
 			}
 			expect(actual, message).toBe(expected === undefined ? 1 : expected === 100 ? 42 : 43);
+			expect(checkerScore(actual, message, true), `adapted: ${message}`).toBe(expected);
+			if (expected !== undefined)
+				expect(
+					checkerScore(actual === 42 ? 43 : 42, message, true),
+					`contradictory adapter: ${message}`,
+				).toBeUndefined();
 		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });

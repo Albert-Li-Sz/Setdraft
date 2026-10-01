@@ -46,6 +46,8 @@ cd setdraft
 
 数据库保存在 Compose 的 `postgres-data` 卷，文件默认放在 `.setdraft/users/<userId>/`，也可设置 `SETDRAFT_WORKSPACE_ROOT`。此版本采用全新的 PostgreSQL 部署，不导入旧 SQLite 数据。首次进入网页需要重新创建管理员，其他账号及团队 AI 配置重新设置。旧数据目录不会被安装脚本自动删除；确认无需保留后可自行清理。不要同时启动原生和容器 Web 服务。
 
+升级到 Rev1.0 后，交互题和自定义 Checker 的旧发布包需要重新完整验证，再导出或加入竞赛。导出契约已升级为 v3；旧下载包、已导入 OJ 的内容和历史竞赛包不会自动更新。
+
 `.env.compose` 自动生成独立的数据库管理员密码、应用密码及搜索服务密钥，重新安装时保留已有值；不要在数据库卷保留的情况下更换这些密码。Web 只获得受限应用账号，数据库管理员凭据仅交给初始化和维护容器。
 
 容器通过 Docker socket 启动独立沙箱任务，数据目录以相同绝对路径映射到容器，确保兄弟沙箱容器能读取任务文件。Docker daemon 必须位于同一宿主机；不要连接远端 Docker context。Docker socket 权限很高，仅在受信任的自部署服务器使用该部署模式。工作区应在本地磁盘上，不放网络共享盘。默认只运行一个 Web 实例，文件锁和 PostgreSQL 会话锁阻止第二个服务同时操作同一数据集。[Docker 挂载路径说明](https://docs.docker.com/engine/storage/bind-mounts/)

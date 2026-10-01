@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { extname, resolve, sep } from "node:path";
+import { extname } from "node:path";
 import { promisify } from "node:util";
 import { AuthHttp } from "./auth-http.ts";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
@@ -14,6 +14,7 @@ import { ManualProjectError, type ManualProjectStore } from "./manual-projects.t
 import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
 import { copyProject, restoreProject } from "./project-history.ts";
 import { releaseName } from "./releases.ts";
+import { serveStatic } from "./static-files.ts";
 import { WorkspaceRegistry } from "./workspace-registry.ts";
 
 export interface HydroServerOptions {
@@ -25,16 +26,6 @@ export interface HydroServerOptions {
 	chat: ChatService;
 	observability?: Observability;
 }
-
-const contentTypes: Readonly<Record<string, string>> = {
-	".css": "text/css; charset=utf-8",
-	".html": "text/html; charset=utf-8",
-	".js": "text/javascript; charset=utf-8",
-	".mjs": "text/javascript; charset=utf-8",
-	".wasm": "application/wasm",
-	".json": "application/json; charset=utf-8",
-	".svg": "image/svg+xml",
-};
 
 function sendJson(response: ServerResponse, statusCode: number, value: unknown): void {
 	if (response.destroyed || response.headersSent) return;
@@ -157,32 +148,6 @@ async function sendFile(
 	response.once("close", () => stream.destroy());
 	stream.on("error", () => response.destroy());
 	stream.pipe(response);
-}
-
-async function serveStatic(response: ServerResponse, staticRoot: string, pathname: string): Promise<boolean> {
-	let decodedPath: string;
-	try {
-		decodedPath = decodeURIComponent(pathname);
-	} catch {
-		return false;
-	}
-	const requestedPath = decodedPath === "/" ? "index.html" : decodedPath.replace(/^\/+/, "");
-	const root = resolve(staticRoot);
-	const filePath = resolve(root, requestedPath);
-	if (filePath !== root && !filePath.startsWith(`${root}${sep}`)) return false;
-	try {
-		const metadata = await stat(filePath);
-		if (!metadata.isFile()) return false;
-		response.writeHead(200, {
-			"content-type": contentTypes[extname(filePath)] ?? "application/octet-stream",
-			"content-length": metadata.size,
-		});
-		createReadStream(filePath).pipe(response);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		throw error;
-	}
 }
 
 function readChatMessage(value: unknown): {

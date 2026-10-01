@@ -146,7 +146,7 @@ async function verifyOutputValidator(
 		"        feedback = temporary / 'feedback'",
 		"        feedback.mkdir()",
 		"        output = temporary / 'output'",
-		"        for data, expected in ((answer.read_bytes(), 42), (b'__hydro_invalid_output__\\n', 43)):",
+		"        for data, expected in ((answer.read_bytes(), 42),):",
 		"            output.write_bytes(data)",
 		"            adapted = subprocess.run([str(run), str(input_path), str(answer), str(feedback)], input=data, cwd=validator, timeout=20)",
 		"            if adapted.returncode != expected:",

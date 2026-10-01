@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authClient } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
@@ -83,21 +83,25 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	const [events, setEvents] = useState<TaskEvent[]>([]);
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	const refreshRevision = useRef(0);
 
 	useEffect(() => {
 		if (paused) return;
 		let active = true;
 		const controller = new AbortController();
 		const refresh = async () => {
+			const revision = ++refreshRevision.current;
 			try {
 				const body = await requestJson<{ tasks: BackgroundTask[] }>(apiUrl(apiOrigin, "/tasks"), {
 					signal: controller.signal,
 				});
-				if (active) {
+				if (active && revision === refreshRevision.current) {
 					setTasks(body.tasks ?? []);
+					setError("");
 				}
 			} catch (cause) {
-				if (active) setError(cause instanceof Error ? cause.message : "任务读取失败。");
+				if (active && revision === refreshRevision.current)
+					setError(cause instanceof Error ? cause.message : "任务读取失败。");
 			}
 		};
 		void refresh();
@@ -143,6 +147,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 
 	async function action(kind: "cancel" | "retry"): Promise<void> {
 		if (!selected) return;
+		++refreshRevision.current;
 		setBusy(true);
 		try {
 			const body = await requestJson<BackgroundTask | { task: BackgroundTask }>(
@@ -152,10 +157,12 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 				},
 			);
 			const updated = "task" in body ? body.task : body;
+			++refreshRevision.current;
 			setTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
 			setSelected(updated.id);
 			setError("");
 		} catch (cause) {
+			++refreshRevision.current;
 			setError(cause instanceof Error ? cause.message : "操作失败。");
 		} finally {
 			setBusy(false);

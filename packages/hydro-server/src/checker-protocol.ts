@@ -1,5 +1,14 @@
 /** score(...) overrides must be complete tokens separated by ASCII whitespace in every runtime. */
-export function checkerScore(code: number | null, message: string): number | undefined {
+export function checkerScore(code: number | null, message: string, adapted = false): number | undefined {
+	if (adapted) {
+		if (code !== 42 && code !== 43) return undefined;
+		const partial = /^partially correct \(([0-9]+)\)(?:[ \t\r\n\f\v]|$)/u.exec(message);
+		for (const original of [0, 1, 2, 7, ...(partial ? [Number(partial[1])] : [])]) {
+			const score = checkerScore(original, message);
+			if (score !== undefined) return code === (score === 100 ? 42 : 43) ? score : undefined;
+		}
+		return undefined;
+	}
 	let score: number;
 	let wrong = false;
 	if (code === 0 && /^ok(?:[ \t\r\n\f\v]|$)/u.test(message)) score = 100;

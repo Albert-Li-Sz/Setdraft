@@ -65,7 +65,7 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
   limits: (${limits.map(([key, value]) => `(key: ${typstString(key)}, value: ${typstString(value)})`).join(", ")},),
   samples: (${problem.samples.map((sample) => `(input: ${typstString(sample.input)}, output: ${typstString(sample.output)}),`).join("\n")}),
 ), statement: (
-  footnotes: (${prepared.footnotes.map((note) => `${typstString(note)},`).join(" ")}),
+  footnotes: (${prepared.footnotes.map((note) => `(body: ${typstString(note.body)}, nested: (${note.nested.map((index) => `${index},`).join(" ")})),`).join(" ")}),
   description: ${description},
   input: ${input},
   output: ${output},

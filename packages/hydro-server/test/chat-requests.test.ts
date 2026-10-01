@@ -49,6 +49,117 @@ async function waitFor(
 }
 
 describe("persisted chat requests", () => {
+	it("owns an entry failure until its terminal transaction commits without a model retry", async () => {
+		const client = vi.fn(async () => "next reply");
+		const chat = await configuredChat(client),
+			database = new WorkspaceDatabase(root);
+		const scheduler = new ExecutionScheduler(1, chatPolicy());
+		const queue = new ChatRequestQueue(database, chat, { scheduler, userId: "alice", enabled: async () => true });
+		await queue.ready;
+		const internals = queue as unknown as {
+			schedule(chatId: string, id: string): void;
+			run(chatId: string, id: string, controller: AbortController): Promise<void>;
+		};
+		const schedule = internals.schedule.bind(queue),
+			run = internals.run.bind(queue);
+		const hold = vi.spyOn(internals, "schedule").mockImplementation(() => {});
+		const conversation = await chat.create(),
+			id = randomUUID();
+		await queue.submit(conversation.id, id, "first question");
+		hold.mockRestore();
+		const entry = vi.spyOn(internals, "run").mockImplementationOnce(async (chatId, requestId, controller) => {
+			const read = vi.spyOn(database.sql, "one").mockRejectedValueOnce(new Error("entry unavailable"));
+			try {
+				await run(chatId, requestId, controller);
+			} finally {
+				read.mockRestore();
+			}
+		});
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const restore = await rejectWrites("chat_request_events", "INSERT", "type", "error", "terminal unavailable");
+		try {
+			schedule(conversation.id, id);
+			await vi.waitFor(() =>
+				expect(warning).toHaveBeenCalledWith("Completed execution retained until terminal storage recovers."),
+			);
+			expect((await queue.get(id, conversation.id)).state).toBe("queued");
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 1 });
+			expect(client).not.toHaveBeenCalled();
+		} finally {
+			await restore();
+			warning.mockRestore();
+		}
+		try {
+			await waitFor(queue, conversation.id, id, "failed");
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+			entry.mockRestore();
+			const next = randomUUID();
+			await queue.submit(conversation.id, next, "next question");
+			await waitFor(queue, conversation.id, next, "done");
+			expect(client).toHaveBeenCalledTimes(1);
+		} finally {
+			entry.mockRestore();
+			await queue.close();
+		}
+	});
+	it.each(["enabled", "get", "run", "enabled-after-slot"] as const)(
+		"settles a persisted request after an %s entry read fails without calling the model",
+		async (stage) => {
+			const client = vi.fn(async () => "next reply");
+			const chat = await configuredChat(client),
+				database = new WorkspaceDatabase(root);
+			const scheduler = new ExecutionScheduler(1, chatPolicy());
+			const scheduling = { scheduler, userId: "alice", enabled: async () => true };
+			const queue = new ChatRequestQueue(database, chat, scheduling);
+			await queue.ready;
+			const internals = queue as unknown as {
+				schedule(chatId: string, id: string): void;
+				run(chatId: string, id: string, controller: AbortController): Promise<void>;
+			};
+			const schedule = internals.schedule.bind(queue);
+			const originalRun = internals.run.bind(queue);
+			const hold = vi.spyOn(internals, "schedule").mockImplementation(() => {});
+			const conversation = await chat.create(),
+				id = randomUUID();
+			await queue.submit(conversation.id, id, "first question");
+			hold.mockRestore();
+			const failure =
+				stage === "enabled-after-slot"
+					? vi
+							.spyOn(scheduling, "enabled")
+							.mockResolvedValueOnce(true)
+							.mockRejectedValueOnce(new Error("entry unavailable"))
+					: stage === "enabled"
+						? vi.spyOn(scheduling, "enabled").mockRejectedValueOnce(new Error("entry unavailable"))
+						: stage === "get"
+							? vi.spyOn(queue, "get").mockRejectedValueOnce(new Error("entry unavailable"))
+							: vi.spyOn(internals, "run").mockImplementationOnce(async (chatId, requestId, controller) => {
+									const read = vi
+										.spyOn(database.sql, "one")
+										.mockRejectedValueOnce(new Error("entry unavailable"));
+									try {
+										await originalRun(chatId, requestId, controller);
+									} finally {
+										read.mockRestore();
+									}
+								});
+			try {
+				schedule(conversation.id, id);
+				await queue.idle();
+				expect(await queue.get(id, conversation.id)).toMatchObject({ state: "failed", error: "entry unavailable" });
+				expect(client).not.toHaveBeenCalled();
+				expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+				failure.mockRestore();
+				const next = randomUUID();
+				await queue.submit(conversation.id, next, "next question");
+				await waitFor(queue, conversation.id, next, "done");
+				expect(client).toHaveBeenCalledTimes(1);
+			} finally {
+				failure.mockRestore();
+				await queue.close();
+			}
+		},
+	);
 	it("retains the final model body when saving the assistant fails and commits it once storage recovers", async () => {
 		let recover: (() => Promise<void>) | undefined;
 		const client = vi.fn(async () => {

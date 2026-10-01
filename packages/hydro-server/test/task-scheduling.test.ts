@@ -53,6 +53,103 @@ async function generated(projects: ManualProjectStore, id: string) {
 }
 
 describe("sandbox admission and durable dispatch", () => {
+	it.each(["cancel", "timeout"] as const)("releases a granted queued slot after %s telemetry fails", async (kind) => {
+		const policy = { ...sandboxPolicy({}), concurrency: 1 };
+		const scheduler = new ExecutionScheduler(1, policy);
+		const { projects, queue } = await fixture("alice", scheduler, policy);
+		const internals = queue as unknown as {
+			executeObserved(task: TaskRecord, controller: AbortController): Promise<void>;
+			recordQueueEnd(id: string, result: "cancelled" | "timeout"): Promise<void>;
+			pump(): Promise<void>;
+		};
+		let entered = false;
+		const entry = vi.spyOn(internals, "executeObserved").mockImplementation(async (_task, controller) => {
+			entered = true;
+			await new Promise<void>((resolve) =>
+				controller.signal.addEventListener("abort", () => resolve(), { once: true }),
+			);
+		});
+		const record = internals.recordQueueEnd.bind(queue);
+		const telemetry = vi.spyOn(internals, "recordQueueEnd").mockImplementationOnce(async (id, result) => {
+			if (kind === "cancel") await expect(queue.cancel(id)).rejects.toMatchObject({ statusCode: 409 });
+			const metadata = vi
+				.spyOn(projects.database, "get")
+				.mockRejectedValueOnce(new Error("telemetry metadata unavailable"));
+			try {
+				await record(id, result);
+			} finally {
+				metadata.mockRestore();
+			}
+		});
+		try {
+			const task = await queue.submit("generate", (await projects.create("acm")).id);
+			await vi.waitFor(() => expect(entered).toBe(true));
+			expect(scheduler.status("alice")).toMatchObject({ running: 1, outstanding: 1 });
+			if (kind === "cancel") await expect(queue.cancel(task.id)).resolves.toMatchObject({ state: "cancelled" });
+			else {
+				await projects.database.sql.execute("UPDATE tasks SET created_at=$1 WHERE id=$2", [
+					new Date(0).toISOString(),
+					task.id,
+				]);
+				await expect(internals.pump()).resolves.toBeUndefined();
+			}
+			await queue.idle();
+			expect((await queue.get(task.id)).state).toBe(kind === "cancel" ? "cancelled" : "failed");
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+		} finally {
+			queue.close();
+			await queue.idle();
+			entry.mockRestore();
+			telemetry.mockRestore();
+		}
+	});
+	it.each(["cancel", "timeout"] as const)(
+		"retains a queued owner if the %s terminal transaction rolls back",
+		async (kind) => {
+			const policy = { ...sandboxPolicy({}), concurrency: 1 };
+			const scheduler = new ExecutionScheduler(1, policy);
+			const { projects, queue } = await fixture("alice", scheduler, policy);
+			const internals = queue as unknown as {
+				executeObserved(task: TaskRecord, controller: AbortController): Promise<void>;
+				pump(): Promise<void>;
+			};
+			let signal: AbortSignal | undefined;
+			vi.spyOn(internals, "executeObserved").mockImplementation(async (_task, controller) => {
+				signal = controller.signal;
+				await new Promise<void>((resolve) =>
+					controller.signal.addEventListener("abort", () => resolve(), { once: true }),
+				);
+			});
+			const task = await queue.submit("generate", (await projects.create("acm")).id);
+			await vi.waitFor(() => expect(signal).toBeDefined());
+			const restore = await rejectWrites(
+				"task_events",
+				"INSERT",
+				"type",
+				kind === "cancel" ? "cancelled" : "failed",
+				"terminal unavailable",
+			);
+			try {
+				if (kind === "cancel") await expect(queue.cancel(task.id)).rejects.toThrow("terminal unavailable");
+				else {
+					await projects.database.sql.execute("UPDATE tasks SET created_at=$1 WHERE id=$2", [
+						new Date(0).toISOString(),
+						task.id,
+					]);
+					await expect(internals.pump()).rejects.toThrow("terminal unavailable");
+				}
+				expect((await queue.get(task.id)).state).toBe("queued");
+				expect(signal?.aborted).toBe(false);
+				expect(scheduler.status("alice")).toMatchObject({ running: 1, outstanding: 1 });
+			} finally {
+				await restore();
+			}
+			if (kind === "cancel") await queue.cancel(task.id);
+			else await internals.pump();
+			await queue.idle();
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+		},
+	);
 	it("owns an entry failure until terminal storage recovers without redispatching or blocking later work", async () => {
 		const policy = { ...sandboxPolicy({}), concurrency: 1 };
 		const scheduler = new ExecutionScheduler(1, policy);

@@ -79,7 +79,8 @@ export class ChatRequestQueue {
 			let queueTimer: NodeJS.Timeout | undefined;
 			let expired = false;
 			try {
-				if (this.closed || controller.signal.aborted || !(await this.scheduling.enabled())) return;
+				if (this.closed || controller.signal.aborted) return;
+				if (!(await this.scheduling.enabled())) throw new ChatError("对话服务不可用。", 403);
 				const row = await this.get(id, chatId);
 				const remaining = Date.parse(row.updatedAt) + this.policy.queueTimeoutMs - Date.now();
 				const expire = () => {
@@ -93,21 +94,36 @@ export class ChatRequestQueue {
 				}
 				release = await this.scheduling.scheduler.acquire(this.scheduling.userId, id, controller.signal);
 				clearTimeout(queueTimer);
-				if (!this.closed && !controller.signal.aborted && (await this.scheduling.enabled()))
+				if (!this.closed && !controller.signal.aborted) {
+					if (!(await this.scheduling.enabled())) throw new ChatError("对话服务不可用。", 403);
 					await this.run(chatId, id, controller);
+				}
 			} catch (error) {
-				if (expired)
-					await this.database.transaction(async () => {
-						const result = await this.database.sql.execute(
-							"UPDATE chat_requests SET state='failed',error=$1,updated_at=$2 WHERE id=$3 AND state='queued'",
-							["排队超过时间上限，请稍后重试。", new Date().toISOString(), id],
-						);
-						if (result.rowCount) {
-							await this.emit(id, "error", { message: "排队超过时间上限，请稍后重试。" });
-							await this.recordTerminal(id, "timeout");
-						}
+				// Shutdown deliberately leaves unstarted work durable for recovery on the next process.
+				if (this.closed && !expired) return;
+				if (!this.settlements.has(id)) {
+					const message = expired
+						? "排队超过时间上限，请稍后重试。"
+						: this.closed
+							? "服务中断；请重试。"
+							: controller.signal.aborted
+								? "已取消"
+								: error instanceof Error
+									? error.message
+									: "AI 请求失败。";
+					await this.settlements.settle(id, async () => {
+						const changed = await this.database.transaction(async () => {
+							const result = await this.database.sql.execute(
+								"UPDATE chat_requests SET state='failed',error=$1,updated_at=$2,owner_pid=NULL WHERE id=$3 AND state IN ('queued','running')",
+								[message, new Date().toISOString(), id],
+							);
+							if (result.rowCount) await this.emit(id, "error", { message });
+							return Boolean(result.rowCount);
+						});
+						this.releaseAdmission(id);
+						if (changed && expired) await this.recordTerminal(id, "timeout").catch(() => undefined);
 					});
-				if (!controller.signal.aborted) throw error;
+				}
 			} finally {
 				clearTimeout(queueTimer);
 				release?.();
@@ -508,9 +524,12 @@ export class ChatRequestQueue {
 					return false;
 				});
 				if (cancelled) {
-					await this.recordTerminal(id, "cancelled");
-					this.controllers.get(id)?.abort();
-					this.releaseAdmission(id);
+					try {
+						await this.recordTerminal(id, "cancelled").catch(() => undefined);
+					} finally {
+						this.controllers.get(id)?.abort();
+						this.releaseAdmission(id);
+					}
 					return await this.get(id, chatId);
 				}
 			}

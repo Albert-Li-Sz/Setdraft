@@ -115,7 +115,14 @@
       assert(index >= 0 and index < footnotes.len(), message: "PDF 脚注引用无效")
       let target = label("setdraft-" + problem.label + "-footnote-" + str(index))
       if attrs.at("data-first") == "1" {
-        [#footnote(md(footnotes.at(index)))#target]
+        let note-md = md.with(html: (
+          setdraft-footnote: (attrs, body) => footnote(label("setdraft-" + problem.label + "-footnote-" + attrs.at("data-note"))),
+        ))
+        for (offset, current) in ((index,) + footnotes.at(index).nested).enumerate() {
+          let target = label("setdraft-" + problem.label + "-footnote-" + str(current))
+          let entry = [#footnote(note-md(footnotes.at(current).body))#target]
+          if offset == 0 { entry } else { hide(entry) }
+        }
       } else { footnote(target) }
     },
   ))

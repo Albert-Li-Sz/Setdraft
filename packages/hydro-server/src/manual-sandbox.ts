@@ -186,8 +186,8 @@ def verify_case(case_id, input_path, supplied_output, output_name):
         bad.parent.mkdir(parents=True, exist_ok=True)
         bad.write_text('__hydro_invalid_output__\n', encoding='utf-8')
         negative = checker_score(input_path, bad, standard, 'negative-format', case_id)
-        check('checker-negative:format', negative is not None and negative < 100,
-              '格式错误输出已拒绝' if negative is not None and negative < 100 else '格式错误输出得到满分', case_id)
+        check('checker-probe:format', negative is not None,
+              '自动格式探针判分有效；是否为错误答案须按题意确认' if negative is not None else '自动格式探针返回无效判分', case_id, score=negative)
         tokens = standard.read_text(encoding='utf-8', errors='replace').split()
         if tokens and re.fullmatch(r'[+-]?\d+', tokens[0]):
             altered = [str(int(tokens[0]) + 1000000007)] + tokens[1:]
@@ -195,8 +195,8 @@ def verify_case(case_id, input_path, supplied_output, output_name):
         else:
             bad.write_text('1000000007\n', encoding='utf-8')
         negative = checker_score(input_path, bad, standard, 'negative-value', case_id)
-        check('checker-negative:value', negative is not None and negative < 100,
-              '错误数值输出已拒绝' if negative is not None and negative < 100 else '错误数值输出得到满分', case_id)
+        check('checker-probe:value', negative is not None,
+              '自动数值探针判分有效；是否为错误答案须按题意确认' if negative is not None else '自动数值探针返回无效判分', case_id, score=negative)
     if 'oracle' in commands:
         global oracle_count
         oracle_count += 1

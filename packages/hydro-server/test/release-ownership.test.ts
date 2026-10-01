@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ManualRelease } from "@setdraft/contracts";
+import { isContestReadyRelease, requiresReverification, verificationContractVersion } from "@setdraft/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
@@ -64,11 +65,26 @@ it("does not serve an old cached DOMjudge adapter after the export contract chan
 	await writeFile(old, "old adapter");
 	await writeFile(current, "current adapter");
 	await projects.database.indexFile("release-file", release.id, "domjudge.v1.zip", old);
+	await projects.database.indexFile("release-file", release.id, "domjudge.v2.zip", old);
 	await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 404 });
 	const name = exportFileName("domjudge");
-	expect(name).toBe("domjudge.v2.zip");
+	expect(name).toBe("domjudge.v3.zip");
 	await projects.database.indexFile("release-file", release.id, name, current);
 	expect(await projects.releases.releaseFile(release.id, "domjudge")).toMatchObject({ size: 15 });
+});
+
+it.each(["custom", "interactive"] as const)("requires a new verification for an old %s release", async (mode) => {
+	const release = {
+		...(await releaseFixture()),
+		checkerMode: "custom" as const,
+		...(mode === "interactive" ? { judgingMode: "interactive" as const } : {}),
+	};
+	release.report = { ...release.report, interactorUsed: mode === "interactive", verificationContractVersion: 1 };
+	expect(requiresReverification(release)).toBe(true);
+	expect(isContestReadyRelease(release)).toBe(false);
+	release.report.verificationContractVersion = verificationContractVersion;
+	expect(requiresReverification(release)).toBe(false);
+	expect(isContestReadyRelease(release)).toBe(true);
 });
 it.each(["fps.xml", "qduoj.zip", "domjudge.zip"])(
 	"rejects a staged %s export committed after project deletion",
