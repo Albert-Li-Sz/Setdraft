@@ -94,6 +94,8 @@ services:
         condition: service_healthy
     restart: "no"
   search:
+    labels:
+      org.setdraft.search-config: ${SETDRAFT_SEARCH_CONFIG_REVISION:-legacy}
     image: ${SETDRAFT_SEARCH_IMAGE:-searxng/searxng@sha256:5286edb35782454ab8a102c5eff6b54bff745853191b46aeead95f225aa6dfb6}
     restart: unless-stopped
     environment:

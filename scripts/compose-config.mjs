@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { join, resolve } from "node:path";
@@ -27,8 +27,17 @@ export async function composeConfiguration(root, args, environment = process.env
  const namespace = config.values.SETDRAFT_IMAGE_NAMESPACE || "ghcr.io/albert-li-sz";
 	const tag = config.values.SETDRAFT_IMAGE_TAG || "latest";
 	const image = (name, local) => config.values.SETDRAFT_IMAGE_MODE === "source" ? `setdraft/${local}:local` : `${namespace}/${name}:${tag}`;
+	const searchRevision = createHash("sha256");
+	for (const name of ["settings.yml", "limiter.toml"]) {
+		const bytes = await readFile(join(root, "deploy/searxng", name)).catch((error) => {
+			if (error.code !== "ENOENT") throw error;
+			return Buffer.from("missing");
+		});
+		searchRevision.update(name).update("\0").update(bytes).update("\0");
+	}
 	const values = {
 		...config.values,
+		SETDRAFT_SEARCH_CONFIG_REVISION: searchRevision.digest("hex"),
 		SETDRAFT_WEB_IMAGE: config.values.SETDRAFT_WEB_IMAGE || image("setdraft", "web"),
 		SETDRAFT_SANDBOX_IMAGE: config.values.SETDRAFT_SANDBOX_IMAGE || image("setdraft-sandbox", "sandbox"),
 		SETDRAFT_MAINTENANCE_IMAGE: config.values.SETDRAFT_MAINTENANCE_IMAGE || image("setdraft-maintenance", "maintenance"),

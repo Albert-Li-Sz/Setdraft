@@ -1058,7 +1058,8 @@ describe("manual project API", () => {
 				"6.in",
 			]);
 		},
-		120_000,
+		// Four independent real builds retain their own sandbox deadlines; allow their aggregate runtime.
+		300_000,
 	);
 
 	it.skipIf(!dockerAvailable)(

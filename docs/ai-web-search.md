@@ -26,7 +26,7 @@ SETDRAFT_SEARCH_PROXY="http://proxy.example.org:7890"
 
 更新到包含修复的源码和 Web 镜像后，按原安装方式运行 `./install.sh`，它会重新生成 `.env.compose`，保留代理配置并重建配置发生变化的服务；原来的源码构建模式也会保留。只有拉取镜像而不更新挂载的 `deploy/searxng` 配置不会修复旧引擎配置。原生安装不创建 SearXNG，需自行配置搜索服务的出站代理。
 
-仅修改 SearXNG 的 `settings.yml` 内容后，需要重新创建搜索容器使配置生效：
+Rev0.4 安装器将 `settings.yml` 与 `limiter.toml` 的内容哈希写入 Compose 服务标签。重新运行 `./install.sh` 会检测文件变化并重建搜索容器，内容未变时保持稳定。直接手工修改挂载文件后，也可以立即执行：
 
 ```bash
 docker compose --env-file .env.compose -f compose.yaml up -d --no-deps --force-recreate search

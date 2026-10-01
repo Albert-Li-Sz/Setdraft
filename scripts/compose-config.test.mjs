@@ -22,6 +22,24 @@ test("OTLP configuration survives native and Compose deployment with headers red
  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("changes to mounted search settings change the Compose service revision", async () => {
+ const root=await mkdtemp(join(tmpdir(),"setdraft-search-revision-"));
+ try {
+  await mkdir(join(root,"deploy/searxng"),{recursive:true});
+  await writeFile(join(root,"deploy/searxng/settings.yml"),"engines: [bing]\n");
+  await writeFile(join(root,"deploy/searxng/limiter.toml"),"[botdetection.ip_limit]\n");
+  const revision=async()=>{await composeConfiguration(root,[],{});return parseEnv(await readFile(join(root,".env.compose"),"utf8")).SETDRAFT_SEARCH_CONFIG_REVISION;};
+  const first=await revision();
+  assert.match(first,/^[a-f0-9]{64}$/u);
+  assert.equal(await revision(),first);
+  await writeFile(join(root,"deploy/searxng/settings.yml"),"engines: [bing, 360search]\n");
+  const settings=await revision();
+  assert.notEqual(settings,first);
+  await writeFile(join(root,"deploy/searxng/limiter.toml"),"[botdetection.ip_limit]\nfilter_link_local=true\n");
+  assert.notEqual(await revision(),settings);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test("Compose uses a fresh workspace and stable generated database credentials", async () => {
  const root = await mkdtemp(join(tmpdir(), "setdraft-config-"));
  try {
