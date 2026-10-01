@@ -38,3 +38,12 @@ test-results/
 
 packages/hydro-web/public/open-source/*
 !packages/hydro-web/public/open-source/index.html
+
+# Private audit and acceptance records
+**/.private-reports/
+docs/*-acceptance-*.md
+docs/*-remediation-plan-*.md
+docs/*-audit-report*.md
+docs/*-review-report*.md
+docs/*审计报告*.md
+docs/*验收报告*.md

@@ -288,8 +288,7 @@ node scripts/hydro-local.mjs restore /path/to/healthy-backup
 
 代码检查使用 `npm run check`。浏览器测试、CI 分层和共享 Markdown 契约见
 [测试说明](docs/testing.md)；默认关闭的 OTLP 接入、采样和数据边界见
-[OpenTelemetry 配置](docs/observability.md)。本次实施的实际验证结果见
-[Rev0.5 修复与验收记录](docs/rev0.5-acceptance-2026-10-01.md)，[Rev0.4 验收报告](docs/rev0.4-acceptance-2026-10-01.md)。更多 API 和环境变量见各包 README。
+[OpenTelemetry 配置](docs/observability.md)。更多 API 和环境变量见各包 README。
 
 ## 致谢
 

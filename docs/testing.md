@@ -73,8 +73,6 @@ sh scripts/smoke-image.sh maintenance <maintenance-image>
 sh scripts/smoke-image.sh sandbox <sandbox-image>
 ```
 
-实际验收和逐项映射见 [Rev0.4 验收记录](rev0.4-acceptance-2026-10-01.md)。
-
 ## 共享 Markdown 层
 
 `@setdraft/authoring/markdown` 提供 `MarkdownProfile`、解析、remark 配置、AST 遍历、引用解析、安全 URL、诊断和文档分章。`statement` 与 `chat` 使用 GFM 和数学公式，`guide` 使用 GFM。网页由共享 `MarkdownView` 包装 ReactMarkdown，PDF 保留 cmarker/Typst。

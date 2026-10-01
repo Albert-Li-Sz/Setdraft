@@ -32,12 +32,15 @@ test("published archive omits secrets, outputs, user data and symlinks and is re
   const actual = await collectSourceFiles(root);
   const inputs = actual.filter((path) => !path.includes("/") || path.endsWith("/package.json"));
   inputs.push("LICENSES/AGPL-3.0.txt", "scripts/build.mjs", "docs/build.md", "deploy/entry.sh", "fixtures/example.in", "e2e/smoke.spec.mjs",
-   ".github/workflows/ci.yml", ".husky/pre-commit", "packages/hydro-server/src/example.ts",
+   ".github/workflows/ci.yml", ".husky/pre-commit", "packages/hydro-server/src/example.ts", "packages/hydro-server/src/audit.ts",
    "packages/hydro-server/assets/xcpc/FONT-NOTICES.md", "packages/hydro-web/public/open-source/index.html");
   const excluded = [".env", ".env.compose", ".git/config", ".setdraft/user.json", "private.json",
    "playwright-report/index.html", "test-results/credentials.json", ".e2e/workspace/user.json",
    "packages/hydro-web/public/open-source/source.tgz", "packages/hydro-server/node_modules/private.json",
-   "packages/hydro-server/src/.env.local", "packages/hydro-server/dist/example.js", "packages/hydro-server/src/credentials.pem"];
+   "packages/hydro-server/src/.env.local", "packages/hydro-server/dist/example.js", "packages/hydro-server/src/credentials.pem",
+   "docs/rev0.5-acceptance-2026-10-01.md", "docs/rev0.4-remediation-plan-2026-10-01.md",
+   "docs/security-audit-report.txt", "docs/Setdraft-review.md", "docs/Setdraft-Bug审计报告.md",
+   "docs/.private-reports/internal.md"];
   for (const path of [...inputs, ...excluded]) {
    await mkdir(dirname(join(temporary, path)), { recursive: true });
    await writeFile(join(temporary, path), path);

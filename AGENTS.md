@@ -35,3 +35,10 @@ remote transport, and evaluation workspaces are intentionally not part of this p
 - Stage explicit paths only, review `git status` before committing, and never commit unless
   the user asks.
 - Do not force-push or overwrite changes made by another session.
+
+## Releases and private reports
+
+- Keep audit reports, remediation plans, and detailed acceptance records in private storage
+  outside this repository. Do not commit them or attach them to public releases.
+- Match release titles to their version tags. Keep public descriptions to concise fix or
+  feature summaries; retain detailed verification evidence privately.

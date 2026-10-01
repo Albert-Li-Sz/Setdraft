@@ -11,14 +11,16 @@ const rootFiles = [
  "install.sh", "upgrade.sh", "uninstall.sh",
 ];
 const packageNames = ["ai", "telemetry", "hydro-contracts", "hydro-authoring", "hydro-server", "hydro-web"];
-const omitted = new Set(["node_modules", "dist", "coverage", ".git", ".setdraft", ".hydro-problem-make", ".artifacts", "playwright-report", "test-results", ".e2e", ".DS_Store"]);
+const omitted = new Set(["node_modules", "dist", "coverage", ".git", ".setdraft", ".hydro-problem-make", ".artifacts", "playwright-report", "test-results", ".e2e", ".private-reports", ".DS_Store"]);
 const extensions = /\.(?:[cm]?[jt]sx?|css|html|json|md|typ|toml|ya?ml|sh|svg|png|jpe?g|gif|wasm|otf|ttf|txt|h|c|cc|cpp|py|java|in|out|ans)$/u;
+const privateReport = /(?:^|[-_. ])(?:audit|review|remediation|acceptance)(?:[-_. ]|$)|审计|复审|验收|BUG清单/iu;
 
 export async function collectSourceFiles(root) {
  const files = [];
  async function visit(relative, required = false) {
   const name = relative.split("/").at(-1);
   if (omitted.has(name) || (name.startsWith(".env") && relative !== ".env.example")) return;
+  if (/\.(?:md|txt)$/iu.test(name) && privateReport.test(name)) return;
   if (relative.startsWith("packages/hydro-web/public/open-source/") && name !== "index.html") return;
   const info = await lstat(join(root, relative)).catch((error) => {
    if (error.code === "ENOENT" && !required) return undefined;
