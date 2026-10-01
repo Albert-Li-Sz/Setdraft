@@ -54,6 +54,17 @@ const context = normalizeContext({
 });
 
 describe("OpenAI completions raw stop reasons", () => {
+	it("streams and retains refusal-only output", async () => {
+		mockState.chunks = [
+			{ choices: [{ delta: { refusal: "Cannot " }, finish_reason: null }] },
+			{ choices: [{ delta: { refusal: "comply." }, finish_reason: "stop" }] },
+		];
+		const stream = streamOpenAICompletions(model, context, { apiKey: "test" });
+		const deltas: string[] = [];
+		for await (const event of stream) if (event.type === "text_delta") deltas.push(event.delta);
+		expect(deltas.join("")).toBe("Cannot comply.");
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "Cannot comply." }]);
+	});
 	beforeEach(() => {
 		mockState.chunks = [];
 	});

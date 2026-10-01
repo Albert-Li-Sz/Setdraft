@@ -52,3 +52,22 @@ test("explicit source builds persist and switching to prebuilt removes the build
   assert.match(await f.log(),/pull web sandbox maintenance database search/u);
  }finally{await rm(f.root,{recursive:true,force:true});}
 });
+
+test("installation without host Node forwards the entire OTLP allowlist to the bootstrap container",async()=>{
+ const f=await fixture();
+ try{
+  await writeFile(join(f.root,"bin/node"),"#!/bin/sh\nexit 1\n",{mode:0o755});
+  await writeFile(join(f.root,".env.compose"),"SETDRAFT_IMAGE_MODE='prebuilt'\n");
+  const result=f.run(["install"],{SETDRAFT_OTEL_ENABLED:"1",OTEL_SERVICE_NAME:"bootstrap-service",OTEL_EXPORTER_OTLP_HEADERS:"Authorization=Bearer%20test-only"});
+  assert.equal(result.status,0,result.stderr);
+  const log=await f.log();
+  const bootstrap=log.split("\n").find(line=>line.startsWith("run "));
+  assert.ok(bootstrap);
+  const compose=await readFile(new URL("../compose.yaml",import.meta.url),"utf8");
+  const keys=[...compose.matchAll(/^\s+(OTEL_[A-Z_]+|SETDRAFT_OTEL_ENABLED):/gmu)].map(match=>match[1]);
+  assert.equal(keys.length,13);
+  for(const key of keys)
+   assert.ok(bootstrap.includes(`-e ${key} `),`Missing bootstrap environment: ${key}`);
+  assert.doesNotMatch(log,/Bearer|test-only/u);
+ }finally{await rm(f.root,{recursive:true,force:true});}
+});

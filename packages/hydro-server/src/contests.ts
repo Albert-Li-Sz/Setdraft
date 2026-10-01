@@ -12,6 +12,7 @@ import {
 import { compileContestPdfs } from "./contest-pdf.ts";
 import type { ContestPdfDocument } from "./contest-pdf-document.ts";
 import { readContestPdfOptions } from "./contest-pdf-options.ts";
+import { assertReleasesUnreferenced } from "./contest-references.ts";
 import { domjudgeProblemId } from "./domjudge-export.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { ManualProjectError, type ManualProjectStore, type ManualRelease } from "./manual-projects.ts";
@@ -85,6 +86,7 @@ export class ContestStore {
 					])
 				)
 					throw new ManualProjectError("竞赛正在导出，请稍后修改。", 409);
+				await this.selectedReleases(draft.releaseIds);
 				await this.projects.database.put("contest", draft.id, draft, expectedVersion);
 			});
 		} catch (error) {
@@ -290,7 +292,13 @@ export class ContestStore {
 		if (draft.revision !== expectedRevision) throw new ManualProjectError("竞赛版本已变化，请保存配置后重试。", 409);
 		if (!draft.releaseIds.length) throw new ManualProjectError("请先加入至少一道题。", 422);
 		const document = await this.pdfDocument(draft, await this.selectedReleases(draft.releaseIds));
-		const result = await compileContestPdfs(this.draftDirectory(id), document, signal, true);
+		const result = await compileContestPdfs(
+			this.draftDirectory(id),
+			document,
+			signal,
+			true,
+			this.projects.observability,
+		);
 		try {
 			return await readFile(result.booklet);
 		} finally {
@@ -299,6 +307,18 @@ export class ContestStore {
 	}
 
 	async export(id: string, format: ContestFormat, context?: ExecutionContext, name?: string): Promise<ContestRelease> {
+		return (context?.observability ?? this.projects.observability).startSpan(
+			{ name: "contest.export", attributes: { "export.format": format } },
+			() => this.exportImpl(id, format, context, name),
+		);
+	}
+
+	private async exportImpl(
+		id: string,
+		format: ContestFormat,
+		context?: ExecutionContext,
+		name?: string,
+	): Promise<ContestRelease> {
 		if (this.busy.has(id)) throw new ManualProjectError("竞赛正在导出。", 409);
 		this.busy.add(id);
 		let stage: string | undefined;
@@ -319,7 +339,13 @@ export class ContestStore {
 			const files = new Map<string, string>();
 			if (draft.pdf?.enabled) {
 				context?.emit("pdf", "正在生成竞赛题册与单题 PDF…");
-				pdfs = await compileContestPdfs(stage, await this.pdfDocument(draft, releases), context?.signal);
+				pdfs = await compileContestPdfs(
+					stage,
+					await this.pdfDocument(draft, releases),
+					context?.signal,
+					false,
+					context?.observability ?? this.projects.observability,
+				);
 				files.set("booklet.pdf", pdfs.booklet);
 				for (const [label, path] of pdfs.problems) files.set(`statements/${label}.pdf`, path);
 			}
@@ -478,11 +504,6 @@ export class ContestStore {
 	}
 
 	async assertProblemReleasesUnreferenced(releaseIds: string[]): Promise<void> {
-		const targeted = new Set(releaseIds);
-		for (const draft of await this.list()) {
-			if (draft.releaseIds.some((id) => targeted.has(id))) {
-				throw new ManualProjectError(`题目已被竞赛“${draft.title}”引用，请先从竞赛移出再删除。`, 409);
-			}
-		}
+		await assertReleasesUnreferenced(this.projects.database, releaseIds);
 	}
 }

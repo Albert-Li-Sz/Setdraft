@@ -31,7 +31,7 @@ test("bundled SearXNG enables its fallback engines and starts without bot-detect
   }
   assert.ok(config, "SearXNG did not become ready");
   const enabled = config.engines.filter(engine => engine.enabled).map(engine => engine.name).sort();
-  assert.deepEqual(enabled, ["baidu", "bing", "brave", "duckduckgo"]);
+  assert.deepEqual(enabled, ["360search", "bing"]);
   const logs = await exec("docker", ["logs", name]);
   assert.doesNotMatch(logs.stdout + logs.stderr, /missing config file|X-Forwarded-For nor X-Real-IP/u);
   if (process.env.SETDRAFT_LIVE_SEARCH_TEST === "1") {

@@ -4,6 +4,8 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile 
 import { join } from "node:path";
 import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import { isContestReadyRelease } from "@setdraft/contracts";
+import { awkCheckerProtocol } from "./checker-protocol.ts";
+import { exportFileName } from "./export-contract.ts";
 import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
@@ -50,11 +52,7 @@ const runScript = [
 	'cat > "$output"',
 	'"$validator_dir/checker" "$1" "$output" "$2" 2> "$3/judgemessage.txt"',
 	"status=$?",
-	'case "$status" in',
-	"  0) exit 42 ;;",
-	"  1|2|7) exit 43 ;;",
-	"  *) exit 1 ;;",
-	"esac",
+	awkCheckerProtocol,
 	"",
 ].join("\n");
 
@@ -65,19 +63,7 @@ const interactiveRunScript = [
 	'"$validator_dir/interactor" "$1" "$3/transcript" "$2" 2> "$3/judgemessage.txt"',
 	"status=$?",
 	'cat "$3/judgemessage.txt" >&2',
-	`awk -v status="$status" '
-NR == 1 {
-    if (status == 0 && /^ok[[:space:]]/) { valid = 1; score = 100 }
-    else if ((status == 1 || status == 2) && /^(wrong answer|wrong output format)[[:space:]]/) { valid = 1; score = 0 }
-    else if (status == 7 && /^points [0-9.]+/) { valid = 1; score = $2; if (score <= 1) score *= 100 }
-    else if (/^partially correct \\([0-9.]+\\)/) {
-        value = $3; gsub(/[()]/, "", value)
-        if (status == value) { valid = 1; score = value; if (score <= 1) score *= 100 }
-    }
-}
-match($0, /score\\(-?[0-9]+\\)/) { value = substr($0, RSTART + 6, RLENGTH - 7); score = value + 0 }
-END { if (!valid || score < 0 || score > 100) exit 1; if (score == 100) exit 42; exit 43 }
-' "$3/judgemessage.txt"`,
+	awkCheckerProtocol,
 	"",
 ].join("\n");
 
@@ -92,6 +78,7 @@ function spawnDocker(
 		const command = [...args.slice(0, 1), "--name", containerName, ...args.slice(1)];
 		const child = spawn("docker", command, { stdio: ["ignore", "pipe", "pipe"] });
 		const errors: Buffer[] = [];
+		let failure: Error | undefined;
 		let stopping: Promise<void> | undefined;
 		const stop = () => {
 			if (stopping) return;
@@ -109,24 +96,26 @@ function spawnDocker(
 			if (errors.reduce((sum, item) => sum + item.length, 0) < 64 * 1024) errors.push(chunk);
 		});
 		child.once("error", (error) => {
-			cleanup();
-			reject(error);
+			failure = error;
 		});
 		child.once("close", async (code) => {
 			cleanup();
 			try {
-				if (stopping) {
-					await stopping.catch(() => undefined);
+				if (stopping || code !== 0 || failure) {
+					await stopping?.catch(() => undefined);
 					await removeDockerContainer(containerName);
 				}
 			} catch {
 				reject(new SandboxCleanupError([containerName], [stage]));
 				return;
 			}
-			if (code === 0 && !stopping) resolve();
+			if (code === 0 && !stopping && !failure) resolve();
 			else
 				reject(
-					new Error(Buffer.concat(errors).toString("utf8").slice(0, 4000) || `DOMjudge Checker 验证失败：${code}`),
+					failure ??
+						new Error(
+							Buffer.concat(errors).toString("utf8").slice(0, 4000) || `DOMjudge Checker 验证失败：${code}`,
+						),
 				);
 		});
 		if (signal?.aborted) stop();
@@ -159,21 +148,18 @@ async function verifyOutputValidator(
 		"        output = temporary / 'output'",
 		"        for data, expected in ((answer.read_bytes(), 42), (b'__hydro_invalid_output__\\n', 43)):",
 		"            output.write_bytes(data)",
-		"            direct = subprocess.run([str(checker), str(input_path), str(output), str(answer)], cwd=validator, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
-		"            mapped = {0: 42, 1: 43, 2: 43, 7: 43}.get(direct.returncode, 1)",
-		"            if mapped != expected:",
-		"                raise RuntimeError(f'{input_path.name}: original Checker returned {direct.returncode}, expected DOMjudge {expected}')",
 		"            adapted = subprocess.run([str(run), str(input_path), str(answer), str(feedback)], input=data, cwd=validator, timeout=20)",
-		"            if adapted.returncode != mapped:",
-		"                raise RuntimeError(f'{input_path.name}: adapter returned {adapted.returncode}, original Checker maps to {mapped}')",
-		"checker.write_text('#!/bin/sh\\nexit 3\\n')",
-		"checker.chmod(0o755)",
+		"            if adapted.returncode != expected:",
+		"                raise RuntimeError(f'{input_path.name}: adapter returned {adapted.returncode}, expected {expected}')",
 		"with tempfile.TemporaryDirectory() as folder:",
 		"    feedback = pathlib.Path(folder)",
 		"    answer = input_paths[0].with_suffix('.ans')",
-		"    adapted = subprocess.run([str(run), str(input_paths[0]), str(answer), str(feedback)], input=answer.read_bytes(), cwd=validator, timeout=20)",
-		"    if adapted.returncode != 1:",
-		"        raise RuntimeError(f'adapter returned {adapted.returncode}, expected system error 1')",
+		"    for code, message, expected in ((0,'ok score(0) wrong value',43),(7,'points 1.0 full',42),(7,'points 0.996 partial',43),(3,'FAIL system',1),(0,'ok score(101) invalid',1)):",
+		"        checker.write_text('#!/bin/sh\\nprintf \\\"%s\\\\n\\\" ' + repr(message) + ' >&2\\nexit ' + str(code) + '\\n')",
+		"        checker.chmod(0o755)",
+		"        adapted = subprocess.run([str(run), str(input_paths[0]), str(answer), str(feedback)], input=answer.read_bytes(), cwd=validator, timeout=20)",
+		"        if adapted.returncode != expected:",
+		"            raise RuntimeError(f'adapter contract fixture returned {adapted.returncode}, expected {expected}')",
 		"",
 	].join("\n");
 	await writeFile(join(directory, "verify.py"), verify);
@@ -213,7 +199,7 @@ export async function writeDomjudgeProblemArchive(
 	if (release.scoringMode !== "acm" || !isContestReadyRelease(release)) {
 		throw new Error("只有通过 ACM 完整验证的题目可导出 DOMjudge 包。");
 	}
-	const target = options.archivePath ?? join(releaseRoot, "domjudge.zip");
+	const target = options.archivePath ?? join(releaseRoot, exportFileName("domjudge"));
 	try {
 		await stat(target);
 		return target;

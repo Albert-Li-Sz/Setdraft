@@ -3,6 +3,49 @@ import { describe, expect, it } from "vitest";
 import { ProblemPreview } from "../src/ProblemPreview.tsx";
 
 describe("Hydro-style statement preview", () => {
+	it("renders the shared statement fixture without changing its source or definition precedence", () => {
+		const source = readFileSync(new URL("../../../fixtures/markdown/statement.md", import.meta.url), "utf8");
+		const html = renderToStaticMarkup(
+			<ProblemPreview
+				project={{
+					statement: source,
+					samples: [],
+					attachments: [
+						{ name: "first.svg", contentBase64: "c3Zn" },
+						{ name: "readme.txt", contentBase64: "dGV4dA==" },
+					],
+				}}
+			/>,
+		);
+		expect(html.match(/src="data:image\/svg\+xml;base64,c3Zn"/gu)).toHaveLength(2);
+		expect(html).toContain('href="data:text/plain;base64,dGV4dA=="');
+		expect(html).toContain("<table>");
+		expect(html).toContain("katex");
+		expect(html).toContain("data-footnotes");
+		expect(html).toContain("file://missing.png");
+		expect(source).toBe(readFileSync(new URL("../../../fixtures/markdown/statement.md", import.meta.url), "utf8"));
+	});
+	it("shows escaped original text and a brief alert when parsing exceeds the shared limit", () => {
+		const source = `${"- item\n".repeat(16_000)}<script>alert(1)</script>`;
+		const html = renderToStaticMarkup(
+			<ProblemPreview project={{ statement: source, samples: [], attachments: [] }} />,
+		);
+		expect(html).toContain('role="alert"');
+		expect(html).toContain("&lt;script&gt;");
+		expect(html).not.toContain("<script>");
+	});
+	it("uses the same attachment destination for encoded, mixed-case and suffixed links", () => {
+		const html = renderToStaticMarkup(
+			<ProblemPreview
+				project={{
+					statement: "![图](FILE&#58;//plot.png?v=2#figure)",
+					samples: [],
+					attachments: [{ name: "plot.png", contentBase64: "aW1hZ2U=" }],
+				}}
+			/>,
+		);
+		expect(html).toContain('src="data:image/png;base64,aW1hZ2U="');
+	});
 	it("renders only authored Markdown, formulas, footnotes and attachments without raw HTML", () => {
 		const html = renderToStaticMarkup(
 			<ProblemPreview
@@ -97,3 +140,5 @@ describe("Hydro-style statement preview", () => {
 		expect(html).toContain("&lt;script&gt;");
 	});
 });
+
+import { readFileSync } from "node:fs";

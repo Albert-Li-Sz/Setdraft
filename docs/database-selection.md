@@ -12,6 +12,10 @@ Web 使用无超级用户权限、无 BYPASSRLS 的 `setdraft_app` 角色；启�
 
 Compose 初始化顺序是 PostgreSQL 健康检查 → 一次性 schema 迁移 → Web。数据库和搜索服务不发布宿主机端口。PostgreSQL 使用持久卷，所有用户文件在单独的宿主机目录。
 
-备份维护先停止 Web 并取得相同服务锁，使用 PostgreSQL 18 的 `pg_dump` / `pg_restore`，同时复制用户文件并验证 SHA-256 清单。恢复前先保存当前完整备份；失败时恢复该备份，成功后撤销旧会话。数据库转储不包含外部文件，不能仅备份数据库卷。
+备份维护先校验目标、数据库连接及 PostgreSQL 18 的 `pg_dump` / `pg_restore` 工具，再停止 Web 并取得相同服务锁；同时复制用户文件并验证 SHA-256 清单。正常备份必须完整。恢复时，目标健康备份须先通过清单、哈希和文件引用校验；当前现场健康时保存完整回滚源，失败可恢复该备份。
+
+当前现场已缺失或损坏 blob 时，Rev0.4 保存带 `setdraft-damaged-snapshot-1` 标记及缺失清单的现场归档，再恢复健康目标；现场不必先通过健康备份校验。这类归档保留用于排查，不能作为保证完整的自动回滚源。恢复成功后重新校验引用并撤销旧会话。数据库转储不包含外部文件，不能仅备份数据库卷。
+
+原生部署使用选定的 `SETDRAFT_WORKSPACE_ROOT`、`SETDRAFT_DATABASE_URL` 与独立维护连接 `SETDRAFT_DATABASE_ADMIN_URL`，两条连接必须指向相同主机、端口和数据库。维护为业务连接所用角色恢复权限，不要求角色名固定为 `setdraft_app`，不读取另一套 Compose 配置。停服前核验 PID 的 OS 创建标识、命令和进程组；未知的仍存活 PID 或旧式 PID 记录不能据此终止进程。
 
 参考：[PostgreSQL RLS](https://www.postgresql.org/docs/18/ddl-rowsecurity.html)、[事务客户端](https://node-postgres.com/features/transactions)、[逻辑备份](https://www.postgresql.org/docs/18/backup-dump.html)。

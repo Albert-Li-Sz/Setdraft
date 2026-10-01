@@ -85,6 +85,7 @@ export function AiChatPage(props: Props) {
 	const [chats, setChats] = useState<ChatSummary[]>([]);
 	const [chat, setChat] = useState<ChatConversation>();
 	const [configuration, setConfiguration] = useState<AiConfiguration>();
+	const configured = configuration?.configured ?? props.configured;
 	const [selectedProfileId, setSelectedProfileId] = useState("");
 	const [input, setInput] = useState("");
 	const [images, setImages] = useState<PendingImage[]>([]);
@@ -92,17 +93,30 @@ export function AiChatPage(props: Props) {
 	const [copiedMessageId, setCopiedMessageId] = useState<string>();
 	const [attachProject, setAttachProject] = useState(false);
 	const [webSearch, setWebSearch] = useState(true);
+	const [wide, setWide] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [searchPhase, setSearchPhase] = useState("");
 	const [streaming, setStreaming] = useState("");
 	const deferredStreaming = useDeferredValue(streaming);
 	const [streamFailed, setStreamFailed] = useState(false);
+	const [streamCancelled, setStreamCancelled] = useState(false);
 	const [failedRequest, setFailedRequest] = useState<{ chatId: string; requestId: string }>();
 	const [busy, setBusy] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [message, setMessage] = useState<UiMessage>("正在读取本地对话…");
 	const [messageTone, setMessageTone] = useState<"pending" | "passed" | "failed">("pending");
 	const controllerRef = useRef<AbortController | undefined>(undefined);
+	const selectionRef = useRef<AbortController | undefined>(undefined);
+	const viewEpoch = useRef(0);
+	const pausedRef = useRef(props.paused);
+	pausedRef.current = props.paused;
+	const beginSelection = useCallback((controller = new AbortController()): AbortController => {
+		selectionRef.current?.abort();
+		viewEpoch.current++;
+		selectionRef.current = controller;
+		return controller;
+	}, []);
+	const ownsRequest = (controller: AbortController) => controllerRef.current === controller && !pausedRef.current;
 	const activeRequestRef = useRef<ActiveChatRequest | undefined>(undefined);
 	const messagesRef = useRef<HTMLDivElement | null>(null);
 	const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -112,6 +126,19 @@ export function AiChatPage(props: Props) {
 	const readingImagesRef = useRef(false);
 	const currentChatRef = useRef(chat);
 	currentChatRef.current = chat;
+	useEffect(() => {
+		if (!props.active || props.paused) {
+			selectionRef.current?.abort();
+			viewEpoch.current++;
+		}
+		if (props.paused) {
+			controllerRef.current?.abort();
+			controllerRef.current = undefined;
+			activeRequestRef.current = undefined;
+			sendingRef.current = false;
+			setBusy(false);
+		}
+	}, [props.active, props.paused]);
 
 	const showMessage = useCallback((value: UiMessage, tone: "pending" | "passed" | "failed" = "pending"): void => {
 		setMessage(value);
@@ -137,10 +164,9 @@ export function AiChatPage(props: Props) {
 		if (!chat?.id || busy || props.paused) return;
 		const chatId = chat.id;
 		const controller = new AbortController();
-		void jsonRequest<{ requests: Array<{ id: string; state: string }> }>(
-			apiUrl(props.apiOrigin, `/chats/${chatId}/requests`),
-			{ signal: controller.signal },
-		)
+		void jsonRequest<{ requests: ChatRequest[] }>(apiUrl(props.apiOrigin, `/chats/${chatId}/requests`), {
+			signal: controller.signal,
+		})
 			.then((value) => {
 				if (controller.signal.aborted) return;
 				const latest = value.requests[0];
@@ -151,6 +177,7 @@ export function AiChatPage(props: Props) {
 				) {
 					setFailedRequest({ chatId, requestId: latest.id });
 					setStreamFailed(latest.state === "failed");
+					setStreamCancelled(latest.error === "已取消");
 				} else setFailedRequest(undefined);
 			})
 			.catch(() => {});
@@ -158,8 +185,8 @@ export function AiChatPage(props: Props) {
 	}, [chat, busy, props.apiOrigin, props.paused]);
 
 	useEffect(() => {
-		if (props.paused) return;
-		const controller = new AbortController();
+		if (props.paused || !props.active || controllerRef.current) return;
+		const controller = beginSelection();
 		setLoading(true);
 		void (async () => {
 			try {
@@ -177,7 +204,7 @@ export function AiChatPage(props: Props) {
 				setChats(orderedChats);
 				const preferred = orderedChats.find((item) => item.id === currentChatRef.current?.id) ?? orderedChats[0];
 				if (preferred) {
-					followOutputRef.current = true;
+					if (currentChatRef.current?.id !== preferred.id) followOutputRef.current = true;
 					const selected = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${preferred.id}`), {
 						signal: controller.signal,
 					});
@@ -197,9 +224,10 @@ export function AiChatPage(props: Props) {
 		})();
 		return () => {
 			controller.abort();
-			controllerRef.current?.abort();
 		};
-	}, [props.apiOrigin, showMessage, props.paused]);
+	}, [props.apiOrigin, showMessage, props.paused, props.active, beginSelection]);
+
+	useEffect(() => () => controllerRef.current?.abort(), []);
 
 	useEffect(() => {
 		if (!props.active || props.paused || loading) return;
@@ -224,57 +252,84 @@ export function AiChatPage(props: Props) {
 		return () => controller.abort();
 	}, [props.active, props.paused, props.apiOrigin, loading, showMessage]);
 
-	async function refreshList(): Promise<void> {
-		const list = await jsonRequest<{ chats: ChatSummary[] }>(apiUrl(props.apiOrigin, "/chats"));
+	async function refreshList(signal?: AbortSignal): Promise<void> {
+		const list = await jsonRequest<{ chats: ChatSummary[] }>(apiUrl(props.apiOrigin, "/chats"), { signal });
+		signal?.throwIfAborted();
+		if (pausedRef.current) return;
 		setChats(newestChats(list.chats));
 	}
 
-	async function create(preserveProfileSelection = false): Promise<ChatConversation> {
-		const created = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, "/chats"), { method: "POST" });
+	async function create(preserveProfileSelection = false, signal?: AbortSignal): Promise<ChatConversation> {
+		const controller = beginSelection();
+		const selectionSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+		const created = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, "/chats"), {
+			method: "POST",
+			signal: selectionSignal,
+		});
+		selectionSignal.throwIfAborted();
+		if (pausedRef.current) throw new DOMException("Selection expired", "AbortError");
 		setChat(created);
 		setFailedRequest(undefined);
 		if (configuration && !preserveProfileSelection) setSelectedProfileId(profileForChat(configuration, created));
 		setStreaming("");
 		setSearchPhase("");
 		setStreamFailed(false);
+		setStreamCancelled(false);
+		setImages([]);
+		setInput("");
+		setLoading(false);
 		followOutputRef.current = true;
-		await refreshList();
+		await refreshList(selectionSignal);
 		showMessage("已创建新对话。", "passed");
 		return created;
 	}
 
 	async function open(id: string): Promise<void> {
 		if (busy) return;
+		const controller = beginSelection();
 		try {
-			const selected = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${id}`));
+			const selected = await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${id}`), {
+				signal: controller.signal,
+			});
+			controller.signal.throwIfAborted();
 			setChat(selected);
 			setWebSearch(selected?.webSearch ?? true);
 			setFailedRequest(undefined);
 			if (configuration) setSelectedProfileId(profileForChat(configuration, selected));
 			setStreaming("");
 			setStreamFailed(false);
+			setStreamCancelled(false);
+			setImages([]);
+			setInput("");
 			followOutputRef.current = true;
 		} catch (error) {
-			showMessage(error instanceof Error ? error.message : "对话读取失败。", "failed");
+			if (!controller.signal.aborted)
+				showMessage(error instanceof Error ? error.message : "对话读取失败。", "failed");
+		} finally {
+			if (!controller.signal.aborted) setLoading(false);
 		}
 	}
 
 	async function remove(id: string): Promise<void> {
+		const epoch = viewEpoch.current;
 		if (!window.confirm(t("删除这条 AI 对话及其全部消息？此操作无法撤销。"))) return;
 		try {
 			const response = await authFetch(apiUrl(props.apiOrigin, `/chats/${id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			const remaining = chats.filter((item) => item.id !== id);
-			setChats(remaining);
-			if (chat?.id === id) {
+			if (pausedRef.current || epoch !== viewEpoch.current) return;
+			setChats((current) => current.filter((item) => item.id !== id));
+			if (currentChatRef.current?.id === id) {
 				const selected = remaining[0]
 					? await jsonRequest<ChatConversation>(apiUrl(props.apiOrigin, `/chats/${remaining[0].id}`))
 					: undefined;
+				if (pausedRef.current || epoch !== viewEpoch.current || currentChatRef.current?.id !== id) return;
 				setChat(selected);
 				setWebSearch(selected?.webSearch ?? true);
 				setFailedRequest(undefined);
 				setStreaming("");
 				setStreamFailed(false);
+				setStreamCancelled(false);
 				if (configuration) setSelectedProfileId(profileForChat(configuration, selected));
 			}
 			showMessage("对话已删除。", "passed");
@@ -284,6 +339,7 @@ export function AiChatPage(props: Props) {
 	}
 
 	async function addImages(files: File[]): Promise<void> {
+		const epoch = viewEpoch.current;
 		if (!files.length || readingImagesRef.current || busy) return;
 		if (images.length + files.length > 4) {
 			showMessage("每条消息最多添加 4 张图片。", "failed");
@@ -309,6 +365,7 @@ export function AiChatPage(props: Props) {
 					),
 				);
 			});
+			if (pausedRef.current || epoch !== viewEpoch.current) return;
 			if ([...images, ...added].reduce((total, item) => total + item.bytes, 0) > maxMessageImageBytes) {
 				throw new Error("每条消息的图片合计不能超过 12 MiB。");
 			}
@@ -334,7 +391,7 @@ export function AiChatPage(props: Props) {
 
 	async function send(): Promise<void> {
 		const content = input.trim();
-		if ((!content && images.length === 0) || busy || readingImages || sendingRef.current) return;
+		if ((!content && images.length === 0) || loading || busy || readingImages || sendingRef.current) return;
 		if (!selectedProfileId) {
 			showMessage("请先在设置中添加 API / 模型配置。", "failed");
 			return;
@@ -348,18 +405,20 @@ export function AiChatPage(props: Props) {
 		setStreaming("");
 		setSearchPhase("");
 		setStreamFailed(false);
+		setStreamCancelled(false);
 		followOutputRef.current = true;
 		showMessage("模型正在回复…");
 		const controller = new AbortController();
 		controllerRef.current = controller;
 		try {
-			const current = chat ?? (await create(true));
+			const current = chat ?? (await create(true, controller.signal));
 			controller.signal.throwIfAborted();
 			activeRequestRef.current = activeChatRequest({ chatId: current.id, requestId });
 			activeChat = current;
 			previousMessageCount = current.messages.length;
 			const form = new FormData();
 			form.set("requestId", requestId);
+			form.set("attemptId", activeRequestRef.current.attemptId ?? requestId);
 			form.set("message", content);
 			form.set("webSearch", String(webSearch));
 			if (searchQuery.trim()) form.set("searchQuery", searchQuery.trim());
@@ -387,12 +446,16 @@ export function AiChatPage(props: Props) {
 					})
 				: await submit();
 			if (!response.ok) throw new Error(responseError(await response.json()));
+			controller.signal.throwIfAborted();
+			if (!ownsRequest(controller)) return;
 			setInput("");
 			setImages([]);
 			let completed = false;
 			let after = 0;
 			let attempts = 0;
 			const handleEvent = (event: ChatStreamEvent, sequence?: number) => {
+				controller.signal.throwIfAborted();
+				if (!ownsRequest(controller)) return;
 				if (sequence !== undefined && sequence <= after) return;
 				if (sequence !== undefined) after = sequence;
 				if (event.type === "search") {
@@ -443,15 +506,17 @@ export function AiChatPage(props: Props) {
 			}
 			if (!completed) throw new Error("模型连接提前中断。");
 			setFailedRequest(undefined);
-			await refreshList();
+			await refreshList(controller.signal);
 			showMessage("回复已保存到本地对话。", "passed");
 		} catch (error) {
+			if (!ownsRequest(controller)) return;
 			let stoppedMessage = "发送已停止。";
 			if (controller.signal.aborted && activeRequestRef.current) {
 				try {
 					const active = activeRequestRef.current;
 					active.cancellation ??= cancelRequest(active);
 					const state = await active.cancellation;
+					if (!ownsRequest(controller)) return;
 					stoppedMessage =
 						state.state === "done"
 							? "回复已完成并保存。"
@@ -467,6 +532,7 @@ export function AiChatPage(props: Props) {
 				controller.signal.aborted ? "pending" : "failed",
 			);
 			setStreamFailed(partialText.length > 0);
+			setStreamCancelled(controller.signal.aborted);
 			if (!controller.signal.aborted && activeChat) setFailedRequest({ chatId: activeChat.id, requestId });
 			if (!partialText) setStreaming("");
 			if (activeChat) {
@@ -474,16 +540,19 @@ export function AiChatPage(props: Props) {
 				const restored = await jsonRequest<ChatConversation>(
 					apiUrl(props.apiOrigin, `/chats/${fallback.id}`),
 				).catch(() => fallback);
+				if (!ownsRequest(controller)) return;
 				setChat(restored);
 				if (restored.messages.length <= previousMessageCount) {
 					setInput(content);
 				}
 			}
 		} finally {
-			sendingRef.current = false;
-			setBusy(false);
-			controllerRef.current = undefined;
-			activeRequestRef.current = undefined;
+			if (controllerRef.current === controller) {
+				sendingRef.current = false;
+				setBusy(false);
+				controllerRef.current = undefined;
+				activeRequestRef.current = undefined;
+			}
 		}
 	}
 
@@ -494,6 +563,7 @@ export function AiChatPage(props: Props) {
 		showMessage("模型正在回复…");
 		setStreaming("");
 		setStreamFailed(false);
+		setStreamCancelled(false);
 		const controller = new AbortController();
 		controllerRef.current = controller;
 		activeRequestRef.current = activeChatRequest(failedRequest);
@@ -511,6 +581,8 @@ export function AiChatPage(props: Props) {
 					});
 					if (!response.ok || !response.body) throw new Error("无法接收模型回复。");
 					await readChatStream(response.body, (event, sequence) => {
+						controller.signal.throwIfAborted();
+						if (!ownsRequest(controller)) return;
 						if (sequence !== undefined && sequence <= after) return;
 						if (sequence !== undefined) after = sequence;
 						if (event.type === "search") {
@@ -539,14 +611,16 @@ export function AiChatPage(props: Props) {
 			}
 			if (!completed) throw new Error("模型连接提前中断。");
 			setFailedRequest(undefined);
-			await refreshList();
+			await refreshList(controller.signal);
 			showMessage("回复已保存到本地对话。", "passed");
 		} catch (error) {
+			if (!ownsRequest(controller)) return;
 			if (controller.signal.aborted && activeRequestRef.current) {
 				try {
 					const active = activeRequestRef.current;
 					active.cancellation ??= cancelRequest(active);
 					const state = await active.cancellation;
+					if (!ownsRequest(controller)) return;
 					showMessage(
 						state.state === "done"
 							? "回复已完成并保存。"
@@ -559,10 +633,13 @@ export function AiChatPage(props: Props) {
 				}
 			} else showMessage(error instanceof Error ? error.message : "重试失败。", "failed");
 			setStreamFailed(true);
+			setStreamCancelled(controller.signal.aborted);
 		} finally {
-			activeRequestRef.current = undefined;
-			controllerRef.current = undefined;
-			setBusy(false);
+			if (controllerRef.current === controller) {
+				activeRequestRef.current = undefined;
+				controllerRef.current = undefined;
+				setBusy(false);
+			}
 		}
 	}
 
@@ -576,6 +653,7 @@ export function AiChatPage(props: Props) {
 		showMessage("正在确认后台停止…");
 		try {
 			const state = await active.cancellation;
+			if (activeRequestRef.current !== active || pausedRef.current) return;
 			if (state?.state === "failed") setFailedRequest({ chatId: active.chatId, requestId: active.requestId });
 			showMessage(
 				state?.state === "done"
@@ -591,7 +669,7 @@ export function AiChatPage(props: Props) {
 	}
 
 	return (
-		<main className="page manual-chat-page" id="chat" hidden={!props.active}>
+		<main className="page manual-chat-page" id="chat" hidden={!props.active} data-wide={wide}>
 			<h1 className="visually-hidden">{t("AI 对话")}</h1>
 			{props.active &&
 				sidebar.target &&
@@ -648,15 +726,24 @@ export function AiChatPage(props: Props) {
 					</select>
 				</label>
 				<button
+					className="button secondary"
+					type="button"
+					aria-pressed={wide}
+					onClick={() => setWide((value) => !value)}
+				>
+					{t(wide ? "标准宽度" : "宽屏模式")}
+				</button>
+				<button
 					className="icon-button"
 					type="button"
 					title={t("新建对话")}
 					aria-label={t("新建对话")}
 					disabled={busy}
 					onClick={() =>
-						void create().catch((error: unknown) =>
-							showMessage(error instanceof Error ? error.message : "新建对话失败。", "failed"),
-						)
+						void create().catch((error: unknown) => {
+							if (!pausedRef.current && !(error instanceof Error && error.name === "AbortError"))
+								showMessage(error instanceof Error ? error.message : "新建对话失败。", "failed");
+						})
 					}
 				>
 					<Icon name="compose" />
@@ -691,6 +778,7 @@ export function AiChatPage(props: Props) {
 										<details className="chat-search-sources">
 											<summary>
 												{t("网络来源")} · {item.search.results.length}
+												{item.searchStatus === "partial" && ` · ${t("部分引擎不可用")}`}
 											</summary>
 											<p>{item.search.query}</p>
 											<ol>
@@ -706,6 +794,33 @@ export function AiChatPage(props: Props) {
 										</details>
 									)}
 									{item.searchError && <small className="chat-search-warning">{t(item.searchError)}</small>}
+									{(item.finishReason === "refusal" || item.complete === false) && (
+										<div className="chat-completion-status">
+											<span>
+												{t(
+													item.finishReason === "refusal"
+														? "模型拒绝了本次请求。"
+														: "输出已达上限，内容不完整。",
+												)}
+											</span>
+											{item.complete === false && (
+												<button
+													className="button secondary"
+													type="button"
+													disabled={busy}
+													onClick={() => {
+														setInput(t("请从上一条回复中断处继续。"));
+														imageInputRef.current
+															?.closest(".manual-chat-composer")
+															?.querySelector("textarea")
+															?.focus();
+													}}
+												>
+													{t("续写")}
+												</button>
+											)}
+										</div>
+									)}
 									{item.images && item.images.length > 0 && (
 										<div className="manual-chat-message-images">
 											{item.images.map((image) => (
@@ -747,7 +862,7 @@ export function AiChatPage(props: Props) {
 														t("生成中"),
 												)
 											: streamFailed
-												? t("AI · 生成中断（未保存）")
+												? t(streamCancelled ? "AI · 已取消（未保存）" : "AI · 生成失败（未保存）")
 												: "AI"}
 									</strong>
 									{streaming && (
@@ -776,7 +891,7 @@ export function AiChatPage(props: Props) {
 						<div className="composer-surface">
 							<textarea
 								value={input}
-								disabled={busy}
+								disabled={busy || loading}
 								onChange={(event) => setInput(event.target.value)}
 								placeholder={t("输入问题，或粘贴图片…")}
 								aria-label={t("消息内容")}
@@ -905,8 +1020,9 @@ export function AiChatPage(props: Props) {
 									type="button"
 									disabled={
 										busy ||
+										loading ||
 										readingImages ||
-										!props.configured ||
+										!configured ||
 										!selectedProfileId ||
 										(!input.trim() && images.length === 0)
 									}
@@ -931,9 +1047,9 @@ export function AiChatPage(props: Props) {
 							)}
 							<p className="manual-chat-context-note">{t("Enter 发送 · Shift+Enter 换行")}</p>
 						</div>
-						{(!props.configured || messageTone === "failed") && (
+						{(!configured || messageTone === "failed") && (
 							<output className="chat-status" aria-live="polite">
-								{props.configured ? (
+								{configured ? (
 									t(message)
 								) : props.administrator ? (
 									<a href="#admin">{t("请先在管理员设置中配置 AI API。")}</a>

@@ -14,6 +14,8 @@ COPY LICENSES ./LICENSES
 COPY Dockerfile .dockerignore .gitignore .gitattributes .npmrc .env.example compose.yaml compose.build.yaml biome.json vitest.base.ts install.sh upgrade.sh uninstall.sh ./
 COPY deploy ./deploy
 COPY fixtures ./fixtures
+COPY e2e ./e2e
+COPY playwright.config.mjs ./playwright.config.mjs
 COPY .github ./.github
 COPY .husky ./.husky
 RUN npm ci --registry="$NPM_REGISTRY" --ignore-scripts --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 \

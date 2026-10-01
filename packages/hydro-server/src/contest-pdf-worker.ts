@@ -31,6 +31,10 @@ function validateSvg(bytes: Buffer): void {
 	]);
 	const allowedAttributes = new Set([
 		"id",
+		"role",
+		"aria-label",
+		"aria-labelledby",
+		"aria-describedby",
 		"version",
 		"x",
 		"y",

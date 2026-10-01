@@ -8,6 +8,33 @@ import { preparePdfMarkdown } from "../src/markdown-typst.ts";
 import { pdfFixture } from "./fixtures/contest-pdf.ts";
 
 describe("PDF reference definitions", () => {
+	it("normalizes inline attachment link destinations without changing ordinary links", () => {
+		expect(preparePdfMarkdown("[附件](FILE&#58;//readme.txt?v=1#text) [原样](https://example.com?q=1#text)")).toBe(
+			"[附件](<file://readme.txt>) [原样](https://example.com?q=1#text)",
+		);
+	});
+	it("rewrites only resolved image source ranges in the shared statement fixture", async () => {
+		const source = await readFile(new URL("../../../fixtures/markdown/statement.md", import.meta.url), "utf8");
+		const result = preparePdfMarkdown(source, new Map([["file://first.svg", "/images/first.svg"]]));
+		expect(result).toContain("![跨栏目图片](/images/first.svg)");
+		expect(result).toContain("![实体与转义](/images/first.svg)");
+		for (const original of [
+			"$a+b$[^note]",
+			"| A | B |",
+			"![不解析](file://missing.png)",
+			"[figure]: FILE&#58;//first.svg?version=1#figure",
+			"[^note]: 保留 &amp; 实体和 **脚注**。",
+		])
+			expect(result).toContain(original);
+	});
+	it("locates the same attachment as the preview for protocol casing and suffixes", () => {
+		expect(
+			preparePdfMarkdown(
+				"![图](FILE&#58;//figure.svg?v=2#figure)",
+				new Map([["file://figure.svg", "images/figure.svg"]]),
+			),
+		).toBe("![图](images/figure.svg)");
+	});
 	it("resolves references across statement sections in both single PDFs and booklets", () => {
 		const first = pdfFixture.problems[0];
 		const sources = buildContestPdfSources({

@@ -8,8 +8,10 @@ import { AuthHttp } from "./auth-http.ts";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
 import { streamEvents } from "./event-stream.ts";
 import { QueueAdmissionError } from "./execution-scheduler.ts";
+import { observeHttp } from "./http-observability.ts";
 import { AuthError, type IdentityStore } from "./identity.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
+import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
 import { copyProject, restoreProject } from "./project-history.ts";
 import { releaseName } from "./releases.ts";
 import { WorkspaceRegistry } from "./workspace-registry.ts";
@@ -21,6 +23,7 @@ export interface HydroServerOptions {
 	maxRequestBytes?: number;
 	projects: ManualProjectStore;
 	chat: ChatService;
+	observability?: Observability;
 }
 
 const contentTypes: Readonly<Record<string, string>> = {
@@ -86,14 +89,16 @@ function expectedRevision(request: IncomingMessage): number | undefined {
 async function readChatSubmission(
 	request: IncomingMessage,
 	maxBytes: number,
-): Promise<ReturnType<typeof readChatMessage> & { requestId: string }> {
+): Promise<ReturnType<typeof readChatMessage> & { requestId: string; attemptId?: string }> {
 	const contentType = request.headers["content-type"] ?? "";
 	if (contentType.startsWith("application/json")) {
 		const value = await readJson(request, maxBytes);
 		const parsed = readChatMessage(value);
 		const requestId =
 			typeof value === "object" && value !== null && "requestId" in value ? String(value.requestId) : "";
-		return { ...parsed, requestId };
+		const attemptId =
+			typeof value === "object" && value !== null && "attemptId" in value ? String(value.attemptId) : undefined;
+		return { ...parsed, requestId, attemptId };
 	}
 	if (!contentType.startsWith("multipart/form-data;")) throw new ChatError("消息须使用 multipart/form-data。", 415);
 	const chunks: Buffer[] = [];
@@ -124,6 +129,7 @@ async function readChatSubmission(
 	}
 	return {
 		requestId: field("requestId") ?? "",
+		attemptId: field("attemptId"),
 		message: field("message") ?? "",
 		contextSnapshot: field("contextSnapshot"),
 		profileId: field("profileId"),
@@ -228,10 +234,11 @@ export async function createHydroServer(
 	options: HydroServerOptions,
 ): Promise<Server & { closeWorkspaces(): Promise<void> }> {
 	const maxRequestBytes = options.maxRequestBytes ?? 32 * 1024 * 1024;
-	const registry = new WorkspaceRegistry(options.identity, options.projects, options.chat);
+	const observability = options.observability ?? NOOP_OBSERVABILITY;
+	const registry = new WorkspaceRegistry(options.identity, options.projects, options.chat, observability);
 	await registry.start();
 	const auth = new AuthHttp(options.identity, registry, options.publicOrigin);
-	const server = createServer(async (request, response) => {
+	const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
 		try {
 			const url = new URL(request.url ?? "/", "http://localhost");
 			response.setHeader("x-content-type-options", "nosniff");
@@ -337,6 +344,19 @@ export async function createHydroServer(
 					});
 					return;
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			if (url.pathname === "/api/ai/search/diagnostics" && request.method === "POST") {
+				await options.identity.requireAdmin(access.user.id);
+				const input = await readJson(request, 256);
+				if (
+					!input ||
+					typeof input !== "object" ||
+					!("language" in input) ||
+					!["zh", "en"].includes(String(input.language))
+				)
+					throw new ChatError("请选择诊断语言。", 422);
+				sendJson(response, 200, await registry.diagnoseSearch(access.user, input.language as "zh" | "en"));
 				return;
 			}
 			if (url.pathname === "/api/ai/search") {
@@ -688,7 +708,10 @@ export async function createHydroServer(
 					if (format === "domjudge") {
 						try {
 							const file = await projects.releases.releaseFile(exportRoute[1], "domjudge");
-							sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/domjudge` });
+							sendJson(response, 200, {
+								name: file.name,
+								download: `/api/releases/${exportRoute[1]}/domjudge`,
+							});
 						} catch (error) {
 							if (!(error instanceof ManualProjectError) || error.statusCode !== 404) throw error;
 							sendJson(response, 202, {
@@ -697,7 +720,10 @@ export async function createHydroServer(
 						}
 					} else {
 						const file = await projects.releases.exportLegacy(exportRoute[1], format);
-						sendJson(response, 200, { name: file.name, download: `/api/releases/${exportRoute[1]}/${format}` });
+						sendJson(response, 200, {
+							name: file.name,
+							download: `/api/releases/${exportRoute[1]}/${format}`,
+						});
 					}
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
@@ -799,7 +825,7 @@ export async function createHydroServer(
 					response.writeHead(204, { "cache-control": "no-store" });
 					response.end();
 				} else if (request.method === "POST" && chatRoute[2] === "messages") {
-					const { requestId, message, contextSnapshot, profileId, images, webSearch, searchQuery } =
+					const { requestId, attemptId, message, contextSnapshot, profileId, images, webSearch, searchQuery } =
 						await readChatSubmission(request, maxRequestBytes);
 					sendJson(
 						response,
@@ -813,6 +839,7 @@ export async function createHydroServer(
 							images,
 							webSearch,
 							searchQuery,
+							attemptId,
 						),
 					);
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
@@ -843,6 +870,13 @@ export async function createHydroServer(
 				message: "服务器内部错误。",
 			});
 		}
+	};
+	const server = createServer((request, response) => {
+		void observeHttp(observability, request, response, () => handle(request, response)).catch(() => {
+			console.error("HTTP request completion failed.");
+			if (!response.headersSent) sendJson(response, 500, { error: "INTERNAL_ERROR", message: "服务器内部错误。" });
+			else response.destroy();
+		});
 	});
 	let closing: Promise<void> | undefined;
 	const closeWorkspaces = () => {

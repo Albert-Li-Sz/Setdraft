@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ChatRequest, ChatRequestEvent } from "@setdraft/contracts";
+import type { ChatConversation, ChatRequest, ChatRequestEvent } from "@setdraft/contracts";
 import type { ChatImageUpload, ChatService } from "./chat.ts";
-import { ChatError } from "./chat.ts";
+import { ChatCompletionPending, ChatError } from "./chat.ts";
 import { type ChatPolicy, chatPolicy } from "./chat-policy.ts";
 import { EventWriter } from "./event-writer.ts";
 import { ExecutionScheduler } from "./execution-scheduler.ts";
+import { NOOP_OBSERVABILITY, type Observability, secondsSince, type TraceCarrier } from "./observability.ts";
+import { TerminalSettlements } from "./terminal-settlements.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { ChatRequest, ChatRequestEvent } from "@setdraft/contracts";
@@ -16,6 +18,8 @@ interface StoredImage {
 }
 
 interface StoredPayload {
+	telemetry?: TraceCarrier;
+	attempt?: number;
 	attemptId?: string;
 	webSearch?: boolean;
 	searchQuery?: string;
@@ -30,12 +34,14 @@ export class ChatRequestQueue {
 	private readonly chat: ChatService;
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly running = new Set<Promise<void>>();
+	private readonly settlements = new TerminalSettlements();
 	private closed = false;
 	private readonly scheduling: { scheduler: ExecutionScheduler; userId: string; enabled(): Promise<boolean> };
 	private readonly policy: ChatPolicy;
 	private readonly admissions = new Map<string, () => void>();
 	private readonly locks = new Map<string, Promise<void>>();
 	private pruning?: Promise<void>;
+	private readonly observability: Observability;
 
 	private async withRequestLock<T>(id: string, run: () => Promise<T>): Promise<T> {
 		const previous = this.locks.get(id);
@@ -96,15 +102,18 @@ export class ChatRequestQueue {
 							"UPDATE chat_requests SET state='failed',error=$1,updated_at=$2 WHERE id=$3 AND state='queued'",
 							["排队超过时间上限，请稍后重试。", new Date().toISOString(), id],
 						);
-						if (result.rowCount) await this.emit(id, "error", { message: "排队超过时间上限，请稍后重试。" });
+						if (result.rowCount) {
+							await this.emit(id, "error", { message: "排队超过时间上限，请稍后重试。" });
+							await this.recordTerminal(id, "timeout");
+						}
 					});
 				if (!controller.signal.aborted) throw error;
 			} finally {
 				clearTimeout(queueTimer);
 				release?.();
-				this.releaseAdmission(id);
+				if (!this.settlements.has(id)) this.releaseAdmission(id);
 				this.controllers.delete(id);
-				await this.pruneHistory();
+				await this.pruneHistory().catch(() => undefined);
 			}
 		});
 		this.running.add(work);
@@ -119,7 +128,8 @@ export class ChatRequestQueue {
 
 	/** Wait for storage cleanup as well as terminal request state before closing the database. */
 	async idle(): Promise<void> {
-		while (this.running.size) await Promise.all([...this.running]);
+		while (this.running.size) await Promise.allSettled([...this.running]);
+		await this.settlements.flush();
 	}
 
 	async close(): Promise<void> {
@@ -127,14 +137,22 @@ export class ChatRequestQueue {
 		for (const controller of this.controllers.values()) controller.abort();
 		await this.ready;
 		await this.idle();
+		this.settlements.stop();
 	}
 
 	constructor(
 		database: WorkspaceDatabase,
 		chat: ChatService,
-		scheduling?: { scheduler: ExecutionScheduler; userId: string; enabled(): Promise<boolean>; policy?: ChatPolicy },
+		scheduling?: {
+			scheduler: ExecutionScheduler;
+			userId: string;
+			enabled(): Promise<boolean>;
+			policy?: ChatPolicy;
+			observability?: Observability;
+		},
 	) {
 		this.policy = scheduling?.policy ?? chatPolicy();
+		this.observability = scheduling?.observability ?? NOOP_OBSERVABILITY;
 		this.scheduling = scheduling ?? {
 			scheduler: new ExecutionScheduler(this.policy.concurrency, this.policy),
 			userId: "local",
@@ -161,6 +179,7 @@ export class ChatRequestQueue {
 						[new Date().toISOString(), request.id],
 					);
 					await this.emit(request.id, "error", { message: "服务中断；请重试。" });
+					await this.recordTerminal(request.id, "interrupted", true);
 				});
 		}
 		await this.pruneHistory();
@@ -268,11 +287,13 @@ export class ChatRequestQueue {
 		images: ChatImageUpload[] = [],
 		webSearch = false,
 		searchQuery?: string,
+		attemptId = id,
 	): Promise<ChatRequest> {
 		await this.ready;
 		return this.withRequestLock(id, async () => {
 			await this.assertWritable();
 			if (!/^[a-f0-9-]{36}$/u.test(id)) throw new ChatError("请求 ID 无效。", 422);
+			if (!/^[a-f0-9-]{36}$/u.test(attemptId)) throw new ChatError("执行轮次 ID 无效。", 422);
 			const conversation = await this.chat.get(chatId);
 			const fingerprint = createHash("sha256")
 				.update(
@@ -308,6 +329,9 @@ export class ChatRequestQueue {
 				searchQuery,
 			);
 			const stored: StoredPayload = {
+				attemptId,
+				attempt: 1,
+				telemetry: this.observability.capture(),
 				webSearch,
 				searchQuery,
 				message,
@@ -374,6 +398,8 @@ export class ChatRequestQueue {
 			if (!row.fingerprint) throw new ChatError("消息已在提交前取消，请重新发送。", 409);
 			const payload = JSON.parse(row.payload) as StoredPayload;
 			payload.attemptId = attemptId;
+			payload.attempt = (payload.attempt ?? 1) + 1;
+			payload.telemetry = this.observability.capture();
 			this.chat.validateInput(
 				await this.chat.get(chatId),
 				payload.message,
@@ -385,6 +411,13 @@ export class ChatRequestQueue {
 			this.reserve(id);
 			try {
 				await this.database.transaction(async () => {
+					const conversation = await this.chat.get(chatId);
+					const index = conversation.messages.findIndex((item) => item.role === "user" && item.requestId === id);
+					if (
+						(index >= 0 && index !== conversation.messages.length - 1) ||
+						(index < 0 && conversation.messages.some((item) => item.createdAt > request.createdAt))
+					)
+						throw new ChatError("此失败请求已有后续对话，请发送新消息。", 409);
 					const result = await this.database.sql.execute(
 						"UPDATE chat_requests SET state='queued',error=NULL,cancel_requested=0,updated_at=$1,owner_pid=$2,payload=$4 WHERE id=$3 AND state='failed'",
 						[new Date().toISOString(), process.pid, id, JSON.stringify(payload)],
@@ -419,7 +452,10 @@ export class ChatRequestQueue {
 				);
 				if (row) {
 					if (row.chat_id !== chatId) throw new ChatError("请求不存在。", 404);
-					const currentAttempt = (JSON.parse(row.payload) as StoredPayload).attemptId ?? id;
+					const payload = JSON.parse(row.payload) as StoredPayload;
+					if (!attemptId && (payload.attempt ?? 1) > 1)
+						throw new ChatError("取消重试请求必须提供本次执行轮次。", 409);
+					const currentAttempt = payload.attemptId ?? id;
 					if (
 						attemptId &&
 						attemptId !== currentAttempt &&
@@ -472,6 +508,7 @@ export class ChatRequestQueue {
 					return false;
 				});
 				if (cancelled) {
+					await this.recordTerminal(id, "cancelled");
 					this.controllers.get(id)?.abort();
 					this.releaseAdmission(id);
 					return await this.get(id, chatId);
@@ -501,7 +538,88 @@ export class ChatRequestQueue {
 		);
 	}
 
+	private async recordTerminal(
+		id: string,
+		result: "timeout" | "cancelled" | "interrupted",
+		recovered = false,
+	): Promise<void> {
+		const row = await this.database.sql.one<{ payload: string; created_at: string }>(
+			"SELECT payload,created_at FROM chat_requests WHERE id=$1",
+			[id],
+		);
+		if (!row) return;
+		const payload = JSON.parse(row.payload) as StoredPayload;
+		const labels = { "task.kind": "chat", "task.state": "failed", "operation.result": result };
+		await this.observability.withPropagation(payload.telemetry, () =>
+			this.observability.startSpan(
+				{
+					name: recovered ? "chat.recover" : "chat.queue.end",
+					attributes: { ...labels, "chat.request.id": id, "task.recovered": recovered },
+				},
+				(span) => {
+					span.setStatus({ status: "error" });
+					this.observability.metric("setdraft.task.results", 1, labels);
+					if (!recovered)
+						this.observability.metric(
+							"setdraft.queue.wait",
+							Math.max(0, (Date.now() - Date.parse(row.created_at)) / 1000),
+							{ "queue.kind": "ai" },
+						);
+					this.observability.log("chat.terminal", { ...labels, "chat.request.id": id });
+				},
+			),
+		);
+	}
+
 	private async run(chatId: string, id: string, controller: AbortController): Promise<void> {
+		const row = await this.database.sql.one<{ payload: string; updated_at: string }>(
+			"SELECT payload,updated_at FROM chat_requests WHERE id=$1 AND state='queued'",
+			[id],
+		);
+		if (!row) return;
+		const payload = JSON.parse(row.payload) as StoredPayload;
+		await this.observability.withPropagation(payload.telemetry, () =>
+			this.observability.startSpan(
+				{
+					name: "chat.execute",
+					attributes: { "chat.request.id": id, "task.kind": "chat", "task.attempt": payload.attempt ?? 1 },
+				},
+				async (span) => {
+					const start = performance.now();
+					const wait = Math.max(0, (Date.now() - Date.parse(row.updated_at)) / 1000);
+					span.setAttributes({ "task.queue_wait": wait });
+					this.observability.metric("setdraft.queue.wait", wait, { "queue.kind": "ai" });
+					try {
+						await this.runAttempt(chatId, id, controller);
+					} finally {
+						const current = await this.get(id, chatId).catch(() => ({ state: "running", error: undefined }));
+						const result =
+							current.state === "done"
+								? "succeeded"
+								: this.closed
+									? "interrupted"
+									: current.error === "已取消"
+										? "cancelled"
+										: current.error?.includes("时间上限") || current.error?.includes("45 秒")
+											? "timeout"
+											: "failed";
+						const labels = {
+							"task.kind": "chat",
+							"task.state": this.settlements.has(id) ? "settlement-pending" : current.state,
+							"operation.result": result,
+						};
+						span.setAttributes(labels);
+						if (current.state !== "done") span.setStatus({ status: "error" });
+						this.observability.metric("setdraft.task.duration", secondsSince(start), labels);
+						this.observability.metric("setdraft.task.results", 1, labels);
+						this.observability.log("chat.complete", { ...labels, "chat.request.id": id });
+					}
+				},
+			),
+		);
+	}
+
+	private async runAttempt(chatId: string, id: string, controller: AbortController): Promise<void> {
 		const row = (await this.database.sql.one("SELECT payload,state FROM chat_requests WHERE id=$1", [id])) as
 			| { payload: string; state: string }
 			| undefined;
@@ -558,31 +676,13 @@ export class ChatRequestQueue {
 				payload.searchQuery,
 			);
 			await events.flush();
-			const completed = await this.database.transaction(async () => {
-				const completed = await this.database.sql.execute(
-					"UPDATE chat_requests SET state='done',updated_at=$1 WHERE id=$2 AND state='running' AND cancel_requested=0",
-					[new Date().toISOString(), id],
-				);
-				if (!completed.rowCount) {
-					const current = (await this.database.sql.one("SELECT state FROM chat_requests WHERE id=$1", [id])) as
-						| { state: string }
-						| undefined;
-					if (current?.state === "running") {
-						const cancelled = await this.database.sql.execute(
-							"UPDATE chat_requests SET state='failed',error='已取消',updated_at=$1 WHERE id=$2 AND state='running'",
-							[new Date().toISOString(), id],
-						);
-						if (cancelled.rowCount) await this.emit(id, "error", { message: "已取消" });
-					}
-					return false;
-				}
-				await this.emit(id, "done", { chat });
-				await this.database.removeOwnerFiles("chat-request-image", id);
-				return true;
-			});
-			if (!completed) return;
-			await this.database.pruneBlobs();
+			await this.complete(id, async () => chat);
 		} catch (error) {
+			if (error instanceof ChatCompletionPending) {
+				await events.flush().catch(() => undefined);
+				await this.complete(id, error.commit);
+				return;
+			}
 			await events.flush().catch(() => undefined);
 			const cancelled = !timedOut && !runTimedOut && controller.signal.aborted;
 			const message = runTimedOut
@@ -594,16 +694,41 @@ export class ChatRequestQueue {
 						: error instanceof Error
 							? error.message
 							: "AI 请求失败。";
-			await this.database.transaction(async () => {
-				const failed = await this.database.sql.execute(
-					"UPDATE chat_requests SET state='failed',error=$1,updated_at=$2 WHERE id=$3 AND state='running'",
-					[message, new Date().toISOString(), id],
-				);
-				if (failed.rowCount) await this.emit(id, "error", { message });
+			await this.settlements.settle(id, async () => {
+				await this.database.transaction(async () => {
+					const failed = await this.database.sql.execute(
+						"UPDATE chat_requests SET state='failed',error=$1,updated_at=$2 WHERE id=$3 AND state='running'",
+						[message, new Date().toISOString(), id],
+					);
+					if (failed.rowCount) await this.emit(id, "error", { message });
+				});
+				this.releaseAdmission(id);
 			});
 		} finally {
 			clearTimeout(deadline);
 			if (timeout) clearTimeout(timeout);
 		}
+	}
+	private async complete(id: string, load: () => Promise<ChatConversation>): Promise<void> {
+		await this.settlements.settle(id, async () => {
+			await this.database.transaction(async () => {
+				const completed = await this.database.sql.execute(
+					"UPDATE chat_requests SET state='done',updated_at=$1 WHERE id=$2 AND state='running' AND cancel_requested=0",
+					[new Date().toISOString(), id],
+				);
+				if (completed.rowCount) {
+					await this.emit(id, "done", { chat: await load() });
+					await this.database.removeOwnerFiles("chat-request-image", id);
+				} else {
+					const cancelled = await this.database.sql.execute(
+						"UPDATE chat_requests SET state='failed',error='已取消',updated_at=$1 WHERE id=$2 AND state='running'",
+						[new Date().toISOString(), id],
+					);
+					if (cancelled.rowCount) await this.emit(id, "error", { message: "已取消" });
+				}
+			});
+			this.releaseAdmission(id);
+			void this.database.pruneBlobs().catch(() => undefined);
+		});
 	}
 }

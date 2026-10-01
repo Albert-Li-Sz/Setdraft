@@ -14,7 +14,8 @@ const MIN_MAX_TOKENS = 1;
 
 export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptContext, maxTokens: number): number {
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
-	const available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS;
+	const safety = Math.min(CONTEXT_SAFETY_TOKENS, Math.max(32, Math.ceil(model.contextWindow * 0.05)));
+	const available = model.contextWindow - estimateContextTokens(context).tokens - safety;
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
 }
 

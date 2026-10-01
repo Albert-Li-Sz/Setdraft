@@ -1,4 +1,4 @@
-import { markdownReferences } from "@setdraft/authoring/markdown";
+import { markdownAttachmentName, markdownReferences, safeMarkdownUrl } from "@setdraft/authoring/markdown";
 
 export function typstString(value: string): string {
 	return `"${value.replace(/["\\\u0000-\u001f\u007f-\u009f]/gu, (character) => {
@@ -25,23 +25,30 @@ export function preparePdfMarkdownParts(parts: string[], images: ReadonlyMap<str
 		const edits: Array<{ start: number; end: number; text: string }> = [];
 		for (const { node, url, title } of markdownReferences(document)) {
 			const image = node.type === "image" || node.type === "imageReference";
-			if (pass === "images" ? !image : node.type !== "linkReference") continue;
+			if (pass === "images" ? !image : image) continue;
 			const start = node.position?.start.offset,
 				end = node.position?.end.offset;
 			if (start === undefined || end === undefined) throw new Error("PDF 引用位置无效。");
 			let text: string;
 			if (image) {
-				const path = images.get(url);
+				const name = markdownAttachmentName(url);
+				const path = images.get(name ? `file://${name}` : url);
 				if (!path) throw new Error(`PDF 图片必须引用已上传的 PNG、JPEG、GIF 或 SVG 附件：${url.slice(0, 120)}`);
 				const alt = (node.alt ?? "").replace(/[\\[\]]/gu, "\\$&").replace(/[\r\n]/gu, " ");
 				text = `![${alt}](${path})`;
 			} else {
+				const attachment = markdownAttachmentName(url);
+				if (safeMarkdownUrl(url) === undefined && !attachment)
+					throw new Error("PDF 链接使用了不支持的协议或附件路径。");
+				if (node.type === "link" && !attachment) continue;
 				if (!("children" in node)) continue;
 				const labelStart = node.children[0]?.position?.start.offset;
 				const labelEnd = node.children.at(-1)?.position?.end.offset;
 				const label =
 					labelStart === undefined || labelEnd === undefined ? "" : document.slice(labelStart, labelEnd);
-				const destination = url.replaceAll("&", "&amp;").replace(/[<>\r\n]/gu, encodeURIComponent);
+				const destination = (attachment ? `file://${attachment}` : url)
+					.replaceAll("&", "&amp;")
+					.replace(/[<>\r\n]/gu, encodeURIComponent);
 				const suffix = title ? ` "${title.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"` : "";
 				text = `[${label}](<${destination}>${suffix})`;
 			}

@@ -9,5 +9,7 @@ export type {
 	ManualVerificationReport,
 } from "./manual-projects.ts";
 export { ManualProjectError, ManualProjectStore, parseGeneratorScript } from "./manual-projects.ts";
+export type { Observability, TraceCarrier } from "./observability.ts";
+export { createObservability, NOOP_OBSERVABILITY } from "./observability.ts";
 export type { HydroServerOptions } from "./server.ts";
 export { createHydroServer } from "./server.ts";

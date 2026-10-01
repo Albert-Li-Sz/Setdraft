@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { AuthUser, SearchSnapshot } from "@setdraft/contracts";
+import type { AuthUser, SearchDiagnosticReport, SearchSnapshot } from "@setdraft/contracts";
 import { AiConfigurationStore } from "./ai-configuration.ts";
 import type { ChatService } from "./chat.ts";
 import { chatPolicy } from "./chat-policy.ts";
@@ -9,6 +9,7 @@ import { ContestStore } from "./contests.ts";
 import { ExecutionScheduler } from "./execution-scheduler.ts";
 import { AuthError, type IdentityStore } from "./identity.ts";
 import { ManualProjectStore } from "./manual-projects.ts";
+import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
 import { TaskQueue } from "./tasks.ts";
 import { WebSearch } from "./web-search.ts";
@@ -30,13 +31,26 @@ export class WorkspaceRegistry {
 	private readonly chatTemplate: ChatService;
 	private readonly workspaces = new Map<string, UserWorkspace>();
 	private readonly policy = sandboxPolicy();
-	private readonly sandbox = new ExecutionScheduler(this.policy.concurrency, this.policy);
+	private readonly sandbox: ExecutionScheduler;
 	private readonly aiPolicy = chatPolicy();
-	private readonly ai = new ExecutionScheduler(this.aiPolicy.concurrency, this.aiPolicy);
+	private readonly ai: ExecutionScheduler;
 	private readonly probes = new Map<AbortController, { userId: string; done: Promise<unknown> }>();
-	constructor(identity: IdentityStore, projects: ManualProjectStore, chat: ChatService) {
+	private readonly observability: Observability;
+	constructor(
+		identity: IdentityStore,
+		projects: ManualProjectStore,
+		chat: ChatService,
+		observability: Observability = NOOP_OBSERVABILITY,
+	) {
+		this.observability = observability;
+		const report = (kind: string) => (queued: number, running: number) => {
+			observability.gauge("setdraft.queue.depth", queued, { "queue.kind": kind });
+			observability.gauge("setdraft.queue.running", running, { "queue.kind": kind });
+		};
+		this.sandbox = new ExecutionScheduler(this.policy.concurrency, this.policy, report("sandbox"));
+		this.ai = new ExecutionScheduler(this.aiPolicy.concurrency, this.aiPolicy, report("ai"));
 		this.identity = identity;
-		this.search = new WebSearch(identity);
+		this.search = new WebSearch(identity, undefined, observability);
 		this.projectTemplate = projects;
 		this.chatTemplate = chat;
 		this.configuration = new AiConfigurationStore(
@@ -78,11 +92,18 @@ export class WorkspaceRegistry {
 			judgeLimits: this.projectTemplate.judgeLimits,
 			maxFileBytes: this.projectTemplate.maxFileBytes,
 			maxProjectBytes: this.projectTemplate.maxProjectBytes,
+			observability: this.observability,
 		});
-		const chat = this.chatTemplate.forWorkspace(root, database, this.configuration, {
-			service: this.search,
-			userId: user.id,
-		});
+		const chat = this.chatTemplate.forWorkspace(
+			root,
+			database,
+			this.configuration,
+			{
+				service: this.search,
+				userId: user.id,
+			},
+			this.observability,
+		);
 		const contests = new ContestStore(projects);
 		const enabled = async () => (await this.identity.getUser(user.id)).enabled;
 		const workspace: UserWorkspace = {
@@ -94,12 +115,14 @@ export class WorkspaceRegistry {
 				userId: user.id,
 				enabled,
 				policy: this.policy,
+				observability: this.observability,
 			}),
 			chatRequests: new ChatRequestQueue(database, chat, {
 				scheduler: this.ai,
 				userId: user.id,
 				enabled,
 				policy: this.aiPolicy,
+				observability: this.observability,
 			}),
 		};
 		this.workspaces.set(user.id, workspace);
@@ -120,6 +143,12 @@ export class WorkspaceRegistry {
 			} finally {
 				await projects.database.delete("search-cache", `request:${requestId}`);
 			}
+		});
+	}
+	async diagnoseSearch(user: AuthUser, language: "zh" | "en"): Promise<SearchDiagnosticReport> {
+		return this.probe(user, async (signal) => {
+			const { projects } = await this.get(user);
+			return this.search.diagnose(projects.database, user.id, language, signal);
 		});
 	}
 	private async probe<T>(user: AuthUser, run: (signal: AbortSignal) => Promise<T>): Promise<T> {

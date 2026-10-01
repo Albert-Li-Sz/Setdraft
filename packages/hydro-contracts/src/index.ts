@@ -1,6 +1,8 @@
 export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-templates.ts";
 
 export type CheckerMode = "text" | "custom";
+export const verificationContractVersion = 1;
+export const exportContractVersion = 1;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
@@ -100,6 +102,7 @@ export interface ManualCaseSummary {
 export interface ManualProjectSnapshot extends ManualProject {
 	cases: ManualCaseSummary[];
 	orphanOutputs: string[];
+	dataIssues?: Array<{ code: "ANSWER_CONFLICT"; files: string[] }>;
 }
 
 export interface AddedManualCase {
@@ -109,6 +112,7 @@ export interface AddedManualCase {
 }
 
 export interface ManualVerificationReport extends ManualSandboxReport {
+	verificationContractVersion?: number;
 	revision: number;
 	projectHash: string;
 	issues: Array<{ severity: "error" | "warning"; code: string; path: string; message: string }>;
@@ -142,6 +146,7 @@ export interface ManualRelease {
 	checkerMode?: CheckerMode;
 	domjudgePdf?: boolean;
 	liveVerification?: HistoricHydroVerification;
+	exports?: Partial<Record<"domjudge" | "fps" | "qduoj", { contractVersion: number; createdAt: string }>>;
 }
 
 export type ContestFormat = "hydro" | "domjudge";
@@ -225,15 +230,45 @@ export interface SearchResult {
 	url: string;
 	snippet: string;
 }
+export type SearchHealth =
+	| "healthy"
+	| "partial"
+	| "no-match"
+	| "engines-unavailable"
+	| "filtered-empty"
+	| "configuration"
+	| "timeout"
+	| "network"
+	| "http"
+	| "invalid-response";
+export interface SearchDiagnostics {
+	status: SearchHealth;
+	checkedAt: string;
+	durationMs: number;
+	candidateCount: number;
+	acceptedCount: number;
+	httpStatus?: number;
+	engines: Array<{ name: string; category: "timeout" | "captcha" | "http" | "network" | "other" }>;
+}
+export interface SearchDiagnosticReport {
+	provider: "searxng" | "tavily";
+	language: "zh" | "en";
+	aggregate: SearchDiagnostics;
+	engines: Array<{ name: string; diagnostics: SearchDiagnostics }>;
+}
 export interface SearchSnapshot {
 	query: string;
 	provider: "searxng" | "tavily";
 	searchedAt: string;
 	results: SearchResult[];
+	diagnostics?: SearchDiagnostics;
 }
 export interface ChatMessage {
+	finishReason?: "stop" | "length" | "refusal" | "toolUse";
+	complete?: boolean;
 	search?: SearchSnapshot;
 	searchError?: string;
+	searchStatus?: SearchHealth;
 	id: string;
 	role: "user" | "assistant";
 	content: string;
@@ -377,12 +412,20 @@ export interface AiConfiguration {
 
 export function isContestReadyRelease(release: ManualRelease): boolean {
 	return (
-		release.report.success &&
+		!requiresReverification(release) &&
+		release.report?.success === true &&
 		release.report.mode === "finalize" &&
 		(release.judgingMode === "interactive"
 			? release.report.interactorUsed === true
 			: release.report.checkerUsed && (release.checkerMode === "text" || release.checkerMode === "custom")) &&
 		(release.scoringMode === "acm" || release.scoringMode === "oi")
+	);
+}
+
+export function requiresReverification(release: ManualRelease): boolean {
+	return (
+		(release.judgingMode === "interactive" || release.checkerMode !== "text") &&
+		release.report?.verificationContractVersion !== verificationContractVersion
 	);
 }
 

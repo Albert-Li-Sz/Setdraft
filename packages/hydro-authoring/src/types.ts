@@ -50,6 +50,10 @@ export type ValidationSeverity = "error" | "warning";
 export interface ValidationIssue {
 	severity: ValidationSeverity;
 	code: string;
+	position?: {
+		start: { line: number; column: number; offset?: number };
+		end: { line: number; column: number; offset?: number };
+	};
 	path: string;
 	message: string;
 }

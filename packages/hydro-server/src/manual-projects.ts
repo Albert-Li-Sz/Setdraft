@@ -14,7 +14,9 @@ import {
 	type ManualRelease,
 	type ManualSubtask,
 } from "@setdraft/contracts";
+import { assertReleasesUnreferenced } from "./contest-references.ts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, dataStem, hashFile } from "./project-files.ts";
 import { ProjectPipeline } from "./project-pipeline.ts";
@@ -91,6 +93,7 @@ export interface ManualProjectStoreOptions {
 	judgeLimits?: HydroJudgeLimits;
 	maxFileBytes?: number;
 	maxProjectBytes?: number;
+	observability?: Observability;
 }
 
 export class ManualProjectStore {
@@ -102,10 +105,12 @@ export class ManualProjectStore {
 	readonly judgeLimits: HydroJudgeLimits;
 	readonly maxFileBytes: number;
 	readonly maxProjectBytes: number;
+	readonly observability: Observability;
 	private readonly busy = new Set<string>();
 	private readonly documentVersions = new WeakMap<object, number>();
 
 	constructor(options: ManualProjectStoreOptions) {
+		this.observability = options.observability ?? NOOP_OBSERVABILITY;
 		this.root = resolve(options.root);
 		this.database = options.database ?? new WorkspaceDatabase(this.root);
 		if (this.database.root !== this.root) throw new Error("Workspace database root must match the project root.");
@@ -234,9 +239,17 @@ export class ManualProjectStore {
 		}
 	}
 
-	async caseList(project: ManualProject): Promise<{ cases: ManualCaseSummary[]; orphanOutputs: string[] }> {
+	async caseList(
+		project: ManualProject,
+		strict = true,
+	): Promise<{
+		cases: ManualCaseSummary[];
+		orphanOutputs: string[];
+		dataIssues?: ManualProjectSnapshot["dataIssues"];
+	}> {
 		const cases: ManualCaseSummary[] = [];
 		const orphanOutputs: string[] = [];
+		const dataIssues: NonNullable<ManualProjectSnapshot["dataIssues"]> = [];
 		for (const origin of ["manual", "generated"] as const) {
 			const files = await this.database.fileEntries(origin, project.id);
 			const byName = new Map(files.map((item) => [item.name, item.size]));
@@ -246,13 +259,15 @@ export class ManualProjectStore {
 					if (!byName.has(`${stem}.in`)) orphanOutputs.push(file.name);
 					continue;
 				}
-				const outputFile = byName.has(`${stem}.out`)
+				let outputFile = byName.has(`${stem}.out`)
 					? `${stem}.out`
 					: byName.has(`${stem}.ans`)
 						? `${stem}.ans`
 						: undefined;
 				if (byName.has(`${stem}.out`) && byName.has(`${stem}.ans`)) {
-					throw new ManualProjectError(`${stem} 同时存在 .out 与 .ans，请删除其中一个。`);
+					if (strict) throw new ManualProjectError(`${stem} 同时存在 .out 与 .ans，请删除其中一个。`, 422);
+					dataIssues.push({ code: "ANSWER_CONFLICT", files: [`${stem}.out`, `${stem}.ans`] });
+					outputFile = undefined;
 				}
 				cases.push({
 					id: stem,
@@ -265,7 +280,7 @@ export class ManualProjectStore {
 				});
 			}
 		}
-		return { cases: cases.sort(caseOrder), orphanOutputs };
+		return { cases: cases.sort(caseOrder), orphanOutputs, ...(dataIssues.length ? { dataIssues } : {}) };
 	}
 
 	async get(id: string): Promise<ManualProjectSnapshot> {
@@ -274,7 +289,7 @@ export class ManualProjectStore {
 
 	async snapshot(id: string): Promise<ManualProjectSnapshot> {
 		const project = await this.load(id);
-		return { ...project, ...(await this.caseList(project)) };
+		return { ...project, ...(await this.caseList(project, false)) };
 	}
 
 	async list(): Promise<ManualProjectSnapshot[]> {
@@ -565,10 +580,15 @@ export class ManualProjectStore {
 				throw new ManualProjectError(`项目数据总量不能超过 ${this.maxProjectBytes} 字节。`, 413);
 			project.revision++;
 			project.updatedAt = new Date().toISOString();
-			await this.database.commitFiles(
-				[{ ownerKind: "manual", ownerId: id, name, source: { path } }],
-				async () => await this.save(project),
-			);
+			await this.database.commitFiles([{ ownerKind: "manual", ownerId: id, name, source: { path } }], async () => {
+				const names = new Set((await this.database.fileEntries("manual", id)).map((file) => file.name));
+				names.add(name);
+				for (const file of names) {
+					if (file.endsWith(".out") && names.has(`${file.slice(0, -4)}.ans`))
+						throw new ManualProjectError("同一测试点不能同时提供 .out 和 .ans，请先删除或替换旧答案。", 422);
+				}
+				await this.save(project);
+			});
 			return await this.snapshot(id);
 		} finally {
 			this.busy.delete(id);
@@ -798,6 +818,10 @@ export class ManualProjectStore {
 			await this.assertNotBusy(id);
 			await this.load(id);
 			const releases = (await this.database.list<ManualRelease>("release")).filter((item) => item.projectId === id);
+			await assertReleasesUnreferenced(
+				this.database,
+				releases.map((item) => item.id),
+			);
 			for (const release of releases) {
 				if (
 					await this.database.sql.one(

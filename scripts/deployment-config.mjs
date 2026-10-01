@@ -4,7 +4,7 @@ import { parseEnv } from "node:util";
 
 const fields = [
 	"SETDRAFT_IMAGE_MODE", "SETDRAFT_IMAGE_NAMESPACE", "SETDRAFT_IMAGE_TAG", "SETDRAFT_WEB_IMAGE", "SETDRAFT_MAINTENANCE_IMAGE",
-	"SETDRAFT_DATABASE_URL", "SETDRAFT_SEARCH_URL", "SETDRAFT_SEARCH_IMAGE", "SETDRAFT_SEARCH_PROXY", "SETDRAFT_POSTGRES_IMAGE", "SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
+	"SETDRAFT_DATABASE_URL", "SETDRAFT_DATABASE_ADMIN_URL", "SETDRAFT_SEARCH_URL", "SETDRAFT_SEARCH_IMAGE", "SETDRAFT_SEARCH_PROXY", "SETDRAFT_POSTGRES_IMAGE", "SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
 	"SETDRAFT_NETWORK", "SETDRAFT_NPM_REGISTRY", "SETDRAFT_DOWNLOAD_PROXY",
 	"SETDRAFT_DOCKER_REGISTRY", "SETDRAFT_DEBIAN_MIRROR",
 	"SETDRAFT_SANDBOX_IMAGE", "SETDRAFT_TESTCASES_MAX", "SETDRAFT_TOTAL_TIME_LIMIT_MS",
@@ -14,6 +14,10 @@ const fields = [
 	"SETDRAFT_SANDBOX_CONCURRENCY_PER_USER", "SETDRAFT_SANDBOX_CPUS", "SETDRAFT_SANDBOX_MEMORY_MB",
 	"SETDRAFT_AI_CONCURRENCY", "SETDRAFT_AI_MAX_OUTSTANDING", "SETDRAFT_AI_MAX_OUTSTANDING_PER_USER",
 	"SETDRAFT_AI_QUEUE_TIMEOUT_MS", "SETDRAFT_AI_RUN_TIMEOUT_MS",
+	"SETDRAFT_OTEL_ENABLED", "OTEL_SERVICE_NAME", "OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG",
+	"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_PROTOCOL",
+	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
 ];
 const retiredFields = ["SETDRAFT_PROXY_MODE", "SETDRAFT_ACME_EMAIL", "SETDRAFT_SSL_CERT", "SETDRAFT_SSL_KEY", "SETDRAFT_CADDY_DOWNLOAD_BASE", "SETDRAFT_CADDY_ARCHIVE", "SETDRAFT_CADDY_BIN"];
 const flags = {
@@ -70,6 +74,7 @@ export async function loadDeployment(root, environment = process.env, overrides 
 		values[key] = overrides[key] ?? environment[key] ?? environment[legacy] ?? saved[key] ?? saved[legacy] ?? "";
 	}
 	values.SETDRAFT_IMAGE_MODE ||= "prebuilt";
+	values.SETDRAFT_OTEL_ENABLED ||= "0";
 	if (!["prebuilt", "source"].includes(values.SETDRAFT_IMAGE_MODE)) throw new Error("SETDRAFT_IMAGE_MODE 需要 prebuilt 或 source。");
 	if (values.SETDRAFT_IMAGE_TAG && !/^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$/u.test(values.SETDRAFT_IMAGE_TAG))
 		throw new Error("SETDRAFT_IMAGE_TAG 不是有效的镜像标签。");
@@ -120,7 +125,7 @@ export async function loadDeployment(root, environment = process.env, overrides 
 
 export function deploymentEnvironment(config, base = process.env) {
 	const environment = { ...base };
-	for (const key of [...fields, ...retiredFields]) delete environment[key.replace(/^SETDRAFT_/u, "HYDRO_")];
+	for (const key of [...fields, ...retiredFields].filter(key => key.startsWith("SETDRAFT_"))) delete environment[key.replace(/^SETDRAFT_/u, "HYDRO_")];
 	for (const key of retiredFields) delete environment[key];
 	for (const [key, value] of Object.entries(config.values)) {
 		if (value) environment[key] = value;
@@ -145,7 +150,7 @@ export function networkEnvironment(config, base = process.env) {
 
 export async function saveDeployment(config) {
 	let source = config.source;
-	for (const key of [...retiredFields, ...[...fields, ...retiredFields].map((field) => field.replace(/^SETDRAFT_/u, "HYDRO_"))]) source = source.replace(new RegExp(`^(?:export\\s+)?${key}\\s*=.*(?:\\n|$)`, "gmu"), "");
+	for (const key of [...retiredFields, ...[...fields, ...retiredFields].filter(field => field.startsWith("SETDRAFT_")).map((field) => field.replace(/^SETDRAFT_/u, "HYDRO_"))]) source = source.replace(new RegExp(`^(?:export\\s+)?${key}\\s*=.*(?:\\n|$)`, "gmu"), "");
 	// Replace only known keys, preserving unrelated variables and comments.
 	for (const key of fields) {
 		const value = config.values[key];
@@ -163,5 +168,7 @@ export async function saveDeployment(config) {
 }
 
 export function redact(value) {
-	return String(value).replace(/(https?:\/\/)[^\s/@]+@/gu, "$1***@");
+	return String(value)
+		.replace(/((?:https?|postgresql):\/\/)[^\s/@]+@/gu, "$1***@")
+		.replace(/(OTEL_EXPORTER_OTLP(?:_TRACES|_METRICS)?_HEADERS\s*[=:]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/gu, "$1[redacted]");
 }

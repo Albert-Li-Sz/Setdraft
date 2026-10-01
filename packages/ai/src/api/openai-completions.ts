@@ -583,6 +583,17 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				}
 
 				if (choice.delta) {
+					if (typeof choice.delta.refusal === "string" && choice.delta.refusal.length) {
+						output.refusal = (output.refusal ?? "") + choice.delta.refusal;
+						const block = ensureTextBlock();
+						block.text += choice.delta.refusal;
+						stream.push({
+							type: "text_delta",
+							contentIndex: getContentIndex(block),
+							delta: choice.delta.refusal,
+							partial: output,
+						});
+					}
 					if (
 						choice.delta.content !== null &&
 						choice.delta.content !== undefined &&

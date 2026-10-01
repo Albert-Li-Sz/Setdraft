@@ -1,21 +1,19 @@
+import { splitMarkdownSections } from "@setdraft/authoring/markdown";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import guideMarkdown from "../../../docs/authoring-guide.md?raw";
 import { Icon } from "./Icon.tsx";
 import { useLocale } from "./i18n.tsx";
+import { MarkdownView } from "./MarkdownView.tsx";
 import "./authoring-guide.css";
 
-const [introduction, ...chapters] = guideMarkdown.replace(/^# .+\n/u, "").split(/^## /mu);
-const sections = chapters.map((chapter, index) => {
-	const newline = chapter.indexOf("\n");
-	return {
-		id: `authoring-guide-section-${index + 1}`,
-		title: chapter.slice(0, newline),
-		body: chapter.slice(newline + 1).trim(),
-	};
-});
-const remarkPlugins = [remarkGfm];
+const { introduction, sections: chapters } = (() => {
+	try {
+		return splitMarkdownSections(guideMarkdown);
+	} catch {
+		return { introduction: guideMarkdown, sections: [] };
+	}
+})();
+const sections = chapters.map((chapter, index) => ({ ...chapter, id: `authoring-guide-section-${index + 1}` }));
 
 export function AuthoringGuide() {
 	const { t } = useLocale();
@@ -68,13 +66,13 @@ export function AuthoringGuide() {
 					</nav>
 				</aside>
 				<article className="authoring-guide-content" lang="zh-CN">
-					{!search && <ReactMarkdown remarkPlugins={remarkPlugins}>{introduction.trim()}</ReactMarkdown>}
+					{!search && <MarkdownView profile="guide">{introduction.trim()}</MarkdownView>}
 					{visible.length === 0 && <p className="authoring-guide-empty">{t("未找到匹配章节。")}</p>}
 					{visible.map((section) => (
 						<section key={section.id} id={section.id} tabIndex={-1} aria-labelledby={`${section.id}-title`}>
 							<h2 id={`${section.id}-title`}>{section.title}</h2>
-							<ReactMarkdown
-								remarkPlugins={remarkPlugins}
+							<MarkdownView
+								profile="guide"
 								components={{
 									a: ({ children, href }) => (
 										<a href={href} target="_blank" rel="noreferrer">
@@ -84,7 +82,7 @@ export function AuthoringGuide() {
 								}}
 							>
 								{section.body}
-							</ReactMarkdown>
+							</MarkdownView>
 						</section>
 					))}
 				</article>

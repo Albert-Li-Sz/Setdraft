@@ -4,8 +4,10 @@ import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { CppLanguage, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
+import { pythonCheckerProtocol } from "./checker-protocol.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { interactiveContainerNames, runInteractiveSandbox } from "./interactive-sandbox.ts";
+import { NOOP_OBSERVABILITY } from "./observability.ts";
 import { readSandboxFile } from "./sandbox-files.ts";
 import { readSandboxCheck, readSandboxReport } from "./sandbox-report.ts";
 import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
@@ -145,26 +147,15 @@ def same_default(left, right):
         return lines
     return normalized(left) == normalized(right)
 
+${pythonCheckerProtocol}
+
 def checker_score(input_path, contestant, answer, label, case_id):
     directory = root / 'run' / 'checker' / case_id / label
     result = run(commands['checker'] + [str(input_path), str(contestant), str(answer)], None,
                  directory / 'stdout', 10, 512, directory)
     verdict = result['stderr']
-    match = re.search(r'\bscore\((-?\d+)\)', verdict)
-    explicit_score = int(match.group(1)) if match else None
-    if explicit_score is not None and not 0 <= explicit_score <= 100:
-        check('checker-system', False, 'Checker 返回无效分数：' + str(explicit_score), case_id, verdict='SYSTEM_ERROR', log_path=result['logPath'])
-        return None
-    if result['status'] == 'ok' and result['code'] == 0 and verdict.startswith('ok'):
-        return explicit_score if explicit_score is not None else 100
-    if result['status'] == 'runtime_error' and result['code'] in (1, 2) and verdict.startswith(('wrong answer','wrong output format')):
-        return explicit_score if explicit_score is not None else 0
-    partial = re.match(r'^partially correct \(([\d.]+)\)', verdict)
-    points = re.match(r'^points ([\d.]+)', verdict)
-    if result['status'] == 'runtime_error' and (partial or points):
-        fraction = float((partial or points).group(1))
-        if fraction > 1: fraction /= 100
-        if 0 <= fraction <= 1: return round(fraction * 100)
+    score = normalized_checker_score(result['code'], verdict) if result['status'] in ('ok', 'runtime_error') else None
+    if score is not None: return score
     check('checker-system', False, verdict or result['status'], case_id, verdict='SYSTEM_ERROR',
           duration_ms=result['durationMs'], log_path=result['logPath'])
     return None
@@ -355,15 +346,14 @@ function runDocker(
 			context?.emit("log", chunk.toString("utf8"));
 		});
 		child.once("error", (error) => {
-			cleanup();
-			reject(error);
+			failure ??= error;
 		});
 		child.once("close", async (code) => {
 			cleanup();
 			// Do not return the scheduler slot while Docker is still removing a cancelled container.
 			try {
-				if (stopping && taskId) {
-					await stopping.catch(() => undefined);
+				if (taskId && (stopping || code !== 0 || failure)) {
+					await stopping?.catch(() => undefined);
 					await removeTaskContainer(taskId);
 				}
 			} catch {
@@ -375,7 +365,7 @@ function runDocker(
 				);
 				return;
 			}
-			if (code === 0 && !stopping) resolve();
+			if (code === 0 && !stopping && !failure) resolve();
 			else
 				reject(
 					failure ??
@@ -387,6 +377,22 @@ function runDocker(
 }
 
 export async function runManualSandbox(input: SandboxInput): Promise<ManualSandboxReport> {
+	const observability = input.context?.observability ?? NOOP_OBSERVABILITY;
+	return observability.startSpan(
+		{
+			name: input.mode === "generate" ? "sandbox.generate" : "sandbox.validate",
+			attributes: { "task.id": input.context?.id },
+		},
+		async (span) => {
+			const report = await runManualSandboxImpl(input);
+			span.setAttributes({ "operation.result": report.success ? "ok" : "failed" });
+			if (!report.success) span.setStatus({ status: "error" });
+			return report;
+		},
+	);
+}
+
+async function runManualSandboxImpl(input: SandboxInput): Promise<ManualSandboxReport> {
 	if (input.interactor) return runInteractiveSandbox(input);
 	const context = input.context;
 	const taskId = context?.id ?? randomUUID();

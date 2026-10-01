@@ -22,10 +22,51 @@ import {
 } from "./platform.ts";
 import { parseTags } from "./problem.ts";
 import { StatementEditor } from "./StatementEditor.tsx";
+import { SourceImports } from "./source-import.ts";
+import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 
 type Tab = "statement" | "data" | "generator" | "programs" | "validation" | "releases";
 type ProgramSection = "reference" | "oracle" | "checker" | "validator" | "interactor";
 type Busy = "upload" | "generate" | "finalize" | "restore" | "copy" | undefined;
+function importedLanguage(file: File, language: ProgramLanguage): ProgramLanguage {
+	return file.name.endsWith(".py")
+		? "python3"
+		: file.name.endsWith(".java")
+			? "java"
+			: language.startsWith("cpp")
+				? language
+				: "cpp17";
+}
+
+function TagsInput({ tags, onChange }: { tags: string[]; onChange(tags: string[]): void }) {
+	const { t } = useLocale();
+	const [draft, setDraft] = useState(tags.join(", "));
+	const focused = useRef(false);
+	useEffect(() => {
+		if (!focused.current) setDraft(tags.join(", "));
+	}, [tags]);
+	return (
+		<input
+			id="workspace-tags"
+			value={draft}
+			placeholder={t("入门, 模拟")}
+			onFocus={() => {
+				focused.current = true;
+			}}
+			onChange={(event) => {
+				setDraft(event.target.value);
+				const parsed = parseTags(event.target.value);
+				if (JSON.stringify(parsed) !== JSON.stringify(tags)) onChange(parsed);
+			}}
+			onBlur={() => {
+				focused.current = false;
+				const parsed = parseTags(draft);
+				setDraft(parsed.join(", "));
+				if (JSON.stringify(parsed) !== JSON.stringify(tags)) onChange(parsed);
+			}}
+		/>
+	);
+}
 const checkLabels: Record<string, string> = {
 	"compile:oracle": "编译第二标准程序",
 	oracle: "运行第二标准程序",
@@ -76,6 +117,7 @@ function CodeEditor(props: {
 	help?: string;
 	syntax?: "cpp" | "gen-script";
 	previewLines?: number;
+	onImport(file: File): Promise<void>;
 }) {
 	const { t } = useLocale();
 	return (
@@ -106,10 +148,7 @@ function CodeEditor(props: {
 							accept={props.accept ?? ".cpp,.cc,.cxx,.txt"}
 							onChange={(event) => {
 								const file = event.currentTarget.files?.[0];
-								if (file)
-									void readSourceFile(file)
-										.then(props.onChange)
-										.catch(() => {});
+								if (file) void props.onImport(file).catch(() => {});
 								event.currentTarget.value = "";
 							}}
 						/>
@@ -133,6 +172,7 @@ function ProgramEditor(props: {
 	code: string;
 	optional?: boolean;
 	onChange(language: ProgramLanguage, code: string): void;
+	onImport(file: File): Promise<void>;
 }) {
 	const { t } = useLocale();
 	return (
@@ -165,21 +205,7 @@ function ProgramEditor(props: {
 							accept=".cpp,.cc,.cxx,.py,.java,.txt"
 							onChange={(event) => {
 								const file = event.currentTarget.files?.[0];
-								if (file)
-									void readSourceFile(file)
-										.then((code) =>
-											props.onChange(
-												file.name.endsWith(".py")
-													? "python3"
-													: file.name.endsWith(".java")
-														? "java"
-														: props.language.startsWith("cpp")
-															? props.language
-															: "cpp17",
-												code,
-											),
-										)
-										.catch(() => {});
+								if (file) void props.onImport(file).catch(() => {});
 								event.currentTarget.value = "";
 							}}
 						/>
@@ -200,6 +226,11 @@ function ProgramEditor(props: {
 export function ManualWorkspace(props: Props) {
 	const { t } = useLocale();
 	const { project } = props;
+	const sourceScope = useRef({ projectId: project.id, signal: props.signal });
+	sourceScope.current = { projectId: project.id, signal: props.signal };
+	const [sources] = useState(() => new SourceImports(readSourceFile, () => sourceScope.current));
+	useEffect(() => () => sources.cancel(), [sources]);
+	const importCode = (field: string, file: File, apply: (text: string) => void) => sources.import(field, file, apply);
 	const [selectedTab, setTab] = useState<Tab>("statement");
 	const [selectedProgramSection, setProgramSection] = useState<ProgramSection>("reference");
 	const interactive = project.judgingMode === "interactive";
@@ -213,6 +244,26 @@ export function ManualWorkspace(props: Props) {
 			: selectedProgramSection;
 	const missingProgram = !project.reference.code.trim() || (interactive && !project.interactorSource?.trim());
 	const [publishing, setPublishing] = useState(false);
+	const layoutRef = useRef<HTMLDivElement>(null);
+	const [compact, setCompact] = useState(false);
+	const [naturalFlow, setNaturalFlow] = useState(false);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	useEffect(() => {
+		const layout = layoutRef.current;
+		if (!layout) return;
+		const measure = () => {
+			const width = layout.getBoundingClientRect().width;
+			setCompact(width < 1100);
+			setNaturalFlow(width < 800 || window.matchMedia("(max-height: 650px)").matches);
+		};
+		const observer = new ResizeObserver(measure);
+		observer.observe(layout);
+		window.addEventListener("resize", measure);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", measure);
+		};
+	}, []);
 	const [attachmentNotice, setAttachmentNotice] = useState("");
 	const [releaseName, setReleaseName] = useState("");
 	const [pendingDelete, setPendingDelete] = useState(false);
@@ -361,13 +412,18 @@ export function ManualWorkspace(props: Props) {
 		setPublishing(true);
 	}
 	return (
-		<main className="page" id="workspace">
+		<main className="page" id="workspace" data-natural-flow={naturalFlow}>
 			<section className="page-heading">
 				<div>
 					<h1>{project.title || t("新建题目")}</h1>
 					<p>{t("上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。")}</p>
 				</div>
 				<div className="heading-actions">
+					{compact && (
+						<button className="button secondary" type="button" onClick={() => setSettingsOpen(true)}>
+							{t("题目配置")}
+						</button>
+					)}
 					<button
 						className="button secondary"
 						type="button"
@@ -413,7 +469,29 @@ export function ManualWorkspace(props: Props) {
 				<span className="notice-dot" />
 				{t(props.notice)} · {t(props.saveStatus)}
 			</output>
-			<div className="manual-layout" inert={props.busy === "restore" || props.busy === "copy"}>
+			{project.dataIssues?.length ? (
+				<div className="notice failed" role="alert">
+					{t("测试答案文件冲突，请删除一个版本后重新验证。")}
+					{project.dataIssues
+						.flatMap((issue) => issue.files)
+						.map((name) => (
+							<button
+								key={name}
+								type="button"
+								className="button secondary"
+								onClick={() => void props.onDeleteFile(name)}
+							>
+								{t("删除 {0}", name)}
+							</button>
+						))}
+				</div>
+			) : null}
+			<div
+				className="manual-layout"
+				data-compact={compact}
+				ref={layoutRef}
+				inert={props.busy === "restore" || props.busy === "copy"}
+			>
 				<section className="card workspace-card">
 					<div className="tabs" role="tablist" aria-label={t("制题步骤")}>
 						{tabItems.map((item) => (
@@ -1001,6 +1079,9 @@ export function ManualWorkspace(props: Props) {
 								<CodeEditor
 									label={t("数据生成器 Gen")}
 									value={project.generatorSource}
+									onImport={(file) =>
+										importCode("generatorSource", file, (code) => set("generatorSource", code))
+									}
 									onChange={(value) => set("generatorSource", value)}
 									standard={project.generatorStandard}
 									onStandardChange={(standard) => set("generatorStandard", standard)}
@@ -1009,6 +1090,9 @@ export function ManualWorkspace(props: Props) {
 								<CodeEditor
 									label={t("生成脚本")}
 									value={project.generatorScript}
+									onImport={(file) =>
+										importCode("generatorScript", file, (code) => set("generatorScript", code))
+									}
 									onChange={(value) => set("generatorScript", value)}
 									syntax="gen-script"
 									accept=".txt,.sh,.gen"
@@ -1098,6 +1182,9 @@ export function ManualWorkspace(props: Props) {
 											<CodeEditor
 												label={t("交互器 · C++ testlib")}
 												value={project.interactorSource ?? ""}
+												onImport={(file) =>
+													importCode("interactorSource", file, (code) => set("interactorSource", code))
+												}
 												onChange={(value) => set("interactorSource", value)}
 												standard={project.interactorStandard ?? "cpp17"}
 												onStandardChange={(value) => set("interactorStandard", value)}
@@ -1115,6 +1202,14 @@ export function ManualWorkspace(props: Props) {
 											label={t("标准程序")}
 											language={project.reference.language}
 											code={project.reference.code}
+											onImport={(file) =>
+												importCode("reference", file, (code) =>
+													set("reference", {
+														language: importedLanguage(file, project.reference.language),
+														code,
+													}),
+												)
+											}
 											onChange={(language, code) => set("reference", { language, code })}
 										/>
 									)}
@@ -1124,6 +1219,14 @@ export function ManualWorkspace(props: Props) {
 											optional
 											language={project.oracle?.language ?? "cpp17"}
 											code={project.oracle?.code ?? ""}
+											onImport={(file) =>
+												importCode("oracle", file, (code) =>
+													set("oracle", {
+														language: importedLanguage(file, project.oracle?.language ?? "cpp17"),
+														code,
+													}),
+												)
+											}
 											onChange={(language, code) =>
 												set("oracle", code.trim() ? { language, code } : undefined)
 											}
@@ -1199,6 +1302,9 @@ export function ManualWorkspace(props: Props) {
 												<CodeEditor
 													label="SPJ · C++ testlib checker"
 													value={project.checkerSource}
+													onImport={(file) =>
+														importCode("checkerSource", file, (code) => set("checkerSource", code))
+													}
 													onChange={(value) => set("checkerSource", value)}
 													standard={project.checkerStandard}
 													onStandardChange={(standard) => set("checkerStandard", standard)}
@@ -1212,6 +1318,9 @@ export function ManualWorkspace(props: Props) {
 										<CodeEditor
 											label={t("输入校验器 · C++ testlib validator")}
 											value={project.validatorSource}
+											onImport={(file) =>
+												importCode("validatorSource", file, (code) => set("validatorSource", code))
+											}
 											onChange={(value) => set("validatorSource", value)}
 											standard={project.validatorStandard}
 											onStandardChange={(standard) => set("validatorStandard", standard)}
@@ -1359,149 +1468,151 @@ export function ManualWorkspace(props: Props) {
 						</div>
 					)}
 				</section>
-				<aside className="manual-sidebar">
-					<section className="card manual-side-card">
-						<h2>{t("题目配置")}</h2>
-						<label className="authoring-toggle">
-							<span>{t("启用交互题")}</span>
-							<input
-								type="checkbox"
-								role="switch"
-								aria-checked={interactive}
-								checked={interactive}
-								disabled={!!props.busy}
-								onChange={(event) => set("judgingMode", event.target.checked ? "interactive" : "default")}
-							/>
-						</label>
-						<p>{t("切换题型会保留已有题面、程序和数据，发布前需重新验证。")}</p>
-						{interactive && (
-							<button type="button" className="text-button" onClick={() => setTab("data")}>
-								{t(emptyInput ? "全交互 · 输入与答案全空" : "半对拍 · 私有输入、空答案")}
-							</button>
-						)}
-						<p>
-							{t("赛制：")}
-							{isAcm ? t("ACM（全部通过）") : t("OI（子任务计分）")}
-						</p>
-						<label className="field">
-							<span>{t("题目标题")}</span>
-							<input
-								value={project.title}
-								onChange={(event) => set("title", event.target.value)}
-								placeholder={t("例如 A + B")}
-							/>
-						</label>
-						<label className="field">
-							<span>{t("目录标识 slug")}</span>
-							<input
-								value={project.slug}
-								onChange={(event) => set("slug", event.target.value)}
-								placeholder={t("例如 a-plus-b")}
-								spellCheck={false}
-							/>
-						</label>
-						<label className="field">
-							<span>{t("标签")}</span>
-							<input
-								value={project.tags.join(", ")}
-								onChange={(event) => set("tags", parseTags(event.target.value))}
-								placeholder={t("入门, 模拟")}
-							/>
-						</label>
-						<div className="manual-limit-grid">
-							<label className="field">
-								<span>{t("时间限制")} · ms</span>
+				<WorkspaceSidebar compact={compact} open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+					<div className="manual-sidebar-scroll">
+						<section className="card manual-side-card">
+							<h2>{t("题目配置")}</h2>
+							<label className="authoring-toggle">
+								<span>{t("启用交互题")}</span>
 								<input
-									type="number"
-									min="1"
-									step="1"
-									inputMode="numeric"
-									value={limitAmount(project.timeLimit, "time")}
-									onChange={(event) => set("timeLimit", event.target.value ? `${event.target.value}ms` : "")}
-									placeholder="1000"
+									type="checkbox"
+									role="switch"
+									aria-checked={interactive}
+									checked={interactive}
+									disabled={!!props.busy}
+									onChange={(event) => set("judgingMode", event.target.checked ? "interactive" : "default")}
+								/>
+							</label>
+							<p>{t("切换题型会保留已有题面、程序和数据，发布前需重新验证。")}</p>
+							{interactive && (
+								<button type="button" className="text-button" onClick={() => setTab("data")}>
+									{t(emptyInput ? "全交互 · 输入与答案全空" : "半对拍 · 私有输入、空答案")}
+								</button>
+							)}
+							<p>
+								{t("赛制：")}
+								{isAcm ? t("ACM（全部通过）") : t("OI（子任务计分）")}
+							</p>
+							<label className="field">
+								<span>{t("题目标题")}</span>
+								<input
+									value={project.title}
+									onChange={(event) => set("title", event.target.value)}
+									placeholder={t("例如 A + B")}
 								/>
 							</label>
 							<label className="field">
-								<span>{t("内存限制")} · m</span>
+								<span>{t("目录标识 slug")}</span>
 								<input
-									type="number"
-									min="1"
-									step="1"
-									inputMode="numeric"
-									value={limitAmount(project.memoryLimit, "memory")}
-									onChange={(event) => set("memoryLimit", event.target.value ? `${event.target.value}m` : "")}
-									placeholder="256"
+									value={project.slug}
+									onChange={(event) => set("slug", event.target.value)}
+									placeholder={t("例如 a-plus-b")}
+									spellCheck={false}
 								/>
 							</label>
-						</div>
-					</section>
-					<section className="card manual-side-card">
-						<h2>{t("题面附件")}</h2>
-						<p>{t("在题面中使用 file://文件名 引用。")}</p>
-						<label className="button secondary manual-file-button">
-							{t("上传附件")}
-							<input
-								type="file"
-								multiple
-								onChange={(event) => {
-									const files = [...(event.currentTarget.files ?? [])];
-									event.currentTarget.value = "";
-									if (files.length) void props.onUploadAttachments(files);
-								}}
-							/>
-						</label>
-						<div className="manual-attachment-list">
-							{project.attachments.map((item) => (
-								<div className="manual-attachment" key={item.name}>
-									<span className="manual-attachment-name" title={item.name}>
-										{item.name}
-									</span>
-									<div className="manual-attachment-actions">
-										<button
-											type="button"
-											className="icon-button"
-											title={t("复制引用")}
-											aria-label={`${t("复制引用")} ${item.name}`}
-											onClick={() => {
-												void copyText(`file://${item.name}`)
-													.then(() => setAttachmentNotice("附件引用已复制。"))
-													.catch(() => setAttachmentNotice("复制失败，请检查浏览器剪贴板权限。"));
-											}}
-										>
-											<Icon name="files" />
-										</button>
-										<button
-											className="icon-button danger"
-											type="button"
-											title={t("删除")}
-											aria-label={t("删除 {0}", item.name)}
-											onClick={() =>
-												set(
-													"attachments",
-													project.attachments.filter((file) => file.name !== item.name),
-												)
-											}
-										>
-											<Icon name="close" />
-										</button>
+							<label className="field" htmlFor="workspace-tags">
+								<span>{t("标签")}</span>
+								<TagsInput tags={project.tags} onChange={(tags) => set("tags", tags)} />
+							</label>
+							<div className="manual-limit-grid">
+								<label className="field">
+									<span>{t("时间限制")} · ms</span>
+									<input
+										type="number"
+										min="1"
+										step="1"
+										inputMode="numeric"
+										value={limitAmount(project.timeLimit, "time")}
+										onChange={(event) =>
+											set("timeLimit", event.target.value ? `${event.target.value}ms` : "")
+										}
+										placeholder="1000"
+									/>
+								</label>
+								<label className="field">
+									<span>{t("内存限制")} · m</span>
+									<input
+										type="number"
+										min="1"
+										step="1"
+										inputMode="numeric"
+										value={limitAmount(project.memoryLimit, "memory")}
+										onChange={(event) =>
+											set("memoryLimit", event.target.value ? `${event.target.value}m` : "")
+										}
+										placeholder="256"
+									/>
+								</label>
+							</div>
+						</section>
+						<section className="card manual-side-card">
+							<h2>{t("题面附件")}</h2>
+							<p>{t("在题面中使用 file://文件名 引用。")}</p>
+							<label className="button secondary manual-file-button">
+								{t("上传附件")}
+								<input
+									type="file"
+									multiple
+									onChange={(event) => {
+										const files = [...(event.currentTarget.files ?? [])];
+										event.currentTarget.value = "";
+										if (files.length) void props.onUploadAttachments(files);
+									}}
+								/>
+							</label>
+							<div className="manual-attachment-list">
+								{project.attachments.map((item) => (
+									<div className="manual-attachment" key={item.name}>
+										<span className="manual-attachment-name" title={item.name}>
+											{item.name}
+										</span>
+										<div className="manual-attachment-actions">
+											<button
+												type="button"
+												className="icon-button"
+												title={t("复制引用")}
+												aria-label={`${t("复制引用")} ${item.name}`}
+												onClick={() => {
+													void copyText(`file://${item.name}`)
+														.then(() => setAttachmentNotice("附件引用已复制。"))
+														.catch(() => setAttachmentNotice("复制失败，请检查浏览器剪贴板权限。"));
+												}}
+											>
+												<Icon name="files" />
+											</button>
+											<button
+												className="icon-button danger"
+												type="button"
+												title={t("删除")}
+												aria-label={t("删除 {0}", item.name)}
+												onClick={() =>
+													set(
+														"attachments",
+														project.attachments.filter((file) => file.name !== item.name),
+													)
+												}
+											>
+												<Icon name="close" />
+											</button>
+										</div>
 									</div>
-								</div>
-							))}
-						</div>
-					</section>
-					{attachmentNotice && (
-						<output className="manual-muted" aria-live="polite">
-							{t(attachmentNotice)}
-						</output>
-					)}
-					<section className="card manual-side-card">
-						<h2>{t("竞赛题面 PDF")}</h2>
-						<p>{t("在竞赛中配置封面、目录和页眉页脚，从已发布题面自动生成题册与单题 PDF。")}</p>
-						<a className="button secondary button-link" href="#contests">
-							{t("配置竞赛 PDF")}
-						</a>
-					</section>
-					<section className="card manual-side-card">
+								))}
+							</div>
+						</section>
+						{attachmentNotice && (
+							<output className="manual-muted" aria-live="polite">
+								{t(attachmentNotice)}
+							</output>
+						)}
+						<section className="card manual-side-card">
+							<h2>{t("竞赛题面 PDF")}</h2>
+							<p>{t("在竞赛中配置封面、目录和页眉页脚，从已发布题面自动生成题册与单题 PDF。")}</p>
+							<a className="button secondary button-link" href="#contests">
+								{t("配置竞赛 PDF")}
+							</a>
+						</section>
+					</div>
+					<section className="card manual-side-card manual-runtime">
 						<h2>{t("运行状态")}</h2>
 						<p>{props.sandbox?.message ? t(props.sandbox.message) : t("正在检测 Linux 沙箱…")}</p>
 						<p>{t("题目版本：{0}", project.revision)}</p>
@@ -1513,7 +1624,7 @@ export function ManualWorkspace(props: Props) {
 							)}
 						</p>
 					</section>
-				</aside>
+				</WorkspaceSidebar>
 			</div>
 			<Dialog open={publishing} onClose={() => setPublishing(false)} labelledBy="publish-title">
 				<form

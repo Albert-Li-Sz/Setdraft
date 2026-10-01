@@ -170,6 +170,10 @@ export class ProjectSession {
 						if (saved.id !== project.id || saved.revision <= project.revision)
 							throw new Error("服务端返回的题目版本无效。");
 						if (this.blocked) throw new Error(this.state.error);
+						if (this.state.project && saved.revision < this.state.project.revision) {
+							this.publish({ ...this.state, status: "dirty" });
+							continue;
+						}
 						this.savedVersion = sentVersion;
 						this.accept(saved, project);
 					} catch (error) {

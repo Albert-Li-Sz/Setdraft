@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ContestPdfDocument } from "./contest-pdf-document.ts";
+import { NOOP_OBSERVABILITY, type Observability, secondsSince } from "./observability.ts";
 import { ManualProjectError } from "./project-error.ts";
 
 let activeCompilers = 0;
@@ -12,7 +13,24 @@ export async function compileContestPdfs(
 	document: ContestPdfDocument,
 	signal?: AbortSignal,
 	bookletOnly = false,
+	observability: Observability = NOOP_OBSERVABILITY,
 ) {
+	return observability.startSpan({ name: "pdf.compile" }, async (span) => {
+		const start = performance.now();
+		let result = "error";
+		try {
+			const pdfs = await compile(root, document, signal, bookletOnly);
+			result = "ok";
+			return pdfs;
+		} finally {
+			if (signal?.aborted) result = "cancelled";
+			span.setAttributes({ "operation.result": result });
+			observability.metric("setdraft.pdf.duration", secondsSince(start), { "operation.result": result });
+		}
+	});
+}
+
+async function compile(root: string, document: ContestPdfDocument, signal?: AbortSignal, bookletOnly = false) {
 	signal?.throwIfAborted();
 	if (activeCompilers >= 2) throw new ManualProjectError("PDF 生成繁忙，请稍后重试。", 429);
 	const labels = document.problems.map((problem) => problem.label);

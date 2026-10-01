@@ -9,6 +9,9 @@
 .setdraft
 .hydro-problem-make
 .artifacts
+playwright-report
+test-results
+.e2e
 **/*.sqlite*
 **/.DS_Store
 packages/hydro-web/public/open-source/*

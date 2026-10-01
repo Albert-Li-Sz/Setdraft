@@ -1,8 +1,11 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ManualProgram, ManualProject, ManualRelease } from "@setdraft/contracts";
+import { exportContractVersion, requiresReverification } from "@setdraft/contracts";
+import { assertReleasesUnreferenced } from "./contest-references.ts";
 import { writeDomjudgeProblemArchive } from "./domjudge-export.ts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { exportFileName } from "./export-contract.ts";
 import { writeLegacyProblemExport } from "./legacy-exports.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import { ManualProjectError } from "./project-error.ts";
@@ -55,7 +58,18 @@ export class ReleaseStore {
 		context?: ExecutionContext,
 		statement?: { pdfPath: string; archivePath: string },
 	): Promise<{ path: string; size: number; name: string }> {
+		return (context?.observability ?? this.projects.observability).startSpan(
+			{ name: "release.export", attributes: { "export.format": "domjudge" } },
+			() => this.exportDomjudgeImpl(id, context, statement),
+		);
+	}
+	private async exportDomjudgeImpl(
+		id: string,
+		context?: ExecutionContext,
+		statement?: { pdfPath: string; archivePath: string },
+	): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
+		if (requiresReverification(release)) throw new ManualProjectError("该历史版本须重新验证并发布。", 422);
 		try {
 			await writeDomjudgeProblemArchive(this.projects.releaseDirectory(id), release, this.projects.image, {
 				signal: context?.signal,
@@ -73,29 +87,51 @@ export class ReleaseStore {
 				size: (await stat(statement.archivePath)).size,
 				name: `${release.slug}.domjudge.zip`,
 			};
-		await this.projects.database.indexFile(
-			"release-file",
-			id,
-			"domjudge.zip",
-			join(this.projects.releaseDirectory(id), "domjudge.zip"),
-		);
+		await this.indexExport(id, "domjudge");
 		return await this.releaseFile(id, "domjudge");
 	}
 
 	async exportLegacy(id: string, format: "fps" | "qduoj"): Promise<{ path: string; size: number; name: string }> {
+		return this.projects.observability.startSpan(
+			{ name: "release.export", attributes: { "export.format": format } },
+			() => this.exportLegacyImpl(id, format),
+		);
+	}
+	private async exportLegacyImpl(
+		id: string,
+		format: "fps" | "qduoj",
+	): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
+		if (requiresReverification(release)) throw new ManualProjectError("该历史版本须重新验证并发布。", 422);
 		try {
 			await writeLegacyProblemExport(this.projects.releaseDirectory(id), release, format);
 		} catch (error) {
 			throw new ManualProjectError(error instanceof Error ? error.message : "题目格式导出失败。", 422);
 		}
-		await this.projects.database.indexFile(
-			"release-file",
-			id,
-			`${format}.${format === "fps" ? "xml" : "zip"}`,
-			join(this.projects.releaseDirectory(id), `${format}.${format === "fps" ? "xml" : "zip"}`),
-		);
+		await this.indexExport(id, format);
 		return await this.releaseFile(id, format);
+	}
+
+	private async indexExport(id: string, format: "domjudge" | "fps" | "qduoj"): Promise<void> {
+		const name = exportFileName(format);
+		await this.projects.database.commitFiles(
+			[
+				{
+					ownerKind: "release-file",
+					ownerId: id,
+					name,
+					source: { path: join(this.projects.releaseDirectory(id), name) },
+				},
+			],
+			async () => {
+				const release = await this.release(id);
+				release.exports = {
+					...release.exports,
+					[format]: { contractVersion: exportContractVersion, createdAt: new Date().toISOString() },
+				};
+				await this.projects.database.put("release", id, release);
+			},
+		);
 	}
 
 	async releaseFile(
@@ -103,7 +139,9 @@ export class ReleaseStore {
 		kind: "hydro" | "source" | "domjudge" | "fps" | "qduoj",
 	): Promise<{ path: string; size: number; name: string }> {
 		const release = await this.release(id);
-		const fileName = `${kind}.${kind === "fps" ? "xml" : "zip"}`;
+		if (["domjudge", "fps", "qduoj"].includes(kind) && requiresReverification(release))
+			throw new ManualProjectError("该历史版本使用旧判分契约，请从源快照重新验证并发布。", 422);
+		const fileName = kind === "domjudge" || kind === "fps" || kind === "qduoj" ? exportFileName(kind) : `${kind}.zip`;
 		const path =
 			(await this.projects.database.filePath("release-file", id, fileName)) ??
 			join(this.projects.releaseDirectory(id), fileName);
@@ -124,6 +162,7 @@ export class ReleaseStore {
 	async deleteRelease(id: string): Promise<void> {
 		const release = await this.release(id);
 		await this.projects.database.transaction(async () => {
+			await assertReleasesUnreferenced(this.projects.database, [id]);
 			if (
 				await this.projects.database.sql.one(
 					"SELECT 1 FROM tasks WHERE resource=$1 AND state IN ('queued','running')",

@@ -2,6 +2,10 @@ name: Verify source
 
 on:
   workflow_call:
+    inputs:
+      full-e2e:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -56,6 +60,26 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Install pinned Chromium
+        if: matrix.node == 24 && !inputs.full-e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Core browser tests against production build
+        if: matrix.node == 24 && !inputs.full-e2e
+        env:
+          SETDRAFT_E2E_DATABASE_URL: postgresql://postgres:smoke-admin-password@127.0.0.1:${{ job.services.postgres.ports[5432] }}/setdraft_smoke
+        run: npm run test:e2e
+
+      - name: Preserve browser failure evidence
+        if: failure() && matrix.node == 24 && !inputs.full-e2e
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-core-failure
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
       - name: Production page smoke test
         env:
           SETDRAFT_DATABASE_ADMIN_URL: postgresql://postgres:smoke-admin-password@127.0.0.1:${{ job.services.postgres.ports[5432] }}/setdraft_smoke
@@ -74,7 +98,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:4321/api/health | grep -q '"status":"ok"'
 
   sandbox-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -90,7 +114,31 @@ jobs:
         run: npm run build:hydro
       - name: Build sandbox image
         run: docker build -t setdraft/sandbox:local packages/hydro-server/sandbox
+      - name: Prepare the pinned QDUOJ importer contract
+        run: |
+          node scripts/fetch-qduoj-contract.mjs
+          python3.12 -m venv .artifacts/qduoj-python
+          .artifacts/qduoj-python/bin/pip install -r scripts/qduoj-contract-requirements.txt
+          echo "SETDRAFT_QDUOJ_CONTRACT_ROOT=$GITHUB_WORKSPACE/.artifacts/qduoj-contract" >> "$GITHUB_ENV"
+          echo "SETDRAFT_QDUOJ_CONTRACT_PYTHON=$GITHUB_WORKSPACE/.artifacts/qduoj-python/bin/python" >> "$GITHUB_ENV"
       - name: Sandbox integration tests
         env:
           SETDRAFT_REQUIRE_SANDBOX: '1'
+          SETDRAFT_REQUIRE_IMPORTER: '1'
         run: npm run test --workspace=@setdraft/server
+
+      - name: Install pinned Chromium for full browser tests
+        if: inputs.full-e2e
+        run: npx playwright install --with-deps chromium
+      - name: Full browser tests with real sandbox and PDFs
+        if: inputs.full-e2e
+        run: npm run test:e2e:full
+      - name: Preserve full browser failure evidence
+        if: failure() && inputs.full-e2e
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-full-failure
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

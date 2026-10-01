@@ -7,7 +7,7 @@ import { AiConfigurationStore } from "../src/ai-configuration.ts";
 import { ChatService } from "../src/chat.ts";
 import { ChatRequestQueue } from "../src/chat-requests.ts";
 import { IdentityStore } from "../src/identity.ts";
-import { WebSearch } from "../src/web-search.ts";
+import { SearchFailure, WebSearch } from "../src/web-search.ts";
 import { WorkspaceDatabase } from "../src/workspace-db.ts";
 
 let root: string;
@@ -92,7 +92,68 @@ it("uses surviving engines without exposing upstream failure details", async () 
 	const database = new WorkspaceDatabase(root);
 	const snapshot = await search.search(database, randomUUID(), randomUUID(), "query");
 	expect(snapshot.results).toHaveLength(1);
+	expect(snapshot.diagnostics).toMatchObject({
+		status: "partial",
+		candidateCount: 1,
+		acceptedCount: 1,
+		engines: [{ name: "duckduckgo", category: "timeout" }],
+	});
 	expect(JSON.stringify(snapshot)).not.toContain("fake-secret");
+});
+it("distinguishes filtered-empty and malformed responses from a valid no-match result", async () => {
+	const identity = new IdentityStore(root);
+	const database = new WorkspaceDatabase(root);
+	for (const [raw, status] of [
+		[{ results: [{ title: "blocked", content: "secret query", url: "javascript:secret" }] }, "filtered-empty"],
+		[{ error: "fake-secret" }, "invalid-response"],
+		[{ results: [] }, "no-match"],
+	] as const) {
+		const search = new WebSearch(identity, async () => Response.json(raw));
+		try {
+			await search.search(database, randomUUID(), randomUUID(), "private search");
+			throw new Error("Expected failure");
+		} catch (error) {
+			expect(error).toBeInstanceOf(SearchFailure);
+			expect(error).toMatchObject({ diagnostics: { status } });
+			expect(JSON.stringify(error)).not.toMatch(/fake-secret|private search|secret query|javascript/u);
+		}
+	}
+});
+it("probes enabled engines independently, redacts reports and uses the existing quota", async () => {
+	const identity = new IdentityStore(root);
+	const calls: URL[] = [];
+	const search = new WebSearch(identity, async (input) => {
+		const url = new URL(String(input));
+		calls.push(url);
+		if (url.pathname === "/config")
+			return Response.json({
+				engines: [
+					{ name: "bing", categories: ["general"], enabled: true },
+					{ name: "duckduckgo", categories: ["general"], enabled: true },
+					{ name: "disabled", categories: ["general"], enabled: false },
+				],
+			});
+		if (url.searchParams.get("engines") === "duckduckgo")
+			return Response.json({ results: [], unresponsive_engines: [["duckduckgo", "fake-secret timeout"]] });
+		return result();
+	});
+	await search.configure({ enabled: true, provider: "searxng", dailyLimit: 3 });
+	const database = new WorkspaceDatabase(root),
+		user = randomUUID();
+	const report = await search.diagnose(database, user, "zh");
+	expect(report.aggregate).toMatchObject({ status: "healthy", candidateCount: 3, acceptedCount: 1 });
+	expect(report.engines.map(({ name, diagnostics }) => [name, diagnostics.status])).toEqual([
+		["bing", "healthy"],
+		["duckduckgo", "engines-unavailable"],
+	]);
+	for (const url of calls.filter((url) => url.searchParams.has("engines")))
+		expect(url.searchParams.has("categories")).toBe(false);
+	expect(JSON.stringify(report)).not.toMatch(/fake-secret|Python|example.com|External reference/u);
+	expect((await search.status()).health).toEqual(report.aggregate);
+	await expect(search.diagnose(database, user, "en")).rejects.toMatchObject({ statusCode: 429 });
+	expect(
+		await database.sql.one("SELECT 1 FROM documents WHERE kind='search-cache' AND id LIKE 'request:%'"),
+	).toBeUndefined();
 });
 it.each([403, 429])("explains provider HTTP %s without returning its response body", async (status) => {
 	const identity = new IdentityStore(root);

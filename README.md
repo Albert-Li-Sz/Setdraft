@@ -256,11 +256,24 @@ SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER=16
 
 联网搜索默认开启，随对话保存开关。可填写独立搜索关键词；留空时只使用本条消息前 500 字，不发送题目快照、历史对话或附件。输入涉及私密内容时可关闭联网或指定公开关键词。默认使用 Compose 内置的 SearXNG，无需搜索 API Key；管理员也可选择 Tavily、配置密钥、测试连接和设置每日额度。搜索失败会明确提示，模型仍可继续回答；答案附可展开的真实来源列表。SearXNG 依赖上游引擎，服务器网络受限时可自行配置搜索出站代理或使用可达的 Tavily 服务。
 
+Rev0.4 保留最终完整正文和拒绝原因；达到输出上限的回复标记为不完整，可主动点击续写。已有后续消息的旧失败请求不能重试，请重新发送。取消对应每次执行的 attempt token，旧取消请求不会停止新的重试。
+
+管理员设置中的搜索诊断分别验证中文、英文的真实上游结果，并按引擎显示耗时、候选数、接受数和失败类别。配置就绪与实际搜索健康分开显示；诊断下载不包含搜索词、结果正文、密钥或原始上游错误。
+
 ## 数据与维护
 
 账号、会话摘要、团队配置、题目、任务、竞赛和聊天均存入 PostgreSQL 18，业务表按用户 UUID 强制行级隔离。所有用户都使用独立的 `users/<userId>/` 文件目录，角色变更不转移内容。数据库不再依赖本地 SQLite 文件。
 
 `backup` 先停止 Web，获取数据库独占服务锁，导出 PostgreSQL 并复制全部用户文件，生成 SHA-256 校验清单。`restore` 先验证完整性，再保存恢复前备份，恢复数据库和文件并撤销旧会话；完成后运行 `./scripts/setdraft-compose.sh start`。另外备份 `.env` 和 `.env.compose`，移动服务器时核对绝对文件路径及站点来源。备份含团队 AI 密钥，应按敏感数据保存。应用内隔离不等于磁盘加密，拥有服务器权限的运维人员仍能访问数据。发布包在题目内部管理，旧 SQLite 离线 `prune` 命令已取消。
+
+当前文件损坏时，恢复命令先保留损坏现场，再使用已通过校验的健康备份恢复；损坏现场归档不能作为健康备份导入。原生维护使用本机 PostgreSQL 的 `pg_dump`、`pg_restore`，并要求 `.env` 中的 `SETDRAFT_DATABASE_ADMIN_URL` 与应用连接指向同一主机、端口和数据库。目标和工具预检在停服前完成，不使用另一套 Compose 配置。
+
+```sh
+node scripts/hydro-local.mjs backup /path/to/new-backup
+node scripts/hydro-local.mjs restore /path/to/healthy-backup
+```
+
+历史自定义判分及交互题发布记录须重新验证后才能生成新的导出或用于新竞赛。原始历史 Hydro 和源码包继续保留；派生缓存包含导出目标和契约版本。FPS 的输入、输出栏目使用结构化题面或明确的完整题面引用说明。
 
 实现细节见 [AI 联网搜索](docs/ai-web-search.md) 与 [PostgreSQL 数据存储](docs/database-selection.md)。
 
@@ -273,7 +286,10 @@ SETDRAFT_SANDBOX_MAX_OUTSTANDING_PER_USER=16
 | `packages/hydro-web` | 制题工作台、题面预览、题目中心和 AI 对话 |
 | `packages/ai`、`packages/telemetry` | AI 协议、流式事件和遥测类型 |
 
-代码检查使用 `npm run check`。更多 API 和环境变量见各包 README。
+代码检查使用 `npm run check`。浏览器测试、CI 分层和共享 Markdown 契约见
+[测试说明](docs/testing.md)；默认关闭的 OTLP 接入、采样和数据边界见
+[OpenTelemetry 配置](docs/observability.md)。本次实施的实际验证结果见
+[Rev0.4 验收报告](docs/rev0.4-acceptance-2026-10-01.md)。更多 API 和环境变量见各包 README。
 
 ## 致谢
 

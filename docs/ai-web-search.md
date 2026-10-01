@@ -10,7 +10,7 @@
 
 SSE 的 `search` 事件包含 `searching`、`complete`、`failed` 阶段，与模型事件共同持久化并按序回放。API 密钥只保存在服务器身份配置中；普通用户只看到可用状态。
 
-SearXNG 仍依赖服务器到上游引擎的网络连通性。默认显式启用 Bing、DuckDuckGo、Brave 和百度；可调整 `deploy/searxng/settings.yml`。`use_default_settings.engines.keep_only` 只保留引擎，并不会覆盖它们默认的 `disabled: true`，因此还需在 `engines` 中配置 `disabled: false`。部分引擎超时或触发 CAPTCHA 时，只要其他引擎返回有效结果就继续使用；所有引擎不可用时明确报错，不伪造搜索成功。
+SearXNG 仍依赖服务器到上游引擎的网络连通性。Rev0.4 默认显式启用 Bing（`https://cn.bing.com`）与 `360search`，每个引擎超时 8 秒；可调整 `deploy/searxng/settings.yml`。这一组合在本次部署网络通过了中文和英文真实查询，其他网络仍需主动诊断。`use_default_settings.engines.keep_only` 只保留引擎，并不会覆盖它们默认的 `disabled: true`，因此还需在 `engines` 中配置 `disabled: false`。部分引擎超时或触发 CAPTCHA 时，只要其他引擎返回有效结果就继续使用；所有引擎不可用时明确报错，不伪造搜索成功。
 
 内部 SearXNG 请求携带固定的服务端标识头 `X-Forwarded-For: 127.0.0.1` 和 `X-Real-IP: 127.0.0.1`，不读取或转发用户 IP，也不向 Tavily 发送这些头。搜索服务仅在 Compose 内网可达，限流在 Setdraft 内执行。`limiter.toml` 保留回环地址信任配置，不信任任意来源或扩大代理网段。缺少转发头的日志不是 DuckDuckGo/Brave 出站超时的原因。
 
@@ -32,7 +32,11 @@ SETDRAFT_SEARCH_PROXY="http://proxy.example.org:7890"
 docker compose --env-file .env.compose -f compose.yaml up -d --no-deps --force-recreate search
 ```
 
-在管理页面点击“测试连接”，再尝试一次联网聊天。接口拒绝请求、上游引擎无可用结果、请求超时和没有匹配结果现在会给出不同的说明。若仍提示上游不可用，请检查搜索容器到上游引擎的连通性、代理是否可达以及是否遭遇 CAPTCHA；延长超时不能恢复被阻断的网络，也不会自动切换到收费服务。
+在管理页面点击“运行诊断”，选择中文或英文。诊断使用固定公开查询，绕过缓存，分别测试聚合接口与实际启用的引擎；最多 8 个引擎、并发 4 个，沿用现有 AI 限额。报告展示检查时间、耗时、候选与接受数量，可下载脱敏 JSON。`POST /api/ai/search/diagnostics` 仅供管理员使用，参数为 `{"language":"zh"}` 或 `{"language":"en"}`，需要登录会话和 CSRF token。
+
+配置就绪与最近搜索健康分别显示：`healthy` / `partial` 表示有可用来源；`no-match` 表示合法空结果；`engines-unavailable` 表示上游引擎不可用；`filtered-empty` 表示候选全部未通过 URL/内容校验。网络、超时、HTTP 错误和响应结构错误各自分类。无摘要但标题与 URL 合法的来源仍可接受，不编造摘要。诊断不包含搜索词、正文、密钥、代理凭据或原始上游错误。
+
+普通聊天在对应回复附近保存和展示来源状态，失败时明确显示“本次回复未使用网络资料”，刷新后仍可核对。若仍提示上游不可用，请检查搜索容器到上游引擎的连通性、代理是否可达以及是否遭遇 CAPTCHA；延长超时不能恢复被阻断的网络，也不会自动切换到收费服务。
 
 ## 定向回归
 

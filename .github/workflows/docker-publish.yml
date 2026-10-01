@@ -16,6 +16,8 @@ concurrency:
 jobs:
   check:
     uses: ./.github/workflows/verify.yml
+    with:
+      full-e2e: true
 
   build:
     needs: check

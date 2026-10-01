@@ -1,5 +1,5 @@
 import { assertHydroJudgeLimits, DEFAULT_HYDRO_JUDGE_LIMITS, parseHydroTimeLimitMs } from "./judge-limits.ts";
-import { markdownReferences } from "./markdown.ts";
+import { inspectMarkdown, markdownAttachmentName, markdownReferences } from "./markdown.ts";
 import type { HydroJudgeLimits, HydroProblemSpec, ValidationIssue, ValidationReport } from "./types.ts";
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -21,9 +21,30 @@ export function isSafeFlatName(name: string): boolean {
 export function extractAttachmentReferences(markdown: string): string[] {
 	const references = new Set<string>();
 	for (const { url } of markdownReferences(markdown)) {
-		if (/^file:\/\//iu.test(url)) references.add(url.slice(7).split(/[?#]/u)[0]);
+		if (/^file:\/\//iu.test(url)) references.add(markdownAttachmentName(url) ?? url.slice(7).split(/[?#]/u)[0]);
 	}
 	return [...references];
+}
+
+export function validateMarkdownAttachments(
+	markdown: string,
+	names: ReadonlySet<string>,
+	path = "statement",
+): ValidationIssue[] {
+	const analysis = inspectMarkdown(markdown);
+	const issues: ValidationIssue[] = analysis.diagnostics.map((diagnostic) => ({ ...diagnostic, path }));
+	for (const { node, url } of analysis.references) {
+		const name = markdownAttachmentName(url);
+		if (name && !names.has(name))
+			issues.push({
+				severity: "error",
+				code: "MISSING_ATTACHMENT",
+				path,
+				message: `The statement references missing attachment: ${name}`,
+				position: node.position,
+			});
+	}
+	return issues;
 }
 
 function addIssue(
@@ -335,16 +356,7 @@ export function validateHydroProblemSpec(
 		}
 		attachmentNames.add(attachment.name);
 	}
-	for (const reference of extractAttachmentReferences(spec.statement)) {
-		if (!attachmentNames.has(reference)) {
-			addIssue(
-				issues,
-				"MISSING_ATTACHMENT",
-				"statement",
-				`The statement references missing attachment: ${reference}`,
-			);
-		}
-	}
+	issues.push(...validateMarkdownAttachments(spec.statement, attachmentNames));
 
 	return { valid: !issues.some((issue) => issue.severity === "error"), issues };
 }

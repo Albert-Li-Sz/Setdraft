@@ -12,7 +12,12 @@ import { sandboxPolicy } from "../src/sandbox-policy.ts";
 import { cleanupSandboxStage, confirmSandboxCleanup, SandboxCleanupError } from "../src/sandbox-runtime.ts";
 import { TaskQueue } from "../src/tasks.ts";
 
-const docker = vi.hoisted(() => ({ available: false, calls: 0, spawned: false }));
+const docker = vi.hoisted(() => ({
+	available: false,
+	calls: 0,
+	spawned: false,
+	child: undefined as EventEmitter | undefined,
+}));
 vi.mock("node:child_process", async (importOriginal) => ({
 	...(await importOriginal<typeof import("node:child_process")>()),
 	spawn: vi.fn(() => {
@@ -26,6 +31,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 			},
 		});
 		docker.spawned = true;
+		docker.child = child;
 		return process;
 	}),
 	execFile: vi.fn((_file: string, _args: string[], _options: unknown, callback: (error: Error | null) => void) => {
@@ -40,6 +46,28 @@ beforeEach(async () => {
 	docker.available = false;
 	docker.calls = 0;
 	docker.spawned = false;
+	docker.child = undefined;
+});
+it.each(["close", "error"])("confirms daemon cleanup after an unexpected Docker CLI %s", async (event) => {
+	docker.available = true;
+	const running = runManualSandbox({
+		mode: "generate",
+		stage: join(root, "unexpected"),
+		image: "faux",
+		reference: { language: "python3", code: "print(1)" },
+		generatorStandard: "cpp17",
+		checkerStandard: "cpp17",
+		validatorStandard: "cpp17",
+		timeLimitMs: 1000,
+		memoryLimitMb: 256,
+		maxFileBytes: 1024,
+	});
+	const failed = expect(running).rejects.toThrow(event === "error" ? "CLI failed" : "Docker exited");
+	await vi.waitFor(() => expect(docker.spawned).toBe(true));
+	if (event === "error") docker.child?.emit("error", new Error("CLI failed"));
+	docker.child?.emit("close", 125);
+	await failed;
+	expect(docker.calls).toBeGreaterThan(0);
 });
 afterEach(async () => {
 	docker.available = true;

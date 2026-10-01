@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
+import { ExecutionScheduler } from "../src/execution-scheduler.ts";
 import { ManualProjectStore } from "../src/manual-projects.ts";
+import { sandboxPolicy } from "../src/sandbox-policy.ts";
 import { TaskQueue } from "../src/tasks.ts";
 import { rejectWrites } from "./database-setup.ts";
 
@@ -32,6 +34,45 @@ async function waitFor(queue: TaskQueue, id: string, state: "running" | "queued"
 }
 
 describe("persistent task queue", () => {
+	it("retains a completed result and admission until terminal storage recovers without rerunning", async () => {
+		const projects = new ManualProjectStore({ root });
+		const scheduler = new ExecutionScheduler(1, sandboxPolicy({}));
+		const queue = new TaskQueue(projects, new ContestStore(projects), {
+			scheduler,
+			userId: "alice",
+			enabled: async () => true,
+		});
+		queues.push(queue);
+		await queue.ready;
+		const project = await projects.create("acm");
+		const run = vi.spyOn(projects.pipeline, "generate").mockResolvedValue({
+			project,
+			report: {
+				mode: "generate",
+				success: true,
+				checks: [],
+				caseCount: 0,
+				generatedCount: 0,
+				oracleCount: 0,
+				validatorUsed: false,
+				checkerUsed: false,
+			},
+		});
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const recover = await rejectWrites("task_events", "INSERT", "type", "succeeded", "terminal unavailable");
+		const task = await queue.submit("generate", project.id);
+		await vi.waitFor(() =>
+			expect(warning).toHaveBeenCalledWith("Completed execution retained until terminal storage recovers."),
+		);
+		expect(await queue.get(task.id)).toMatchObject({ state: "running" });
+		expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 1 });
+		await recover();
+		await vi.waitFor(async () => expect((await queue.get(task.id)).state).toBe("succeeded"));
+		expect(run).toHaveBeenCalledTimes(1);
+		expect((await queue.events(task.id)).filter((event) => event.type === "succeeded")).toHaveLength(1);
+		expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+		warning.mockRestore();
+	});
 	it("persists release names across restarts and retries", async () => {
 		const projects = new ManualProjectStore({ root });
 		const project = await projects.create("acm");

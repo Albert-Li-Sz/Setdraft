@@ -110,6 +110,27 @@ function createResponseModelSseResponse(model: string, contentBlock: ResponseCon
 }
 
 describe("Anthropic raw SSE parsing", () => {
+	it.each(["\n", "\r\n", "\r"])("handles UTF-8 and %j delimiters split at every byte", async (newline) => {
+		const events = minimalAnthropicEvents.map((event) => ({ ...event, data: event.data.replace("Hello", "你好") }));
+		const bytes = new TextEncoder().encode(
+			events.map(({ event, data }) => `event: ${event}${newline}data: ${data}${newline}${newline}`).join(""),
+		);
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+				controller.close();
+			},
+		});
+		const result = await streamAnthropic(
+			getModel("anthropic", "claude-haiku-4-5"),
+			normalizeContext({ messages: [{ role: "user", content: "hello", timestamp: 1 }] }),
+			{
+				client: createFakeAnthropicClient(new Response(body, { headers: { "content-type": "text/event-stream" } })),
+			},
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "你好" }]);
+	});
 	it("keeps signed thinking replayable when a proxy relabels the model", async () => {
 		// Regression test for earendil-works/pi#9188.
 		const model = getModel("anthropic", "claude-opus-5");

@@ -21,6 +21,7 @@ test("corresponding source includes application, notices, tests and installation
   "packages/hydro-server/src/contest-pdf-worker.ts", "packages/hydro-server/assets/xcpc/lib.typ",
   "packages/hydro-server/assets/xcpc/fonts/FZSSK.ttf", "packages/hydro-server/test/contest-pdf-template.test.ts",
   "packages/hydro-web/vite.config.ts", "packages/hydro-web/public/open-source/index.html",
+  "playwright.config.mjs", "e2e/fixtures.mjs", "e2e/core.spec.mjs", "e2e/full.spec.mjs", "fixtures/markdown/statement.md",
  ]) assert.ok(files.includes(required), required);
  assert.ok(files.every((path) => !/(?:^|\/)(?:node_modules|dist|\.git|\.setdraft|\.artifacts)(?:\/|$)/u.test(path)));
 });
@@ -30,10 +31,11 @@ test("published archive omits secrets, outputs, user data and symlinks and is re
  try {
   const actual = await collectSourceFiles(root);
   const inputs = actual.filter((path) => !path.includes("/") || path.endsWith("/package.json"));
-  inputs.push("LICENSES/AGPL-3.0.txt", "scripts/build.mjs", "docs/build.md", "deploy/entry.sh", "fixtures/example.in",
+  inputs.push("LICENSES/AGPL-3.0.txt", "scripts/build.mjs", "docs/build.md", "deploy/entry.sh", "fixtures/example.in", "e2e/smoke.spec.mjs",
    ".github/workflows/ci.yml", ".husky/pre-commit", "packages/hydro-server/src/example.ts",
    "packages/hydro-server/assets/xcpc/FONT-NOTICES.md", "packages/hydro-web/public/open-source/index.html");
   const excluded = [".env", ".env.compose", ".git/config", ".setdraft/user.json", "private.json",
+   "playwright-report/index.html", "test-results/credentials.json", ".e2e/workspace/user.json",
    "packages/hydro-web/public/open-source/source.tgz", "packages/hydro-server/node_modules/private.json",
    "packages/hydro-server/src/.env.local", "packages/hydro-server/dist/example.js", "packages/hydro-server/src/credentials.pem"];
   for (const path of [...inputs, ...excluded]) {

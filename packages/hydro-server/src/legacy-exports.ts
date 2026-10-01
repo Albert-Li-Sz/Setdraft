@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises
 import { join } from "node:path";
 import { extractAttachmentReferences, parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import { formatHydroStatement } from "@setdraft/authoring/statement";
+import { exportFileName } from "./export-contract.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 
 interface SourceManifest {
@@ -27,7 +28,8 @@ ${encoded}
 std::string decode(const std::string& text) {
     const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string result;
-    int value = 0, bits = -8;
+    unsigned int value = 0;
+    int bits = -8;
     for (unsigned char character : text) {
         if (character == '=') break;
         int digit = static_cast<int>(alphabet.find(character));
@@ -82,7 +84,8 @@ int main(int argc, char** argv) {
     if (number == 0) return 1;
     std::ifstream file(argv[2], std::ios::binary);
     if (!file) return 1;
-    const std::string actual((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::string actual((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (actual.compare(0, 3, "\\xef\\xbb\\xbf") == 0) actual.erase(0, 3);
     return normalized(actual) == normalized(decode(answers[number - 1])) ? 0 : 1;
 }
 `;
@@ -136,7 +139,7 @@ export async function writeLegacyProblemExport(
 	}
 	const manifest = JSON.parse(await readFile(join(releaseRoot, "source", "manifest.json"), "utf8")) as SourceManifest;
 	if (manifest.cases.length === 0) throw new Error("发布记录没有测试点。");
-	const target = join(releaseRoot, format === "fps" ? "fps.xml" : "qduoj.zip");
+	const target = join(releaseRoot, exportFileName(format));
 	if (
 		await stat(target)
 			.then(() => true)
@@ -205,8 +208,14 @@ export async function writeLegacyProblemExport(
 			body += element("time_limit", String(parseHydroTimeLimitMs(project.timeLimit)), ' unit="ms"');
 			body += element("memory_limit", String(memoryMegabytes(project.memoryLimit)), ' unit="mb"');
 			body += element("description", formatHydroStatement(project));
-			body += element("input", "");
-			body += element("output", "");
+			body += element(
+				"input",
+				project.statementSections?.input.trim() ? project.statementSections.input : "输入要求参见完整题面。",
+			);
+			body += element(
+				"output",
+				project.statementSections?.output.trim() ? project.statementSections.output : "输出要求参见完整题面。",
+			);
 			for (const sample of project.samples) {
 				body += element("sample_input", sample.input);
 				body += element("sample_output", sample.output);

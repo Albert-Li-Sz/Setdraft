@@ -7,6 +7,7 @@ import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
+import { processIdentity, sameProcess } from "../packages/hydro-server/src/process-identity.ts";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
 
 
@@ -127,12 +128,17 @@ async function readManagedPid(name) {
 		return undefined;
 	}
 	if (!Number.isSafeInteger(value?.pid) || value.pid < 1) return undefined;
-	try {
-		process.kill(value.pid, 0);
-		return value.pid;
-	} catch {
-		return undefined;
+	if (!value.identity) {
+		try { process.kill(value.pid,0); } catch(error) {if(error.code==="ESRCH")return undefined;throw error;}
+		throw new Error(`旧 ${name} PID 记录缺少进程身份，拒绝自动停止。请确认并停止旧服务后移除 ${pidPath(name)}。`);
 	}
+	const current = processIdentity(value.pid);
+	if (!current) {
+		try { process.kill(value.pid, 0); } catch (error) { if (error.code === "ESRCH") return undefined; throw error; }
+		throw new Error(`无法确认 ${name} 进程身份，拒绝停止或覆盖 PID 记录。`);
+	}
+	if (!sameProcess(value.identity, current)) return undefined;
+	return value;
 }
 
 async function portInUse(port) {
@@ -193,15 +199,17 @@ async function startService(name) {
 		child.once("spawn", resolveSpawn);
 		child.once("error", rejectSpawn);
 	});
-	child.unref();
 	const target = pidPath(name);
 	const temporary = `${target}.${process.pid}.tmp`;
-	await writeFile(temporary, JSON.stringify({ pid: child.pid, startedAt: new Date().toISOString() }));
+	const identity = processIdentity(child.pid);
+	if (!identity) { child.kill("SIGTERM"); throw new Error("无法确认服务进程身份，请检查系统进程查询工具。"); }
+	child.unref();
+	await writeFile(temporary, JSON.stringify({ pid: child.pid, identity, startedAt: new Date().toISOString() }));
 	await rename(temporary, target);
 	try {
 		await waitForService(name);
 	} catch (error) {
-		stopPid(child.pid, true);
+		stopPid(identity, true);
 		await rm(target, { force: true });
 		throw error;
 	}
@@ -210,29 +218,32 @@ async function startService(name) {
 }
 
 async function stopService(name) {
-	const pid = await readManagedPid(name);
-	if (!pid) {
+	const managed = await readManagedPid(name);
+	if (!managed) {
 		await rm(pidPath(name), { force: true });
 		return;
 	}
-	stopPid(pid, false);
+	stopPid(managed.identity, false);
 	for (let attempt = 0; attempt < 50 && (await readManagedPid(name)); attempt++) {
 		await new Promise((resolveWait) => setTimeout(resolveWait, 100));
 	}
 	if (await readManagedPid(name)) {
-		stopPid(pid, true);
+		stopPid(managed.identity, true);
 	}
 	await rm(pidPath(name), { force: true });
 	console.log(`${name} 已停止。`);
 }
 
-function stopPid(pid, force) {
+function stopPid(identity, force) {
+	if (!sameProcess(identity)) return;
+	const pid = identity.pid;
 	if (process.platform === "win32") {
 		const result = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { cwd: root, stdio: "ignore" });
 		if (result.status !== 0 && !force) throw new Error(`无法停止进程 ${pid}。`);
 		return;
 	}
 	try {
+		if (identity.group !== pid) throw new Error("托管进程不再拥有独立进程组，拒绝停止共享进程组。");
 		process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
 	} catch (error) {
 		if (error?.code !== "ESRCH") throw error;
@@ -511,7 +522,11 @@ async function doctor() {
 }
 
 async function assertOffline() {
-	const pid = Number(await readFile(join(dataRoot, "server.pid"), "utf8").catch(() => "0"));
+	const text=await readFile(join(dataRoot,"server.pid"),"utf8").catch(()=>"0");
+	const record=text.startsWith("{")?JSON.parse(text):{pid:Number(text)};
+	const current = record.identity ? processIdentity(record.pid) : undefined;
+	if (current && !sameProcess(record.identity, current)) return;
+	const pid=record.pid;
 	if (!Number.isSafeInteger(pid) || pid < 1) return;
 	try { process.kill(pid, 0); }
 	catch (error) { if (error.code === "ESRCH") return; throw error; }
@@ -519,8 +534,14 @@ async function assertOffline() {
 }
 
 async function maintenance(command,directory) {
+ const app=new URL(process.env.SETDRAFT_DATABASE_URL || "postgresql://invalid");
+ const admin=new URL(process.env.SETDRAFT_DATABASE_ADMIN_URL || "postgresql://invalid");
+ if(!process.env.SETDRAFT_DATABASE_URL || !process.env.SETDRAFT_DATABASE_ADMIN_URL)throw new Error("原生维护需要 SETDRAFT_DATABASE_URL 和同一数据库的 SETDRAFT_DATABASE_ADMIN_URL。");
+ if(app.hostname!==admin.hostname || (app.port||"5432")!==(admin.port||"5432") || app.pathname!==admin.pathname)throw new Error("原生维护管理连接必须指向当前服务的同一 PostgreSQL 数据库。");
+ const script=join(root,"scripts/compose-maintenance.mjs");
+ run(process.execPath,[script,command,directory,"--preflight"]);
  await stopAll();await assertOffline();
- run("sh",[join(root,"scripts/setdraft-compose.sh"),command,directory]);
+ run(process.execPath,[script,command,directory]);
 }
 async function backup(directory){await maintenance("backup",directory);}
 async function restore(directory){await maintenance("restore",directory);}

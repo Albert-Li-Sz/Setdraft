@@ -5,7 +5,22 @@ import { join } from "node:path";
 import { parseEnv } from "node:util";
 import test from "node:test";
 import { composeConfiguration } from "./compose-config.mjs";
-import { deploymentEnvironment, loadDeployment } from "./deployment-config.mjs";
+import { deploymentEnvironment, loadDeployment, redact } from "./deployment-config.mjs";
+
+test("OTLP configuration survives native and Compose deployment with headers redacted", async () => {
+ const root = await mkdtemp(join(tmpdir(), "setdraft-otel-config-"));
+ try {
+  const settings = { SETDRAFT_OTEL_ENABLED: "1", OTEL_SERVICE_NAME: "setdraft-test", OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318", OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer%20private-token,tenant=secret", OTEL_EXPORTER_OTLP_TRACES_HEADERS: "api-key=private-key", OTEL_TRACES_SAMPLER_ARG: "0.5" };
+  await composeConfiguration(root, [], settings);
+  await composeConfiguration(root, [], {});
+  const compose = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  const native = deploymentEnvironment(await loadDeployment(root, {}), {});
+  for (const [key, value] of Object.entries(settings)) { assert.equal(compose[key], value); assert.equal(native[key], value); }
+  const logged = redact('OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer%20private-token,tenant=secret"\nOTEL_EXPORTER_OTLP_TRACES_HEADERS=api-key=private-key\npostgresql://user:db-secret@localhost/db');
+  assert.doesNotMatch(logged, /private-token|tenant=secret|private-key|db-secret/u);
+  assert.equal((await loadDeployment(await mkdtemp(join(root, "disabled-")), {})).values.SETDRAFT_OTEL_ENABLED, "0");
+ } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("Compose uses a fresh workspace and stable generated database credentials", async () => {
  const root = await mkdtemp(join(tmpdir(), "setdraft-config-"));

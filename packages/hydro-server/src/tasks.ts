@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
-import { isContestReadyRelease } from "@setdraft/contracts";
+import { exportContractVersion, isContestReadyRelease } from "@setdraft/contracts";
 import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
 import { EventWriter } from "./event-writer.ts";
@@ -10,8 +11,16 @@ import type { ExecutionContext } from "./execution-context.ts";
 import { type ExecutionScheduler, QueueAdmissionError } from "./execution-scheduler.ts";
 import { ManualProjectError, type ManualProjectStore } from "./manual-projects.ts";
 import { removeTaskContainer } from "./manual-sandbox.ts";
+import {
+	errorCategory,
+	NOOP_OBSERVABILITY,
+	type Observability,
+	secondsSince,
+	type TraceCarrier,
+} from "./observability.ts";
 import { type SandboxPolicy, sandboxPolicy } from "./sandbox-policy.ts";
 import { confirmSandboxCleanup, SandboxCleanupError } from "./sandbox-runtime.ts";
+import { TerminalSettlements } from "./terminal-settlements.ts";
 import type { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
@@ -28,6 +37,7 @@ interface CleanupRecord {
 	error: string;
 	attempts: number;
 	nextRetryAt: number;
+	telemetry?: TraceCarrier;
 }
 
 export class TaskQueue {
@@ -42,9 +52,11 @@ export class TaskQueue {
 	private readonly slots = new Map<string, () => void>();
 	private readonly admissions = new Map<string, () => void>();
 	private readonly running = new Set<Promise<void>>();
+	private readonly settlements = new TerminalSettlements();
 	private readonly cleanup = new Map<string, { record: CleanupRecord; resume?: () => void }>();
 	private readonly releaseSubmissions = new Map<string, Promise<TaskRecord>>();
 	readonly policy: SandboxPolicy;
+	private readonly observability: Observability;
 
 	constructor(
 		projects: ManualProjectStore,
@@ -54,9 +66,11 @@ export class TaskQueue {
 			userId: string;
 			enabled(): Promise<boolean>;
 			policy?: SandboxPolicy;
+			observability?: Observability;
 		},
 	) {
 		this.scheduling = scheduling;
+		this.observability = scheduling?.observability ?? projects.observability ?? NOOP_OBSERVABILITY;
 		this.policy = scheduling?.policy ?? sandboxPolicy({});
 		this.projects = projects;
 		this.contests = contests;
@@ -94,7 +108,12 @@ export class TaskQueue {
 		for (const record of await this.database.list<CleanupRecord>("sandbox-cleanup")) {
 			const resume = this.scheduling?.scheduler.pause(`cleanup:${this.scheduling.userId}:${record.taskId}`);
 			// Startup fails closed if Docker cannot confirm removal of a retained container.
-			await confirmSandboxCleanup(record);
+			await this.observability.withPropagation(record.telemetry, () =>
+				this.observability.startSpan(
+					{ name: "sandbox.cleanup", attributes: { "task.id": record.taskId, "task.recovered": true } },
+					() => confirmSandboxCleanup(record),
+				),
+			);
 			await this.database.transaction(async () => {
 				await this.finish(record.taskId, record.finalState, undefined, record.error);
 				await this.database.delete("sandbox-cleanup", record.taskId);
@@ -104,8 +123,25 @@ export class TaskQueue {
 		for (const task of await this.list()) {
 			if (task.state === "queued") this.reserve(task, true);
 			if (task.state === "running") {
-				await removeTaskContainer(task.id);
-				await this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
+				const options = await this.database.get<{ telemetry?: TraceCarrier }>("task-options", task.id);
+				await this.observability.withPropagation(options?.telemetry, () =>
+					this.observability.startSpan(
+						{
+							name: "task.recover",
+							attributes: { "task.id": task.id, "task.kind": task.kind, "task.recovered": true },
+						},
+						async (span) => {
+							await removeTaskContainer(task.id);
+							await this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
+							span.setAttributes({ "task.state": "interrupted" });
+							span.setStatus({ status: "error" });
+							this.observability.metric("setdraft.task.results", 1, {
+								"task.kind": task.kind,
+								"task.state": "interrupted",
+							});
+						},
+					),
+				);
 			}
 		}
 	}
@@ -117,14 +153,16 @@ export class TaskQueue {
 		for (const controller of this.controllers.values()) controller.abort();
 		for (const id of this.slots.keys()) if (!this.controllers.has(id) && !this.cleanup.has(id)) this.releaseSlot(id);
 		for (const id of this.admissions.keys())
-			if (!this.controllers.has(id) && !this.cleanup.has(id)) this.releaseAdmission(id);
+			if (!this.controllers.has(id) && !this.cleanup.has(id) && !this.settlements.has(id)) this.releaseAdmission(id);
 	}
 
 	async idle(): Promise<void> {
 		while (this.running.size || this.pumping) {
-			if (this.running.size) await Promise.all([...this.running]);
+			if (this.running.size) await Promise.allSettled([...this.running]);
 			else await new Promise((resolve) => setTimeout(resolve, 10));
 		}
+		await this.settlements.flush();
+		if (this.closed) this.settlements.stop();
 	}
 	async cancelAll(): Promise<void> {
 		const rows = (await this.database.sql.all(
@@ -159,10 +197,11 @@ export class TaskQueue {
 	private async fingerprint(kind: TaskKind, resource: string): Promise<string> {
 		if (kind === "image-build") return digest({ image: this.projects.image });
 		if (kind === "release-export") {
-			const { name: _name, ...content } = await this.projects.releases.release(resource);
-			return digest({ content, format: "domjudge", version: 1 });
+			const { name: _name, exports: _exports, ...content } = await this.projects.releases.release(resource);
+			return digest({ content, format: "domjudge", version: exportContractVersion });
 		}
-		if (kind === "contest-export") return digest(await this.database.get("contest", resource));
+		if (kind === "contest-export")
+			return digest({ content: await this.database.get("contest", resource), version: exportContractVersion });
 		return digest({
 			project: await this.database.get("project", resource),
 			files: [
@@ -242,7 +281,11 @@ export class TaskQueue {
 					"INSERT INTO tasks (id,kind,resource,format,state,fingerprint,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
 					[task.id, task.kind, task.resource, task.format ?? null, task.state, task.fingerprint, now, now],
 				);
-				await this.database.put("task-options", task.id, { releaseName, resourceTitle });
+				await this.database.put("task-options", task.id, {
+					releaseName,
+					resourceTitle,
+					telemetry: this.observability.capture(),
+				});
 				await this.emit(task.id, "queued", "任务已排队。", { kind, resourceId });
 			});
 		} catch (error) {
@@ -389,6 +432,7 @@ export class TaskQueue {
 			return task.state;
 		});
 		if (state === "queued") {
+			await this.recordQueueEnd(id, "cancelled");
 			this.waiting.get(id)?.abort();
 			this.controllers.get(id)?.abort();
 			this.releaseSlot(id);
@@ -398,6 +442,27 @@ export class TaskQueue {
 			this.controllers.get(id)?.abort();
 		}
 		return await this.get(id);
+	}
+
+	private async recordQueueEnd(id: string, result: "cancelled" | "timeout"): Promise<void> {
+		const task = await this.get(id, false);
+		const options = await this.database.get<{ telemetry?: TraceCarrier }>("task-options", id);
+		const wait = Math.max(0, (Date.now() - Date.parse(task.createdAt)) / 1000);
+		const labels = { "task.kind": task.kind, "task.state": task.state, "operation.result": result };
+		await this.observability.withPropagation(options?.telemetry, () =>
+			this.observability.startSpan(
+				{ name: "task.queue.end", attributes: { ...labels, "task.id": id, "task.queue_wait": wait } },
+				(span) => {
+					span.setStatus({ status: "error" });
+					this.observability.metric("setdraft.queue.wait", wait, {
+						"queue.kind": "sandbox",
+						"task.kind": task.kind,
+					});
+					this.observability.metric("setdraft.task.results", 1, labels);
+					this.observability.log("task.queue.end", { ...labels, "task.id": id });
+				},
+			),
+		);
 	}
 
 	async retry(id: string): Promise<TaskRecord> {
@@ -423,6 +488,7 @@ export class TaskQueue {
 		])) as Array<{ id: string }>;
 		for (const task of expired) {
 			if (!(await this.finish(task.id, "failed", undefined, "排队超过时间上限，请稍后重试。", true))) continue;
+			await this.recordQueueEnd(task.id, "timeout");
 			this.waiting.get(task.id)?.abort();
 			this.releaseSlot(task.id);
 			this.releaseAdmission(task.id);
@@ -448,7 +514,12 @@ export class TaskQueue {
 			const record = pending.record;
 			if (record.attempts >= 8 || Date.now() < record.nextRetryAt) continue;
 			try {
-				await confirmSandboxCleanup(record);
+				await this.observability.withPropagation(record.telemetry, () =>
+					this.observability.startSpan(
+						{ name: "sandbox.cleanup", attributes: { "task.id": id, "task.attempt": record.attempts + 1 } },
+						() => confirmSandboxCleanup(record),
+					),
+				);
 				await this.database.transaction(async () => {
 					await this.finish(id, record.finalState, undefined, record.error);
 					await this.database.delete("sandbox-cleanup", id);
@@ -520,14 +591,73 @@ export class TaskQueue {
 	}
 
 	private async execute(task: TaskRecord, controller: AbortController): Promise<void> {
+		const options = await this.database.get<{ telemetry?: TraceCarrier }>("task-options", task.id);
+		await this.observability.withPropagation(options?.telemetry, () =>
+			this.observability.startSpan(
+				{ name: "task.execute", attributes: { "task.id": task.id, "task.kind": task.kind } },
+				async (span) => {
+					const start = performance.now();
+					const wait = Math.max(0, (Date.now() - Date.parse(task.createdAt)) / 1000);
+					span.setAttributes({ "task.queue_wait": wait });
+					this.observability.metric("setdraft.queue.wait", wait, {
+						"queue.kind": "sandbox",
+						"task.kind": task.kind,
+					});
+					try {
+						await this.executeAttempt(task, controller, span);
+					} finally {
+						const current = await this.get(task.id).catch(() => ({ ...task, state: "running" as const }));
+						const state = this.settlements.has(task.id)
+							? "settlement-pending"
+							: current.cleanupPending
+								? "cleanup-pending"
+								: current.state;
+						const report =
+							current.result && typeof current.result === "object" && "report" in current.result
+								? current.result.report
+								: undefined;
+						const validationFailed =
+							report && typeof report === "object" && "success" in report && report.success === false;
+						const labels = {
+							"task.kind": task.kind,
+							"task.state": state,
+							"operation.result": validationFailed
+								? "validation_failed"
+								: state === "failed" && current.error?.includes("时间上限")
+									? "timeout"
+									: state,
+						};
+						span.setAttributes(labels);
+						if (state !== "succeeded" || validationFailed) span.setStatus({ status: "error" });
+						this.observability.metric("setdraft.task.duration", secondsSince(start), labels);
+						this.observability.metric("setdraft.task.results", 1, labels);
+						this.observability.log("task.complete", { ...labels, "task.id": task.id });
+					}
+				},
+			),
+		);
+	}
+
+	private async executeAttempt(task: TaskRecord, controller: AbortController, span: TelemetrySpan): Promise<void> {
 		const resourceId = task.resource.split(":")[1] ?? "";
 		let timeout: NodeJS.Timeout | undefined;
 		let timedOut = false;
 		let settled = false;
 		const events = new EventWriter(() => controller.abort());
 		const end = async (state: TaskState, result?: unknown, error?: string) => {
-			await this.finish(task.id, state, result, error);
 			settled = true;
+			await this.settlements.settle(task.id, async () => {
+				await this.database.transaction(async () => {
+					const cancelled = state === "succeeded" && (await this.cancellationRequested(task.id));
+					await this.finish(
+						task.id,
+						cancelled ? "cancelled" : state,
+						cancelled ? undefined : result,
+						cancelled ? "任务已取消。" : error,
+					);
+				});
+				this.releaseAdmission(task.id);
+			});
 		};
 		try {
 			const started = await this.database.transaction(async () => {
@@ -560,6 +690,7 @@ export class TaskQueue {
 			}
 			const context: ExecutionContext = {
 				id: task.id,
+				observability: this.observability,
 				signal: controller.signal,
 				emit: (type, message, data) => events.append(() => this.emit(task.id, type, message, data)),
 			};
@@ -577,10 +708,13 @@ export class TaskQueue {
 			await events.flush();
 			if (timedOut) await end("failed", undefined, "任务运行超过时间上限，请检查程序后重试。");
 			else if (this.closed) await end("interrupted", undefined, "服务进程中断；可以重试此任务。");
-			else if (await this.cancellationRequested(task.id, controller.signal))
-				await end("cancelled", undefined, "任务已取消。");
+			else if (controller.signal.aborted) await end("cancelled", undefined, "任务已取消。");
 			else await end("succeeded", result);
 		} catch (error) {
+			span.setAttributes({
+				"error.type": timedOut ? "TimeoutError" : errorCategory(error),
+				"operation.result": timedOut ? "timeout" : controller.signal.aborted ? "cancelled" : "error",
+			});
 			if (error instanceof SandboxCleanupError) {
 				const cancelled = controller.signal.aborted;
 				const record: CleanupRecord = {
@@ -595,6 +729,7 @@ export class TaskQueue {
 							: "沙箱执行失败，容器清理已确认。",
 					attempts: 0,
 					nextRetryAt: Date.now() + 1000,
+					telemetry: this.observability.capture(),
 				};
 				const resume = this.scheduling?.scheduler.pause(`cleanup:${this.scheduling.userId}:${task.id}`);
 				this.cleanup.set(task.id, { record, resume });
@@ -611,7 +746,7 @@ export class TaskQueue {
 				return;
 			}
 			await events.flush().catch(() => undefined);
-			const cancelled = await this.cancellationRequested(task.id, controller.signal);
+			const cancelled = controller.signal.aborted;
 			await end(
 				timedOut ? "failed" : this.closed ? "interrupted" : cancelled ? "cancelled" : "failed",
 				undefined,
@@ -630,7 +765,7 @@ export class TaskQueue {
 			this.controllers.delete(task.id);
 			if (!this.cleanup.has(task.id)) {
 				this.releaseSlot(task.id);
-				if (settled || this.closed) this.releaseAdmission(task.id);
+				if (!this.settlements.has(task.id) && (settled || this.closed)) this.releaseAdmission(task.id);
 			}
 			this.wake();
 		}

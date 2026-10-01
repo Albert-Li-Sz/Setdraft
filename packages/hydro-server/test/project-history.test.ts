@@ -109,6 +109,33 @@ async function fixture(structuredStatement = false) {
 }
 
 describe("problem copies and release restoration", () => {
+	it("binds restoration to the version loaded before an intervening successful edit", async () => {
+		const { project, release } = await fixture();
+		const concurrent = new ManualProjectStore({ root: source.root });
+		const load = source.load.bind(source);
+		vi.spyOn(source, "load").mockImplementationOnce(async (id) => {
+			const old = await load(id);
+			await concurrent.update(id, { title: "winning edit", expectedRevision: old.revision });
+			return old;
+		});
+		await expect(restoreProject(source, project.id, release.id, project.revision)).rejects.toMatchObject({
+			statusCode: 409,
+		});
+		expect((await source.snapshot(project.id)).title).toBe("winning edit");
+	});
+	it("rejects copying when the captured source changes before the target commit", async () => {
+		const { project } = await fixture();
+		const concurrent = new ManualProjectStore({ root: source.root });
+		const commit = target.database.commitFiles.bind(target.database);
+		vi.spyOn(target.database, "commitFiles").mockImplementationOnce(async (files, apply, owners) => {
+			await concurrent.update(project.id, { title: "new source", expectedRevision: project.revision });
+			await commit(files, apply, owners);
+		});
+		await expect(copyProject(source, project.id, target, project.revision)).rejects.toMatchObject({
+			statusCode: 409,
+		});
+		expect(await target.list()).toEqual([]);
+	});
 	it("copies current content and all test origins independently, excluding releases and reports", async () => {
 		const { project } = await fixture(true);
 		const copied = await copyProject(source, project.id, target, project.revision);

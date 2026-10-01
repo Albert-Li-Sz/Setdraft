@@ -24,4 +24,9 @@ test("CI and every image push depend on the same full source and Linux sandbox c
 	assert.match(verify, /SETDRAFT_REQUIRE_SANDBOX: '1'/u);
 	assert.match(verify, /SETDRAFT_DATABASE_URL: postgresql:\/\/setdraft_app:/u);
 	assert.match(verify, /node packages\/hydro-server\/dist\/migrate-cli.js/u);
+	assert.match(publish, /full-e2e: true/u);
+	assert.match(verify, /if: matrix.node == 24 && !inputs.full-e2e/u);
+	assert.match(verify, /if: inputs.full-e2e/u);
+	assert.match(verify, /run: npm run test:e2e:full/u);
+	assert.match(verify, /run: npm run test:e2e\n/u);
 });

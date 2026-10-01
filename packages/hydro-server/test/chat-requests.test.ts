@@ -8,6 +8,7 @@ import { chatPolicy } from "../src/chat-policy.ts";
 import { ChatRequestQueue } from "../src/chat-requests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
 import { WorkspaceDatabase } from "../src/workspace-db.ts";
+import { rejectWrites } from "./database-setup.ts";
 
 let root: string;
 
@@ -48,6 +49,98 @@ async function waitFor(
 }
 
 describe("persisted chat requests", () => {
+	it("retains the final model body when saving the assistant fails and commits it once storage recovers", async () => {
+		let recover: (() => Promise<void>) | undefined;
+		const client = vi.fn(async () => {
+			recover = await rejectWrites("documents", "UPDATE", "kind", "chat", "assistant unavailable");
+			return { text: "complete final body", finishReason: "length" as const, complete: false };
+		});
+		const chat = await configuredChat(client);
+		const database = new WorkspaceDatabase(root);
+		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
+		const conversation = await chat.create(),
+			id = randomUUID();
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			await queue.submit(conversation.id, id, "question");
+			await vi.waitFor(() =>
+				expect(warning).toHaveBeenCalledWith("Completed execution retained until terminal storage recovers."),
+			);
+			expect((await chat.get(conversation.id)).messages.map((message) => message.role)).toEqual(["user"]);
+			expect((await queue.get(id, conversation.id)).state).toBe("running");
+			await recover?.();
+			recover = undefined;
+			await waitFor(queue, conversation.id, id, "done");
+			expect(client).toHaveBeenCalledTimes(1);
+			expect((await chat.get(conversation.id)).messages.at(-1)).toMatchObject({
+				content: "complete final body",
+				finishReason: "length",
+				complete: false,
+			});
+			expect((await queue.events(id, conversation.id, 0)).filter((event) => event.type === "done")).toHaveLength(1);
+		} finally {
+			await recover?.();
+			warning.mockRestore();
+			await queue.close();
+		}
+	});
+	it("rejects retrying an old failed turn after a later completed conversation turn", async () => {
+		const client = vi.fn(async () => {
+			if (client.mock.calls.length === 1) throw new Error("failed A");
+			return "answer B";
+		});
+		const chat = await configuredChat(client),
+			database = new WorkspaceDatabase(root);
+		const queue = new ChatRequestQueue(database, chat);
+		await queue.ready;
+		const conversation = await chat.create(),
+			first = randomUUID(),
+			second = randomUUID();
+		try {
+			await queue.submit(conversation.id, first, "question A");
+			await waitFor(queue, conversation.id, first, "failed");
+			await queue.submit(conversation.id, second, "question B");
+			await waitFor(queue, conversation.id, second, "done");
+			await expect(queue.retry(conversation.id, first, randomUUID())).rejects.toMatchObject({ statusCode: 409 });
+			expect((await chat.get(conversation.id)).messages.map((message) => message.content)).toEqual([
+				"question A",
+				"question B",
+				"answer B",
+			]);
+			expect(client).toHaveBeenCalledTimes(2);
+		} finally {
+			await queue.close();
+		}
+	});
+	it("retries terminal persistence after a completed model call without sending a second request", async () => {
+		const client = vi.fn(async () => "retained reply");
+		const chat = await configuredChat(client);
+		const database = new WorkspaceDatabase(root);
+		const scheduler = new ExecutionScheduler(1, chatPolicy());
+		const queue = new ChatRequestQueue(database, chat, { scheduler, userId: "alice", enabled: async () => true });
+		await queue.ready;
+		const conversation = await chat.create();
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const recover = await rejectWrites("chat_request_events", "INSERT", "type", "done", "terminal unavailable");
+		const id = randomUUID();
+		try {
+			await queue.submit(conversation.id, id, "question");
+			await vi.waitFor(() =>
+				expect(warning).toHaveBeenCalledWith("Completed execution retained until terminal storage recovers."),
+			);
+			expect((await queue.get(id, conversation.id)).state).toBe("running");
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 1 });
+			await recover();
+			await waitFor(queue, conversation.id, id, "done");
+			expect(client).toHaveBeenCalledTimes(1);
+			expect((await queue.events(id, conversation.id, 0)).filter((event) => event.type === "done")).toHaveLength(1);
+			expect(scheduler.status("alice").outstanding).toBe(0);
+		} finally {
+			warning.mockRestore();
+			await queue.close();
+		}
+	});
 	it("keeps future-attempt cancellation sticky across a queue restart and ignores an old stop", async () => {
 		const client = vi.fn(
 			async ({ signal }: { signal?: AbortSignal }) =>
@@ -82,6 +175,7 @@ describe("persisted chat requests", () => {
 			await queue.retry(conversation.id, id, nextAttempt);
 			await vi.waitFor(() => expect(client).toHaveBeenCalledTimes(2));
 			await queue.cancel(conversation.id, id, id);
+			await expect(queue.cancel(conversation.id, id)).rejects.toMatchObject({ statusCode: 409 });
 			expect(await queue.get(id, conversation.id)).toMatchObject({ state: "running", attemptId: nextAttempt });
 			await queue.cancel(conversation.id, id, nextAttempt);
 			await waitFor(queue, conversation.id, id, "failed");

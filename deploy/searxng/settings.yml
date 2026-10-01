@@ -1,15 +1,14 @@
 use_default_settings:
   engines:
-    keep_only: [bing, duckduckgo, brave, baidu]
+    keep_only: [bing, 360search]
 engines:
   - name: bing
     disabled: false
-  - name: duckduckgo
+    # Verified from the native/Compose network on 2026-10-01.
+    base_url: https://cn.bing.com
+  - name: 360search
     disabled: false
-  - name: brave
-    disabled: false
-  - name: baidu
-    disabled: false
+    timeout: 8.0
 search:
   formats: [json]
   safe_search: 1

@@ -8,7 +8,7 @@ import { ManualProjectError } from "./project-error.ts";
 import { hashFile } from "./project-files.ts";
 import type { WorkspaceFile } from "./workspace-db.ts";
 
-function checkRevision(project: ManualProjectSnapshot, expected: unknown): void {
+function checkRevision(project: Pick<ManualProjectSnapshot, "revision">, expected: unknown): void {
 	if (!Number.isSafeInteger(expected) || Number(expected) < 0)
 		throw new ManualProjectError("请提供当前题目版本。", 422);
 	if (project.revision !== expected)
@@ -25,9 +25,15 @@ export async function copyProject(
 ): Promise<ManualProjectSnapshot> {
 	const unlock = await source.lock(id);
 	try {
-		const snapshot = await source.snapshot(id);
-		checkRevision(snapshot, expectedRevision);
-		const version = await source.database.version("project", id);
+		const { snapshot, version, entries } = await source.database.transaction(async () => {
+			const snapshot = await source.snapshot(id);
+			checkRevision(snapshot, expectedRevision);
+			if (snapshot.dataIssues?.length) throw new ManualProjectError("请先修复冲突测试文件。", 422);
+			const entries = [];
+			for (const kind of ["manual", "generated", "pdf"] as const)
+				for (const file of await source.database.fileEntries(kind, id)) entries.push({ kind, ...file });
+			return { snapshot, version: await source.database.version("project", id), entries };
+		});
 		const { cases: _cases, orphanOutputs: _orphans, ...content } = snapshot;
 		const newId = randomUUID();
 		const now = new Date().toISOString();
@@ -41,25 +47,30 @@ export async function copyProject(
 			lastReport: undefined,
 		};
 		const files: WorkspaceFile[] = [];
-		for (const kind of ["manual", "generated"] as const) {
-			for (const file of await source.database.fileEntries(kind, id)) {
+		for (const file of entries) {
+			if (file.kind !== "pdf") {
 				if (file.size > target.maxFileBytes) throw new ManualProjectError("测试数据超过接收工作区限制。", 413);
 				files.push({
-					ownerKind: kind,
+					ownerKind: file.kind,
 					ownerId: newId,
 					name: file.name,
-					source: { path: await source.dataFile(id, kind, file.name) },
+					source: { path: join(source.root, "blobs", file.hash.slice(0, 2), file.hash) },
 				});
 			}
 		}
-		if ((await source.projectDataBytes(id)) > target.maxProjectBytes)
+		if (
+			entries.filter((file) => file.kind !== "pdf").reduce((sum, file) => sum + file.size, 0) >
+			target.maxProjectBytes
+		)
 			throw new ManualProjectError("测试数据超过接收工作区限制。", 413);
-		if (project.domjudgePdf)
+		const pdf = entries.find((file) => file.kind === "pdf" && file.name === "problem.pdf");
+		if (project.domjudgePdf && !pdf) throw new ManualProjectError("题目 PDF 文件缺失，无法复制。", 422);
+		if (project.domjudgePdf && pdf)
 			files.push({
 				ownerKind: "pdf",
 				ownerId: newId,
 				name: "problem.pdf",
-				source: { path: (await source.domjudgePdfFile(id)).path },
+				source: { path: join(source.root, "blobs", pdf.hash.slice(0, 2), pdf.hash) },
 			});
 		await mkdir(join(target.projectDirectory(newId), "manual"), { recursive: true });
 		await target.database.commitFiles(files, async () => {
@@ -87,8 +98,8 @@ export async function restoreProject(
 	if (release.projectId !== id) throw new ManualProjectError("发布包不存在。", 404);
 	const unlock = await projects.lock(id);
 	try {
-		checkRevision(await projects.snapshot(id), expectedRevision);
 		const current = await projects.load(id);
+		checkRevision(current, expectedRevision);
 		const root = join(projects.releaseDirectory(releaseId), "source");
 		const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as {
 			projectId?: unknown;

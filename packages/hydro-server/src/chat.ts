@@ -3,6 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Api, Context, ImageContent, Message, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
+import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage, SearchSnapshot } from "@setdraft/contracts";
 import {
 	AiConfigurationStore,
@@ -11,11 +12,12 @@ import {
 	type StoredConfiguration,
 } from "./ai-configuration.ts";
 import { ChatError } from "./chat-error.ts";
+import { NOOP_OBSERVABILITY, type Observability, secondsSince } from "./observability.ts";
 
 export type { ChatConfigurationSnapshot, ChatProfileSnapshot } from "./ai-configuration.ts";
 export { ChatError } from "./chat-error.ts";
 
-import type { WebSearch } from "./web-search.ts";
+import { SearchFailure, type WebSearch } from "./web-search.ts";
 import { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage, SearchSnapshot } from "@setdraft/contracts";
@@ -25,6 +27,7 @@ export interface ChatModelRequest {
 	context: Context;
 	signal?: AbortSignal;
 	onDelta(delta: string): void;
+	telemetryContext?: TelemetryContext;
 }
 
 export interface ChatSendEvents {
@@ -33,7 +36,22 @@ export interface ChatSendEvents {
 	onDelta(delta: string): void;
 }
 
-export type ChatModelClient = (request: ChatModelRequest) => Promise<string | { text: string; usage?: Usage }>;
+export interface ChatModelReply {
+	text: string;
+	usage?: Usage;
+	finishReason?: ChatMessage["finishReason"];
+	complete?: boolean;
+}
+export type ChatModelClient = (request: ChatModelRequest) => Promise<string | ChatModelReply>;
+
+/** Completed model output stays owned by the queue while storage is unavailable. */
+export class ChatCompletionPending extends Error {
+	readonly commit: () => Promise<ChatConversation>;
+	constructor(commit: () => Promise<ChatConversation>) {
+		super("对话已生成，正在等待存储恢复。");
+		this.commit = commit;
+	}
+}
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -79,7 +97,7 @@ function decodeImages(images: ChatImageUpload[]): Array<{ image: ChatImage; byte
 	});
 }
 
-async function defaultClient(request: ChatModelRequest): Promise<{ text: string; usage?: Usage }> {
+async function defaultClient(request: ChatModelRequest): Promise<ChatModelReply> {
 	const configuration = request.configuration;
 	const protocol = protocols.find((item) => item.id === configuration.provider);
 	if (!protocol) throw new ChatError("AI 协议无效。", 422);
@@ -111,25 +129,36 @@ async function defaultClient(request: ChatModelRequest): Promise<{ text: string;
 		apiKey: configuration.apiKey,
 		maxTokens: configuration.maxTokens,
 		signal: request.signal,
+		telemetryContext: request.telemetryContext,
 	});
-	let output = "";
 	for await (const event of stream) {
 		if (event.type === "text_delta") {
-			output += event.delta;
 			request.onDelta(event.delta);
 		}
-		if (event.type === "error") throw new ChatError(event.error.errorMessage ?? "AI 请求失败。", 502);
 	}
 	const final = await stream.result();
-	if (final.stopReason === "error" || final.stopReason === "aborted") {
+	const refused =
+		Boolean(final.refusal) || ["refusal", "content_filter", "sensitive"].includes(final.rawStopReason ?? "");
+	if ((final.stopReason === "error" && !refused) || final.stopReason === "aborted") {
 		throw new ChatError(final.errorMessage ?? "AI 请求失败。", 502);
 	}
-	if (!output)
-		output = final.content
-			.filter((item) => item.type === "text")
-			.map((item) => item.text)
-			.join("");
-	return { text: output, usage: final.usage };
+	const text = final.content
+		.filter((item) => item.type === "text")
+		.map((item) => item.text)
+		.join("");
+	const finishReason = refused
+		? "refusal"
+		: final.stopReason === "length"
+			? "length"
+			: final.stopReason === "toolUse"
+				? "toolUse"
+				: "stop";
+	return {
+		text: text || (refused ? (final.errorMessage ?? "模型拒绝了本次请求。") : ""),
+		usage: final.usage,
+		finishReason,
+		complete: finishReason !== "length" && finishReason !== "toolUse",
+	};
 }
 
 export class ChatService {
@@ -137,6 +166,7 @@ export class ChatService {
 	private readonly database: WorkspaceDatabase;
 	readonly configuration: AiConfigurationStore;
 	private readonly client: ChatModelClient;
+	private readonly observability: Observability;
 	private readonly search?: { service: WebSearch; userId: string };
 	private get catalog() {
 		return this.configuration.catalog;
@@ -151,6 +181,7 @@ export class ChatService {
 		database?: WorkspaceDatabase;
 		configuration?: AiConfigurationStore;
 		search?: { service: WebSearch; userId: string };
+		observability?: Observability;
 	}) {
 		this.root = resolve(options.root);
 		this.database = options.database ?? new WorkspaceDatabase(this.root);
@@ -165,6 +196,7 @@ export class ChatService {
 				resolve(options.configPath),
 			);
 		this.client = options.client ?? defaultClient;
+		this.observability = options.observability ?? NOOP_OBSERVABILITY;
 		this.search = options.search;
 	}
 
@@ -179,6 +211,7 @@ export class ChatService {
 		database: WorkspaceDatabase,
 		configuration: AiConfigurationStore,
 		search?: { service: WebSearch; userId: string },
+		observability: Observability = this.observability,
 	): ChatService {
 		return new ChatService({
 			root,
@@ -187,6 +220,7 @@ export class ChatService {
 			client: this.client,
 			configuration,
 			search,
+			observability,
 		});
 	}
 	async testProfile(
@@ -226,12 +260,64 @@ export class ChatService {
 	async clearConfiguration(): Promise<ChatConfigurationSnapshot> {
 		return await this.configuration.clearConfiguration();
 	}
-	private async invoke(request: ChatModelRequest): Promise<string | { text: string; usage?: Usage }> {
-		try {
-			return await this.client(request);
-		} catch {
-			throw new ChatError(request.signal?.aborted ? "对话已取消。" : "AI 请求失败，请联系管理员检查模型配置。", 502);
-		}
+	private async invoke(request: ChatModelRequest): Promise<string | ChatModelReply> {
+		return this.observability.startSpan(
+			{ name: "ai.request", attributes: { "gen_ai.system": request.configuration.provider } },
+			async (span) => {
+				const start = performance.now();
+				let firstToken = false;
+				let result = "error";
+				try {
+					const reply = await this.client({
+						...request,
+						telemetryContext: span,
+						onDelta: (delta) => {
+							if (delta && !firstToken) {
+								firstToken = true;
+								this.observability.metric("setdraft.ai.first_token", secondsSince(start), {
+									"gen_ai.system": request.configuration.provider,
+								});
+							}
+							request.onDelta(delta);
+						},
+					});
+					request.signal?.throwIfAborted();
+					const usage = typeof reply === "string" ? undefined : reply.usage;
+					if (usage) {
+						span.setAttributes({
+							"gen_ai.usage.input_tokens": usage.input,
+							"gen_ai.usage.output_tokens": usage.output,
+							"gen_ai.usage.cache_read_tokens": usage.cacheRead,
+							"gen_ai.usage.cache_write_tokens": usage.cacheWrite,
+						});
+						for (const [type, value] of Object.entries({
+							input: usage.input,
+							output: usage.output,
+							cache_read: usage.cacheRead,
+							cache_write: usage.cacheWrite,
+						}))
+							this.observability.metric("setdraft.ai.tokens", value, {
+								"gen_ai.system": request.configuration.provider,
+								"token.type": type,
+							});
+					}
+					result = "ok";
+					return reply;
+				} catch {
+					result = request.signal?.aborted ? "cancelled" : "error";
+					throw new ChatError(
+						request.signal?.aborted ? "对话已取消。" : "AI 请求失败，请联系管理员检查模型配置。",
+						502,
+					);
+				} finally {
+					span.setAttributes({ "operation.result": result });
+					this.observability.metric("setdraft.ai.duration", secondsSince(start), {
+						"gen_ai.system": request.configuration.provider,
+						"operation.result": result,
+					});
+				}
+			},
+		);
 	}
 	private chatPath(id: string): string {
 		if (!/^[a-f0-9-]{36}$/u.test(id)) throw new ChatError("对话不存在。", 404);
@@ -382,6 +468,8 @@ export class ChatService {
 			const previousUser = requestId
 				? chat.messages.find((item) => item.role === "user" && item.requestId === requestId)
 				: undefined;
+			if (previousUser && chat.messages.at(-1) !== previousUser)
+				throw new ChatError("此失败请求已有后续对话，请发送新消息。", 409);
 			const now = new Date().toISOString();
 			const user: ChatMessage = {
 				id: requestId ?? randomUUID(),
@@ -413,6 +501,7 @@ export class ChatService {
 			events.onStart({ ...chat, messages: [...chat.messages] });
 			let search: SearchSnapshot | undefined;
 			let searchError: string | undefined;
+			let searchStatus: ChatMessage["searchStatus"];
 			if (webSearch) {
 				const query = (searchQuery?.trim() || message.trim()).slice(0, 500);
 				events.onSearch?.("searching", query);
@@ -425,11 +514,13 @@ export class ChatService {
 						query,
 						signal,
 					);
+					searchStatus = search.diagnostics?.status;
 					events.onSearch?.("complete", query);
 				} catch (error) {
 					signal?.throwIfAborted();
 					searchError =
 						error instanceof ChatError ? error.message : "联网搜索暂时不可用，本次回复未使用网络资料。";
+					searchStatus = error instanceof SearchFailure ? error.diagnostics.status : "configuration";
 					events.onSearch?.("failed", query, searchError);
 				}
 			}
@@ -512,15 +603,36 @@ export class ChatService {
 				content: answer,
 				search,
 				searchError,
+				searchStatus,
 				createdAt: new Date().toISOString(),
 				profileId: configuration.id,
 				modelId: configuration.modelId,
 				api: configuration.provider,
 				requestId,
 				usage: typeof reply === "string" ? undefined : reply.usage,
+				finishReason: typeof reply === "string" ? undefined : reply.finishReason,
+				complete: typeof reply === "string" ? undefined : (reply.complete ?? reply.finishReason !== "length"),
 			});
 			chat.updatedAt = new Date().toISOString();
-			await this.save(chat);
+			const expectedVersion = this.documentVersions.get(chat);
+			try {
+				await this.save(chat);
+			} catch (error) {
+				if (error instanceof ChatError) throw error;
+				throw new ChatCompletionPending(async () => {
+					const current = await this.get(id);
+					if (
+						requestId &&
+						current.messages.some((item) => item.role === "assistant" && item.requestId === requestId)
+					)
+						return current;
+					if (this.documentVersions.get(current) !== expectedVersion)
+						throw new ChatError("对话已变化，请刷新后重试。", 409);
+					if (expectedVersion !== undefined) this.documentVersions.set(chat, expectedVersion);
+					await this.save(chat);
+					return chat;
+				});
+			}
 			return chat;
 		} finally {
 			this.busy.delete(id);

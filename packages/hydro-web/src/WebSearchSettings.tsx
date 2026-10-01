@@ -1,4 +1,5 @@
-import { useContext, useEffect, useState } from "react";
+import type { SearchDiagnosticReport, SearchDiagnostics, SearchHealth } from "@setdraft/contracts";
+import { useContext, useEffect, useRef, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { useLocale } from "./i18n.tsx";
 import { apiUrl } from "./platform.ts";
@@ -10,7 +11,20 @@ interface Configuration {
 	dailyLimit: number;
 	available: boolean;
 	apiKeyConfigured: boolean;
+	health?: SearchDiagnostics;
 }
+const healthLabels: Record<SearchHealth, string> = {
+	healthy: "搜索健康",
+	partial: "部分引擎不可用",
+	"no-match": "没有匹配结果",
+	"engines-unavailable": "上游引擎不可用",
+	"filtered-empty": "候选资料过滤后为空",
+	configuration: "配置未就绪",
+	timeout: "搜索超时",
+	network: "出站连接失败",
+	http: "上游 HTTP 错误",
+	"invalid-response": "上游响应格式错误",
+};
 export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 	const { t } = useLocale();
 	const paused = useContext(WorkspacePausedContext);
@@ -18,8 +32,14 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 	const [apiKey, setApiKey] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
+	const [report, setReport] = useState<SearchDiagnosticReport>();
+	const action = useRef<AbortController | undefined>(undefined);
 	useEffect(() => {
-		if (paused) return;
+		if (paused) {
+			action.current?.abort();
+			setBusy(false);
+			return;
+		}
 		const controller = new AbortController();
 		setMessage("");
 		void requestJson<Configuration>(apiUrl(apiOrigin, "/ai/search"), { signal: controller.signal })
@@ -27,38 +47,55 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 			.catch((error) => {
 				if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "搜索配置读取失败。");
 			});
-		return () => controller.abort();
+		return () => {
+			controller.abort();
+			action.current?.abort();
+		};
 	}, [apiOrigin, paused]);
 	async function save() {
 		if (!config) return;
 		setBusy(true);
 		setMessage("");
+		const controller = new AbortController();
+		action.current = controller;
 		try {
 			setConfig(
 				await requestJson<Configuration>(apiUrl(apiOrigin, "/ai/search"), {
 					method: "PUT",
 					headers: { "content-type": "application/json" },
+					signal: controller.signal,
 					body: JSON.stringify({ ...config, apiKey }),
 				}),
 			);
+			if (controller.signal.aborted) return;
 			setApiKey("");
+			setReport(undefined);
 			setMessage("搜索配置已保存。");
 		} catch (error) {
-			setMessage(error instanceof Error ? error.message : "搜索配置保存失败。");
+			if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "搜索配置保存失败。");
 		} finally {
-			setBusy(false);
+			if (action.current === controller) setBusy(false);
 		}
 	}
-	async function test() {
+	async function test(language: "zh" | "en") {
 		setBusy(true);
 		setMessage("");
+		const controller = new AbortController();
+		action.current = controller;
 		try {
-			await requestJson(apiUrl(apiOrigin, "/ai/search"), { method: "POST" });
-			setMessage("搜索连接正常。");
+			const value = await requestJson<SearchDiagnosticReport>(apiUrl(apiOrigin, "/ai/search/diagnostics"), {
+				method: "POST",
+				signal: controller.signal,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ language }),
+			});
+			if (controller.signal.aborted) return;
+			setReport(value);
+			setMessage(healthLabels[value.aggregate.status]);
 		} catch (error) {
-			setMessage(error instanceof Error ? error.message : "搜索连接失败。");
+			if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "搜索连接失败。");
 		} finally {
-			setBusy(false);
+			if (action.current === controller) setBusy(false);
 		}
 	}
 	return (
@@ -75,6 +112,10 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						void save();
 					}}
 				>
+					<p className="settings-help">
+						{t(config.available ? "配置已就绪，搜索健康需主动诊断。" : "配置未就绪")}
+						{config.health && ` · ${t(healthLabels[config.health.status])}`}
+					</p>
 					<label className="search-settings-toggle">
 						<input
 							type="checkbox"
@@ -126,12 +167,73 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 							className="button secondary"
 							type="button"
 							disabled={busy || !config.available}
-							onClick={() => void test()}
+							onClick={() => void test("zh")}
 						>
-							{t("测试连接")}
+							{t("中文诊断")}
+						</button>
+						<button
+							className="button secondary"
+							type="button"
+							disabled={busy || !config.available}
+							onClick={() => void test("en")}
+						>
+							{t("英文诊断")}
 						</button>
 					</div>
 				</form>
+			)}
+			{report && (
+				<div className="search-diagnostics">
+					<p>
+						{t(
+							"耗时 {0} ms · 候选 {1} · 接受 {2}",
+							report.aggregate.durationMs,
+							report.aggregate.candidateCount,
+							report.aggregate.acceptedCount,
+						)}
+					</p>
+					<table>
+						<thead>
+							<tr>
+								<th>{t("引擎")}</th>
+								<th>{t("状态")}</th>
+								<th>ms</th>
+								<th>{t("候选 / 接受")}</th>
+							</tr>
+						</thead>
+						<tbody>
+							{report.engines.map(({ name, diagnostics }) => (
+								<tr key={name}>
+									<td>{name}</td>
+									<td>
+										{t(healthLabels[diagnostics.status])}
+										{diagnostics.engines.map((engine) => ` · ${engine.category}`).join("")}
+									</td>
+									<td>{diagnostics.durationMs}</td>
+									<td>
+										{diagnostics.candidateCount} / {diagnostics.acceptedCount}
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+					<button
+						className="button secondary"
+						type="button"
+						onClick={() => {
+							const url = URL.createObjectURL(
+								new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
+							);
+							const link = document.createElement("a");
+							link.href = url;
+							link.download = "setdraft-search-diagnostics.json";
+							link.click();
+							URL.revokeObjectURL(url);
+						}}
+					>
+						{t("下载脱敏诊断")}
+					</button>
+				</div>
 			)}
 			{message && (
 				<output className="notice pending" aria-live="polite">

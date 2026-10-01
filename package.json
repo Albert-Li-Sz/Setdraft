@@ -11,6 +11,8 @@
 		"test": "npm run test:scripts && npm run test:hydro",
 		"test:hydro": "npm run test --workspace=@earendil-works/pi-ai && npm run test --workspace=@earendil-works/pi-telemetry && npm run test --workspace=@setdraft/authoring && npm run test --workspace=@setdraft/server && npm run test --workspace=@setdraft/web",
 		"test:scripts": "node --test scripts/hydro-local.test.mjs scripts/compose-config.test.mjs scripts/compose-installer.test.mjs scripts/searxng.test.mjs scripts/check-runtime-deps.test.mjs scripts/release-gates.test.mjs scripts/package-source.test.mjs",
+		"test:e2e": "node scripts/test-e2e.mjs",
+		"test:e2e:full": "node scripts/test-e2e.mjs --full",
 		"dev:hydro-api": "npm run dev --workspace=@setdraft/server",
 		"dev:hydro-web": "npm run dev --workspace=@setdraft/web",
 		"hydro:validate:fixture": "tsx packages/hydro-authoring/src/cli.ts validate fixtures/hydro/a-plus-b/hydro/a-plus-b",
@@ -27,6 +29,7 @@
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",
 		"@biomejs/biome": "2.3.5",
+		"@playwright/test": "1.63.0",
 		"@types/node": "22.19.19",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
 		"esbuild": "0.28.2",
@@ -38,7 +41,7 @@
 	"engines": {
 		"node": ">=22.19.0"
 	},
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"overrides": {
 		"protobufjs": "7.6.6"
 	}

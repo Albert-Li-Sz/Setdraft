@@ -41,6 +41,14 @@ function includesNodePackage(inputs, packageName) {
 }
 
 try {
+	const markdown = await build({
+		entryPoints: ["scripts/markdown-browser-smoke-entry.ts"], bundle: true, platform: "browser", format: "esm", conditions: ["source"],
+		logLevel: "silent", metafile: true, write: false,
+	});
+	for (const input of Object.keys(markdown.metafile.inputs)) {
+		if (normalizePath(input).includes("node_modules/@opentelemetry/") || normalizePath(input).includes("packages/hydro-server/"))
+			throw new Error(`Shared Markdown browser bundle includes a server dependency: ${input}`);
+	}
 	await build({
 		entryPoints: ["scripts/browser-smoke-entry.ts"],
 		bundle: true,

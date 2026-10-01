@@ -15,6 +15,23 @@ function deferred<T>() {
 afterEach(() => vi.useRealTimers());
 
 describe("project editing session", () => {
+	it("resaves a patch after a newer GET overtakes its older PUT acknowledgement", async () => {
+		const first = deferred<ProjectSnapshot>();
+		const save = vi.fn(async (project: ProjectSnapshot) => ({ ...project, revision: project.revision + 1 }));
+		save.mockImplementationOnce(() => first.promise);
+		const session = new ProjectSession(save);
+		session.open(projectFixture());
+		session.edit((project) => ({ ...project, title: "local patch" }));
+		const flight = session.flush();
+		await Promise.resolve();
+		session.accept(projectFixture({ revision: 3, title: "server", orphanOutputs: ["2.out"] }));
+		first.resolve(projectFixture({ revision: 2, title: "local patch" }));
+		await flight;
+		expect(save).toHaveBeenCalledTimes(2);
+		expect(save.mock.calls[1][0]).toMatchObject({ revision: 3, title: "local patch", orphanOutputs: ["2.out"] });
+		expect(session.getSnapshot()).toMatchObject({ status: "saved", project: { revision: 4, title: "local patch" } });
+		session.dispose();
+	});
 	it("preserves newly assigned server cases while saving a concurrent program edit", async () => {
 		const save = vi.fn(async (project: ProjectSnapshot) => ({ ...project, revision: project.revision + 1 }));
 		const session = new ProjectSession(save);

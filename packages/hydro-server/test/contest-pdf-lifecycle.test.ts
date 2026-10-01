@@ -121,7 +121,7 @@ it("rejects oversized attachments and decompression dimensions inside the worker
 
 it("accepts basic SVG with local gradients and rejects complex or externally referenced SVG", async () => {
 	const supported =
-		'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40"><defs><linearGradient id="shade"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect width="120" height="40" fill="url(#shade)"/><text x="8" y="24">Safe SVG</text></svg>';
+		'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" role="img" aria-labelledby="title" aria-describedby="description"><title id="title">Diagram</title><desc id="description">Local gradient</desc><defs><linearGradient id="shade"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect width="120" height="40" fill="url(#shade)"/><text x="8" y="24">Safe SVG</text></svg>';
 	const withSvg = (svg: string) => ({
 		...pdfFixture,
 		problems: [

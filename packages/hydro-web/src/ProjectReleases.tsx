@@ -1,3 +1,4 @@
+import { requiresReverification } from "@setdraft/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
@@ -143,12 +144,15 @@ export function ProjectReleases({
 									{new Date(release.createdAt).toLocaleString(locale)}
 								</p>
 							</div>
-							<span className="release-verified">{t("已验证")}</span>
+							<span className="release-verified">
+								{t(requiresReverification(release) ? "历史报告 · 须重新验证" : "已验证")}
+							</span>
 						</div>
 						<div className="release-card-actions">
 							<div className="history-actions">
 								<a href={apiUrl(apiOrigin, `/releases/${release.id}/hydro`)} download>
 									{t("Hydro 包")}
+									{requiresReverification(release) && ` · ${t("原历史包")}`}
 								</a>
 								<a href={apiUrl(apiOrigin, `/releases/${release.id}/source`)} download>
 									{t("制题工程")}

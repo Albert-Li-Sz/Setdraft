@@ -2,6 +2,7 @@ import { editableStatementSections, formatHydroStatement } from "@setdraft/autho
 import type { ProjectSnapshot, StatementSections } from "@setdraft/contracts";
 import { useId, useRef, useState } from "react";
 import { createClientId } from "./browser-capabilities.ts";
+import { EditorSplit } from "./EditorSplit.tsx";
 import { useLocale } from "./i18n.tsx";
 import { ProblemPreview } from "./ProblemPreview.tsx";
 
@@ -81,7 +82,7 @@ export function StatementEditor({
 					{t("旧版完整题面保留在“描述”中。编辑后按分栏排版，可将输入、输出和提示移到对应栏目。")}
 				</p>
 			)}
-			<div className="editor-grid">
+			<EditorSplit>
 				<div
 					className="editor-pane"
 					role="tabpanel"
@@ -199,7 +200,7 @@ export function StatementEditor({
 					</div>
 					<ProblemPreview project={project} />
 				</div>
-			</div>
+			</EditorSplit>
 		</div>
 	);
 }

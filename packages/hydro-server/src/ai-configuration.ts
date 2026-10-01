@@ -118,11 +118,20 @@ export class AiConfigurationStore {
 	private configurationError?: string;
 	private readonly storage: { read(): unknown; write(value: StoredCatalog): Promise<void> | void };
 	private readonly configPath: string;
+	private mutations: Promise<unknown> = Promise.resolve();
+	private serialize<T>(run: () => Promise<T>): Promise<T> {
+		const next = this.mutations.then(run);
+		this.mutations = next.catch(() => undefined);
+		return next;
+	}
 	constructor(storage: { read(): unknown; write(value: StoredCatalog): Promise<void> | void }, configPath: string) {
 		this.storage = storage;
 		this.configPath = configPath;
 	}
 	async load(): Promise<void> {
+		return this.serialize(() => this.loadLocked());
+	}
+	private async loadLocked(): Promise<void> {
 		try {
 			const stored = await this.storage.read();
 			if (stored !== undefined) this.catalog = readStoredCatalog(stored);
@@ -158,6 +167,9 @@ export class AiConfigurationStore {
 		this.configurationError = undefined;
 	}
 	async configure(value: unknown): Promise<ChatConfigurationSnapshot> {
+		return this.serialize(() => this.configureLocked(value));
+	}
+	private async configureLocked(value: unknown): Promise<ChatConfigurationSnapshot> {
 		if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ChatError("AI 配置无效。");
 		const candidate = value as Record<string, unknown>;
 		if (candidate.id !== undefined && typeof candidate.id !== "string") throw new ChatError("AI 配置 ID 无效。");
@@ -184,27 +196,32 @@ export class AiConfigurationStore {
 	}
 
 	async setDefaultProfile(id: string): Promise<ChatConfigurationSnapshot> {
+		return this.serialize(() => this.setDefaultLocked(id));
+	}
+	private async setDefaultLocked(id: string): Promise<ChatConfigurationSnapshot> {
 		if (!this.catalog.profiles.some((item) => item.id === id)) throw new ChatError("AI 配置不存在。", 404);
 		await this.saveCatalog({ ...this.catalog, defaultProfileId: id });
 		return this.getConfiguration();
 	}
 
 	async removeProfile(id: string): Promise<ChatConfigurationSnapshot> {
+		return this.serialize(() => this.removeLocked(id));
+	}
+	private async removeLocked(id: string): Promise<ChatConfigurationSnapshot> {
 		if (!this.catalog.profiles.some((item) => item.id === id)) throw new ChatError("AI 配置不存在。", 404);
 		const profiles = this.catalog.profiles.filter((item) => item.id !== id);
-		if (profiles.length === 0) return await this.clearConfiguration();
 		await this.saveCatalog({
 			version: 2,
 			profiles,
-			defaultProfileId: this.catalog.defaultProfileId === id ? profiles[0].id : this.catalog.defaultProfileId,
+			defaultProfileId: this.catalog.defaultProfileId === id ? profiles[0]?.id : this.catalog.defaultProfileId,
 		});
 		return this.getConfiguration();
 	}
 
 	async clearConfiguration(): Promise<ChatConfigurationSnapshot> {
-		this.catalog = { version: 2, profiles: [] };
-		await this.storage.write(this.catalog);
-		this.configurationError = undefined;
-		return this.getConfiguration();
+		return this.serialize(async () => {
+			await this.saveCatalog({ version: 2, profiles: [] });
+			return this.getConfiguration();
+		});
 	}
 }

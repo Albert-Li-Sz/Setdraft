@@ -1,17 +1,12 @@
+import { markdownAttachmentName, safeMarkdownUrl } from "@setdraft/authoring/markdown";
 import { formatHydroStatement } from "@setdraft/authoring/statement";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
+import { MarkdownView } from "./MarkdownView.tsx";
 import type { ProjectSnapshot } from "./platform.ts";
 
 type PreviewProject = Pick<
 	ProjectSnapshot,
 	"statement" | "statementSections" | "judgingMode" | "samples" | "attachments"
 >;
-
-const remarkPlugins = [remarkGfm, remarkMath];
-const rehypePlugins = [rehypeKatex];
 
 const attachmentMimeTypes: Readonly<Record<string, string>> = {
 	gif: "image/gif",
@@ -28,12 +23,12 @@ export function ProblemPreview({ project }: { project: PreviewProject }) {
 	const attachments = new Map(project.attachments.map((item) => [item.name, item.contentBase64]));
 	return (
 		<div className="problem-preview">
-			<ReactMarkdown
-				remarkPlugins={remarkPlugins}
-				rehypePlugins={rehypePlugins}
+			<MarkdownView
+				profile="statement"
 				urlTransform={(url, _key, node) => {
-					if (!url.startsWith("file://")) return defaultUrlTransform(url);
-					const name = url.slice("file://".length);
+					if (!/^file:\/\//iu.test(url)) return safeMarkdownUrl(url);
+					const name = markdownAttachmentName(url);
+					if (!name) return null;
 					const content = attachments.get(name);
 					if (content === undefined) return null;
 					const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
@@ -43,7 +38,7 @@ export function ProblemPreview({ project }: { project: PreviewProject }) {
 				}}
 			>
 				{formatHydroStatement(project)}
-			</ReactMarkdown>
+			</MarkdownView>
 		</div>
 	);
 }

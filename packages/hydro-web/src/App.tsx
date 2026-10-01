@@ -98,8 +98,31 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			session.pause();
 			selection.current?.abort();
 			setBusy(undefined);
-		} else session.resume();
-	}, [paused, session]);
+			return;
+		}
+		const controller = new AbortController();
+		const current = session.getSnapshot().project;
+		const signal = session.signal;
+		void (async () => {
+			try {
+				if (current) {
+					const latest = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `/projects/${current.id}`), {
+						signal: controller.signal,
+					});
+					if (!controller.signal.aborted && !signal.aborted) {
+						session.accept(latest);
+						setReport(session.getSnapshot().status === "saved" ? latest.lastReport : undefined);
+					}
+				}
+			} catch (error) {
+				if (!controller.signal.aborted)
+					showNotice(error instanceof Error ? error.message : "题目读取失败。", "failed");
+			} finally {
+				if (!controller.signal.aborted && !signal.aborted) session.resume();
+			}
+		})();
+		return () => controller.abort();
+	}, [paused, session, showNotice]);
 	const logout = async () => {
 		await saveNow();
 		await authClient.logout();
@@ -167,7 +190,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	}, []);
 
 	useEffect(() => {
-		const updatePage = (): void => setPage(pageFromHash(window.location.hash));
+		const updatePage = (): void => {
+			selection.current?.abort();
+			setPage(pageFromHash(window.location.hash));
+		};
 		window.addEventListener("hashchange", updatePage);
 		return () => window.removeEventListener("hashchange", updatePage);
 	}, []);
@@ -211,10 +237,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			controller.signal.throwIfAborted();
 			const created = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, "/projects"), {
 				method: "POST",
-				signal: controller.signal,
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ scoringMode }),
 			});
+			setProjects((items) => [created, ...items.filter((item) => item.id !== created.id)]);
 			controller.signal.throwIfAborted();
 			await saveNow();
 			controller.signal.throwIfAborted();
@@ -625,7 +651,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				currentProjectId={project?.id}
 				busy={!!busy || !!deletingProjectId}
 				taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)}
-				onNew={() => setChoosingScoringMode(true)}
+				onNew={() => {
+					selection.current?.abort();
+					setChoosingScoringMode(true);
+				}}
 				onOpen={openProject}
 			>
 				{/* Keep the user-scoped chat and its stream alive across route changes. */}
@@ -685,7 +714,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								sandbox={sandbox}
 								message={recordsMessage || undefined}
 								messageTone={recordsTone}
-								onNew={() => setChoosingScoringMode(true)}
+								onNew={() => {
+									selection.current?.abort();
+									setChoosingScoringMode(true);
+								}}
 								onOpen={openProject}
 							/>
 						))}
@@ -703,7 +735,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 							onCopy={setCopyingProject}
 						/>
 					)}
-					{page === "contests" && <ContestsPage apiOrigin={apiOrigin} />}
+					{page === "contests" && <ContestsPage apiOrigin={apiOrigin} paused={paused} />}
 					{page === "authoring-guide" && <AuthoringGuide />}
 					{page === "tasks" && <TasksPage apiOrigin={apiOrigin} paused={paused} />}
 					{page === "settings" && <SettingsPage user={user} />}
@@ -726,7 +758,10 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			<UploadProgressDialog />
 			<Dialog
 				open={choosingScoringMode}
-				onClose={() => setChoosingScoringMode(false)}
+				onClose={() => {
+					selection.current?.abort();
+					setChoosingScoringMode(false);
+				}}
 				labelledBy="scoring-mode-title"
 			>
 				<div className="confirmation-heading">
@@ -755,7 +790,14 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 					</button>
 				</div>
 				<div className="confirmation-actions">
-					<button className="button secondary" type="button" onClick={() => setChoosingScoringMode(false)}>
+					<button
+						className="button secondary"
+						type="button"
+						onClick={() => {
+							selection.current?.abort();
+							setChoosingScoringMode(false);
+						}}
+					>
 						{t("取消")}
 					</button>
 				</div>

@@ -5,6 +5,7 @@ import { ChatService } from "./chat.ts";
 import { workspaceRoot as resolveWorkspaceRoot } from "./environment.ts";
 import { IdentityStore } from "./identity.ts";
 import { ManualProjectStore } from "./manual-projects.ts";
+import { createObservability } from "./observability.ts";
 import { acquireApplicationLease, closeDatabasePools } from "./postgres.ts";
 import { createHydroServer } from "./server.ts";
 import { acquireServerLock } from "./server-lock.ts";
@@ -32,6 +33,7 @@ const identity = new IdentityStore(workspaceRoot);
 if (!(await identity.isInitialized()))
 	console.log(`Setdraft 一次性安装码（24 小时有效）：${await identity.rotateSetupToken()}`);
 const database = new WorkspaceDatabase(workspaceRoot);
+const observability = createObservability();
 const projects = new ManualProjectStore({
 	root: workspaceRoot,
 	database,
@@ -39,9 +41,11 @@ const projects = new ManualProjectStore({
 	judgeLimits,
 	maxFileBytes: Number(process.env.SETDRAFT_CASE_MAX_BYTES ?? 64 * 1024 * 1024),
 	maxProjectBytes: Number(process.env.SETDRAFT_PROJECT_MAX_BYTES ?? 512 * 1024 * 1024),
+	observability,
 });
 const chat = new ChatService({
 	root: workspaceRoot,
+	observability,
 	database,
 	configPath: process.env.SETDRAFT_AI_CONFIG_PATH
 		? resolve(projectRoot, process.env.SETDRAFT_AI_CONFIG_PATH)
@@ -55,6 +59,7 @@ const server = await createHydroServer({
 	staticRoot: process.env.SETDRAFT_WEB_ROOT === undefined ? undefined : resolve(process.env.SETDRAFT_WEB_ROOT),
 	projects,
 	chat,
+	observability,
 });
 server.listen(portValue, host, () => {
 	console.log(`Setdraft Web/API listening on http://${host}:${portValue}`);
@@ -67,6 +72,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const)
 			void server.closeWorkspaces().finally(async () => {
 				await releaseDatabaseLease();
 				await closeDatabasePools();
+				await observability.shutdown();
 				identity.close();
 				process.exit(0);
 			});

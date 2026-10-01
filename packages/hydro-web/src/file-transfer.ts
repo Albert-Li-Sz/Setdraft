@@ -31,8 +31,12 @@ export const transfers = {
 	},
 };
 
-export async function transferFiles<T>(name: string, work: (report: Reporter) => Promise<T>): Promise<T> {
-	if (current?.state === "running") throw new Error("请等待当前文件处理完成。");
+export async function transferFiles<T>(
+	name: string,
+	work: (report: Reporter) => Promise<T>,
+	replace = false,
+): Promise<T> {
+	if (current?.state === "running" && !replace) throw new Error("请等待当前文件处理完成。");
 	const id = ++generation;
 	publish({ name, state: "running", phase: "reading" });
 	const report: Reporter = (progress) => {
@@ -87,12 +91,20 @@ export function readFileWithProgress(
 	});
 }
 
-export async function readSourceFile(file: File): Promise<string> {
-	return transferFiles(file.name, async (report) =>
-		new TextDecoder().decode(
-			await readFileWithProgress(file, (loaded) =>
-				report({ phase: "reading", file: file.name, loaded, total: file.size }),
-			),
-		),
+export async function readSourceFile(file: File, signal?: AbortSignal): Promise<string> {
+	return transferFiles(
+		file.name,
+		async (report) => {
+			const text = new TextDecoder().decode(
+				await readFileWithProgress(
+					file,
+					(loaded) => report({ phase: "reading", file: file.name, loaded, total: file.size }),
+					signal,
+				),
+			);
+			signal?.throwIfAborted();
+			return text;
+		},
+		true,
 	);
 }

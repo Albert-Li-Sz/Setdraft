@@ -22,6 +22,7 @@ import type {
 	ManualSandboxReport,
 	ManualVerificationReport,
 } from "@setdraft/contracts";
+import { verificationContractVersion } from "@setdraft/contracts";
 import { effectiveChecker } from "./acm-checker.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
@@ -391,6 +392,7 @@ export class ProjectPipeline {
 			context?.signal.throwIfAborted();
 			const report: ManualVerificationReport = {
 				...sandbox,
+				verificationContractVersion,
 				revision: project.revision,
 				projectHash: await this.projectHash(project, storedCases),
 				issues: structural.issues,
@@ -429,9 +431,14 @@ export class ProjectPipeline {
 			const directoryReport = await validateHydroDirectory(hydroRoot, { judgeLimits: this.projects.judgeLimits });
 			if (!directoryReport.valid)
 				throw new ManualProjectError(directoryReport.issues.map((item) => item.message).join("\n"), 422);
-			await writeHydroDirectoryArchive(hydroRoot, join(releaseDirectory, "hydro.zip"), {
-				judgeLimits: this.projects.judgeLimits,
-			});
+			const hydroArchive = join(releaseDirectory, "hydro.zip");
+			await (context?.observability ?? this.projects.observability).startSpan(
+				{ name: "release.export", attributes: { "export.format": "hydro", "project.id": id } },
+				() =>
+					writeHydroDirectoryArchive(hydroRoot, hydroArchive, {
+						judgeLimits: this.projects.judgeLimits,
+					}),
+			);
 
 			const sourceRoot = join(releaseDirectory, "source");
 			await mkdir(sourceRoot, { recursive: true });

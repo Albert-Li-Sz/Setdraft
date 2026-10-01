@@ -10,7 +10,7 @@ import type {
 	ValidationIssue,
 	ValidationReport,
 } from "./types.ts";
-import { extractAttachmentReferences, isSafeFlatName, isValidHydroLimit } from "./validation.ts";
+import { isSafeFlatName, isValidHydroLimit, validateMarkdownAttachments } from "./validation.ts";
 
 const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -590,16 +590,7 @@ export async function validateHydroDirectory(
 		if (statement === undefined) continue;
 		if (statement.trim().length === 0)
 			addIssue(issues, "EMPTY_STATEMENT", statementFile, "Problem statement cannot be empty.");
-		for (const reference of extractAttachmentReferences(statement)) {
-			if (!attachments.files.has(reference)) {
-				addIssue(
-					issues,
-					"MISSING_ATTACHMENT",
-					statementFile,
-					`Statement references missing attachment: ${reference}`,
-				);
-			}
-		}
+		issues.push(...validateMarkdownAttachments(statement, new Set(attachments.files.keys()), statementFile));
 	}
 
 	if (budget.files > maxFiles)

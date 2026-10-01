@@ -38,7 +38,7 @@ afterAll(async () => {
 
 /** A real PostgreSQL failure verifies rollback, rather than mocking the transaction under test. */
 export async function rejectWrites(
-	table: "documents" | "task_events",
+	table: "documents" | "task_events" | "chat_request_events",
 	event: "INSERT" | "UPDATE",
 	column: "kind" | "type",
 	value: string,

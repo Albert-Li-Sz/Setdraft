@@ -1,12 +1,10 @@
 import { type ComponentProps, memo, useEffect, useMemo, useState } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
+import type { Components } from "react-markdown";
 import { copyText } from "./browser-capabilities.ts";
 import { highlightCode } from "./code-language.ts";
 import { Icon } from "./Icon.tsx";
 import { useLocale } from "./i18n.tsx";
+import { MarkdownView } from "./MarkdownView.tsx";
 
 function ChatCodeBlock({
 	code,
@@ -100,9 +98,9 @@ const components: Components = {
 export const ChatMarkdown = memo(function ChatMarkdown({ content }: { content: string }) {
 	return (
 		<div className="manual-chat-markdown">
-			<ReactMarkdown components={components} remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+			<MarkdownView profile="chat" components={components}>
 				{content}
-			</ReactMarkdown>
+			</MarkdownView>
 		</div>
 	);
 });

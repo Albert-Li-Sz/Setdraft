@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authFetch } from "./auth-client.ts";
 import { ContestPdfEditor } from "./ContestPdfEditor.tsx";
@@ -140,9 +140,10 @@ function labelAt(index: number): string {
 
 interface Props {
 	apiOrigin: string;
+	paused?: boolean;
 }
 
-export function ContestsPage({ apiOrigin }: Props) {
+export function ContestsPage({ apiOrigin, paused = false }: Props) {
 	const { t, locale } = useLocale();
 	const [contests, setContests] = useState<ContestDraft[]>([]);
 	const [draft, setDraft] = useState<ContestDraft>();
@@ -151,6 +152,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 	const [title, setTitle] = useState("");
 	const [slug, setSlug] = useState("");
 	const [candidateId, setCandidateId] = useState("");
+	const [view, setView] = useState("list");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState<UiMessage>("");
 	const [deleteOpen, setDeleteOpen] = useState(false);
@@ -159,16 +161,24 @@ export function ContestsPage({ apiOrigin }: Props) {
 	const [exportFormat, setExportFormat] = useState<"hydro" | "domjudge">();
 	const [bundleName, setBundleName] = useState("");
 	const [pdfDirty, setPdfDirty] = useState(false);
-
+	const scope = useRef(0);
+	const mutations = useRef(0);
 	useEffect(() => {
+		scope.current++;
+		setBusy(false);
+		if (paused)
+			return () => {
+				scope.current++;
+			};
 		let cancelled = false;
+		const revision = mutations.current;
 		void Promise.all([
 			requestJson<{ contests: ContestDraft[] }>(apiUrl(apiOrigin, "/contests")),
 			requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, "/releases")),
 			requestJson<{ releases: ContestRelease[] }>(apiUrl(apiOrigin, "/contest-releases")),
 		])
 			.then(([contestResult, problemResult, bundleResult]) => {
-				if (cancelled) return;
+				if (cancelled || revision !== mutations.current) return;
 				setContests(contestResult.contests);
 				setReleases(problemResult.releases);
 				setBundles(bundleResult.releases);
@@ -181,10 +191,13 @@ export function ContestsPage({ apiOrigin }: Props) {
 			});
 		return () => {
 			cancelled = true;
+			scope.current++;
 		};
-	}, [apiOrigin]);
+	}, [apiOrigin, paused]);
 
 	async function create(): Promise<void> {
+		const owner = scope.current;
+		mutations.current++;
 		setBusy(true);
 		try {
 			const created = await requestJson<ContestDraft>(apiUrl(apiOrigin, "/contests"), {
@@ -192,20 +205,24 @@ export function ContestsPage({ apiOrigin }: Props) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title, slug }),
 			});
+			if (owner !== scope.current) return;
 			setContests((items) => [created, ...items]);
 			setDraft(created);
+			setView("detail");
 			setTitle("");
 			setSlug("");
 			setCreateOpen(false);
 			setMessage("竞赛已创建，选择已验证的题目版本加入。");
 		} catch (error) {
-			setMessage(error instanceof Error ? error.message : "新建竞赛失败。");
+			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "新建竞赛失败。");
 		} finally {
-			setBusy(false);
+			if (owner === scope.current) setBusy(false);
 		}
 	}
 
 	async function update(next: ContestDraft): Promise<void> {
+		const owner = scope.current;
+		mutations.current++;
 		setBusy(true);
 		try {
 			const saved = await requestJson<ContestDraft>(apiUrl(apiOrigin, `/contests/${next.id}`), {
@@ -221,17 +238,19 @@ export function ContestsPage({ apiOrigin }: Props) {
 					pdf: next.pdf,
 				}),
 			});
+			if (owner !== scope.current) return;
 			setDraft(saved);
 			setContests((items) => items.map((item) => (item.id === saved.id ? saved : item)));
 			setMessage("竞赛已保存。");
 		} catch (error) {
-			setMessage(error instanceof Error ? error.message : "保存竞赛失败。");
+			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "保存竞赛失败。");
 		} finally {
-			setBusy(false);
+			if (owner === scope.current) setBusy(false);
 		}
 	}
 
 	async function exportBundle(format: "hydro" | "domjudge"): Promise<void> {
+		const owner = scope.current;
 		if (!draft || !bundleName.trim() || pdfDirty) return;
 		setExportFormat(undefined);
 		setBusy(true);
@@ -246,31 +265,35 @@ export function ContestsPage({ apiOrigin }: Props) {
 				},
 			);
 			const result = await waitForTask<ContestRelease>(apiOrigin, accepted.task.id);
+			if (owner !== scope.current) return;
 			setBundles((items) => [result, ...items]);
 			setHistoryOpen(result.contestId);
 			setMessage(uiMessage("{0} 竞赛包已生成，可在下方下载。", format === "hydro" ? "Hydro" : "DOMjudge"));
 		} catch (error) {
-			setMessage(error instanceof Error ? error.message : "竞赛导出失败。");
+			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "竞赛导出失败。");
 		} finally {
-			setBusy(false);
+			if (owner === scope.current) setBusy(false);
 		}
 	}
 
 	async function remove(): Promise<void> {
+		const owner = scope.current;
+		mutations.current++;
 		if (!draft) return;
 		setBusy(true);
 		try {
 			const response = await authFetch(apiUrl(apiOrigin, `/contests/${draft.id}`), { method: "DELETE" });
 			if (!response.ok) throw new Error(responseError(await response.json()));
+			if (owner !== scope.current) return;
 			const remaining = contests.filter((item) => item.id !== draft.id);
 			setContests(remaining);
 			setDraft(remaining[0]);
 			setDeleteOpen(false);
 			setMessage("竞赛已删除。");
 		} catch (error) {
-			setMessage(error instanceof Error ? error.message : "删除竞赛失败。");
+			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "删除竞赛失败。");
 		} finally {
-			setBusy(false);
+			if (owner === scope.current) setBusy(false);
 		}
 	}
 
@@ -303,6 +326,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 					<button
 						className="button primary"
 						type="button"
+						disabled={busy}
 						onClick={() => {
 							setTitle("");
 							setSlug("");
@@ -319,7 +343,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 					{t(message)}
 				</output>
 			)}
-			<div className="contest-layout">
+			<div className="contest-layout" data-view={view}>
 				<aside className="card contest-sidebar">
 					<h2>{t("竞赛列表")}</h2>
 					<div className="contest-list">
@@ -331,6 +355,7 @@ export function ContestsPage({ apiOrigin }: Props) {
 								type="button"
 								onClick={() => {
 									setDraft(item);
+									setView("detail");
 									setCandidateId("");
 								}}
 							>
@@ -348,6 +373,9 @@ export function ContestsPage({ apiOrigin }: Props) {
 					</div>
 				</aside>
 				<section className="card contest-main">
+					<button className="button secondary contest-back" type="button" onClick={() => setView("list")}>
+						{t("返回竞赛列表")}
+					</button>
 					{draft ? (
 						<>
 							<div className="manual-section-heading">

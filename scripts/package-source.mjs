@@ -5,13 +5,13 @@ import { fileURLToPath } from "node:url";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootFiles = [
- "package.json", "package-lock.json", "tsconfig.json", "tsconfig.base.json", "vitest.base.ts", "biome.json",
+ "package.json", "package-lock.json", "tsconfig.json", "tsconfig.base.json", "vitest.base.ts", "playwright.config.mjs", "biome.json",
  "Dockerfile", ".dockerignore", ".gitignore", ".gitattributes", ".npmrc", ".env.example", "compose.yaml", "compose.build.yaml",
  "LICENSE", "COPYING.md", "README.md", "UPSTREAM.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md",
  "install.sh", "upgrade.sh", "uninstall.sh",
 ];
 const packageNames = ["ai", "telemetry", "hydro-contracts", "hydro-authoring", "hydro-server", "hydro-web"];
-const omitted = new Set(["node_modules", "dist", "coverage", ".git", ".setdraft", ".hydro-problem-make", ".artifacts", ".DS_Store"]);
+const omitted = new Set(["node_modules", "dist", "coverage", ".git", ".setdraft", ".hydro-problem-make", ".artifacts", "playwright-report", "test-results", ".e2e", ".DS_Store"]);
 const extensions = /\.(?:[cm]?[jt]sx?|css|html|json|md|typ|toml|ya?ml|sh|svg|png|jpe?g|gif|wasm|otf|ttf|txt|h|c|cc|cpp|py|java|in|out|ans)$/u;
 
 export async function collectSourceFiles(root) {
@@ -33,7 +33,7 @@ export async function collectSourceFiles(root) {
   }
  }
  for (const name of rootFiles) await visit(name, true);
- for (const directory of ["LICENSES", "scripts", "docs", "deploy", "fixtures", ".github", ".husky"]) await visit(directory, true);
+ for (const directory of ["LICENSES", "scripts", "docs", "deploy", "fixtures", "e2e", ".github", ".husky"]) await visit(directory, true);
  for (const name of packageNames) {
   const directory = `packages/${name}`;
   await visit(`${directory}/package.json`, true);

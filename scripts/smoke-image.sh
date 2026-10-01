@@ -24,6 +24,7 @@ case "$COMPONENT" in
       node --input-type=module -e "import {migrateDatabase} from \"./packages/hydro-server/dist/database-schema.js\"; if(typeof migrateDatabase !== \"function\") process.exit(1);"
       test -f scripts/compose-maintenance.mjs
     '
+    node scripts/test-maintenance.mjs "$IMAGE"
     ;;
   web)
     NAME="setdraft-image-smoke-$$"

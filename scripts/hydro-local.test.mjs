@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -9,11 +9,12 @@ import { createServer } from "node:net";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment } from "./deployment-config.mjs";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { fileURLToPath } from "node:url";
+import { processIdentity } from "../packages/hydro-server/src/process-identity.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function copyInstaller(fixture) {
-	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/sandbox/build-args.mjs"]) {
+	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/src/process-identity.ts", "packages/hydro-server/sandbox/build-args.mjs"]) {
 		mkdirSync(dirname(join(fixture, file)), { recursive: true });
 		copyFileSync(join(root, file), join(fixture, file));
 	}
@@ -248,6 +249,35 @@ test("sandbox mirror settings preserve the pinned GCC digest and never add Docke
 	assert.ok(args.includes("DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn"));
 	assert.deepEqual(sandboxBuildArgs({}), []);
 	assert.throws(() => sandboxBuildArgs({ SETDRAFT_DOCKER_REGISTRY: "user:password@mirror.example.com" }));
+});
+
+test("native stop leaves an unrelated live process with a stale or legacy PID record running", { skip: process.platform === "win32" }, async () => {
+	const fixture = mkdtempSync(join(tmpdir(), "setdraft-native-pid-"));
+	copyInstaller(fixture);
+	const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { detached: true, stdio: "ignore" });
+	await new Promise((resolveSpawn, reject) => { child.once("spawn", resolveSpawn); child.once("error", reject); });
+	const closed = new Promise((resolveClose) => child.once("close", resolveClose));
+	try {
+		const identity = processIdentity(child.pid);
+		assert.ok(identity);
+		const runtime = join(fixture, ".setdraft/runtime");
+		mkdirSync(runtime, { recursive: true });
+		const record = join(runtime, "api.pid.json");
+		writeFileSync(record, JSON.stringify({ pid: child.pid, identity: { ...identity, createdAt: "stale instance" } }));
+		const stopped = command(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "stop"]);
+		assert.equal(stopped.status, 0, stopped.stderr);
+		process.kill(child.pid, 0);
+		writeFileSync(record, JSON.stringify({ pid: child.pid, startedAt: "2000-01-01" }));
+		const legacy = command(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "stop"]);
+		assert.equal(legacy.status, 1);
+		assert.match(legacy.stderr, /缺少进程身份/u);
+		process.kill(child.pid, 0);
+		assert.ok(existsSync(record));
+	} finally {
+		child.kill("SIGTERM");
+		await closed;
+		rmSync(fixture, { recursive: true, force: true });
+	}
 });
 
 async function freePort() {

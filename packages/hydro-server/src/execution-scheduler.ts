@@ -27,9 +27,11 @@ export class ExecutionScheduler {
 	private turn = 0;
 	private readonly reservations = new Map<string, { userId: string; exclusive: boolean }>();
 	private readonly capacity?: { maxOutstanding: number; maxOutstandingPerUser: number };
+	private readonly observer?: (queued: number, running: number) => void;
 	constructor(
 		limit: number,
 		capacity?: { maxOutstanding: number; maxOutstandingPerUser: number; concurrencyPerUser?: number },
+		observer?: (queued: number, running: number) => void,
 	) {
 		if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Execution concurrency must be positive.");
 		this.limit = limit;
@@ -37,6 +39,11 @@ export class ExecutionScheduler {
 		if (!Number.isSafeInteger(this.perUserLimit) || this.perUserLimit < 1)
 			throw new Error("Per-user execution concurrency must be positive.");
 		this.capacity = capacity;
+		this.observer = observer;
+		this.report();
+	}
+	private report(): void {
+		this.observer?.(Math.max(0, this.reservations.size - this.active.size), this.active.size);
 	}
 	/** Reserve admission before the durable insert; recovered work may exceed newly lowered limits. */
 	reserve(userId: string, key: string, exclusive = false, recovered = false): () => void {
@@ -55,11 +62,13 @@ export class ExecutionScheduler {
 				throw new QueueAdmissionError("你的未完成任务已达上限，请等待完成或取消排队任务。");
 		}
 		this.reservations.set(id, { userId, exclusive });
+		this.report();
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
 			this.reservations.delete(id);
+			this.report();
 		};
 	}
 	status(userId: string) {
@@ -135,11 +144,13 @@ export class ExecutionScheduler {
 			this.turns.set(ticket.userId, this.turn++);
 			ticket.signal.removeEventListener("abort", ticket.abort);
 			this.active.set(ticket.key, { userId: ticket.userId, exclusive: ticket.exclusive });
+			this.report();
 			let released = false;
 			ticket.resolve(() => {
 				if (released) return;
 				released = true;
 				this.active.delete(ticket.key);
+				this.report();
 				this.pump();
 			});
 			if (ticket.exclusive) return;

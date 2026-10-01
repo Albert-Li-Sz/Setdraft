@@ -25,6 +25,9 @@ packages/ai/src/providers/.model-generation-*/
 
 # Generated output
 coverage/
+playwright-report/
+test-results/
+.e2e/
 .nyc_output/
 .setdraft/
 

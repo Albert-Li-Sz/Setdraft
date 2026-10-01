@@ -31,12 +31,6 @@ export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props
 	useEffect(() => {
 		const parent = containerRef.current;
 		if (!parent) return;
-		const sizeToViewport = () => {
-			const top = Math.max(96, parent.getBoundingClientRect().top);
-			parent.style.setProperty("--editor-height", `${Math.max(200, window.innerHeight - top - 64)}px`);
-		};
-		sizeToViewport();
-		window.addEventListener("resize", sizeToViewport);
 		const state = EditorState.create({
 			doc: initialPropsRef.current.value,
 			extensions: [
@@ -58,7 +52,6 @@ export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props
 		const view = new EditorView({ state, parent });
 		viewRef.current = view;
 		return () => {
-			window.removeEventListener("resize", sizeToViewport);
 			viewRef.current = null;
 			view.destroy();
 		};
@@ -87,7 +80,7 @@ export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props
 
 	return (
 		<div className="manual-code-editor">
-			<div ref={containerRef} />
+			<div className="code-editor-surface" ref={containerRef} />
 			<p className="code-editor-help" id={hintId}>
 				{t("Tab 缩进 · Ctrl+Space 补全 · Esc 后按 Tab 离开编辑器")}
 			</p>

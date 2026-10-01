@@ -1,0 +1,2 @@
+import { inspectMarkdown, markdownAttachmentName, markdownRemarkPlugins, parseMarkdown, safeMarkdownUrl, splitMarkdownSections } from "@setdraft/authoring/markdown";
+console.log(parseMarkdown("$a+b$", "statement"), inspectMarkdown("![figure](FILE://image.png?v=1)"), markdownAttachmentName("FILE://image.png?v=1"), safeMarkdownUrl("https://example.com"), markdownRemarkPlugins("chat"), splitMarkdownSections("## Guide\n\n```md\n## Code\n```"));
