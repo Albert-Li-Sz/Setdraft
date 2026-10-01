@@ -3,9 +3,51 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileContestPdfs } from "../src/contest-pdf.ts";
+import { createContestPdfCompiler } from "../src/contest-pdf-compiler.ts";
 import { buildContestPdfSources } from "../src/contest-pdf-document.ts";
 import { preparePdfMarkdown } from "../src/markdown-typst.ts";
 import { pdfFixture } from "./fixtures/contest-pdf.ts";
+
+it.each(["n", "中文脚注"])(
+	"keeps cross-section footnote %s connected in real single PDFs and booklets",
+	async (identifier) => {
+		const first = pdfFixture.problems[0];
+		const sources = buildContestPdfSources({
+			...pdfFixture,
+			problems: [
+				{
+					...first,
+					samples: [],
+					statementSections: {
+						description: `Cross section footnote here[^${identifier}]. Again[^${identifier}].`,
+						input: `Another section[^${identifier}].`,
+						output: "",
+						interaction: "",
+						notes: `[^${identifier}]: CRITICAL_FOOTNOTE_CONTENT\n\n[^${identifier}]: DUPLICATE_IGNORED`,
+					},
+				},
+			],
+		});
+		const compiler = await createContestPdfCompiler();
+		try {
+			for (const source of [sources.booklet, sources.problems.get("A")!]) {
+				compiler.addSource("/footnotes.typ", `#show text: it => [#metadata(it.text) <pdf-text>#it]\n${source}`);
+				await compiler.runWithWorld({ mainFilePath: "/footnotes.typ" }, async (world) => {
+					const compilation = await world.compile({ diagnostics: "full" });
+					expect(compilation.hasError, JSON.stringify(compilation.diagnostics)).toBe(false);
+					const text = (await world.query<string[]>({ selector: "<pdf-text>", field: "value" })).join("");
+					expect(text).not.toContain(`[^${identifier}]`);
+					expect(text.match(/CRITICAL_FOOTNOTE_CONTENT/gu)).toHaveLength(1);
+					expect(text).not.toContain("DUPLICATE_IGNORED");
+					const pdf = await world.pdf({ diagnostics: "full" });
+					expect(Buffer.from(pdf.result!).subarray(0, 5).toString()).toBe("%PDF-");
+				});
+			}
+		} finally {
+			await compiler.reset();
+		}
+	},
+);
 
 describe("PDF reference definitions", () => {
 	it("normalizes inline attachment link destinations without changing ordinary links", () => {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ManualRelease, TaskState } from "@setdraft/contracts";
+import type { ManualRelease, TaskRecord, TaskState } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
@@ -53,6 +53,101 @@ async function generated(projects: ManualProjectStore, id: string) {
 }
 
 describe("sandbox admission and durable dispatch", () => {
+	it("owns an entry failure until terminal storage recovers without redispatching or blocking later work", async () => {
+		const policy = { ...sandboxPolicy({}), concurrency: 1 };
+		const scheduler = new ExecutionScheduler(1, policy);
+		const unblock = await scheduler.acquire("blocker", "entry", new AbortController().signal);
+		const { projects, queue } = await fixture("alice", scheduler, policy);
+		const first = await queue.submit("generate", (await projects.create("acm")).id);
+		const execution = queue as unknown as { execute(task: TaskRecord, controller: AbortController): Promise<void> };
+		const execute = execution.execute.bind(queue);
+		vi.spyOn(execution, "execute").mockImplementationOnce(async (task, controller) => {
+			const metadata = vi.spyOn(projects.database, "get").mockRejectedValueOnce(new Error("entry unavailable"));
+			try {
+				await execute(task, controller);
+			} finally {
+				metadata.mockRestore();
+			}
+		});
+		const run = vi.spyOn(projects.pipeline, "generate").mockImplementation((id) => generated(projects, id));
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const restore = await rejectWrites("task_events", "INSERT", "type", "failed", "terminal unavailable");
+		try {
+			unblock();
+			await vi.waitFor(() =>
+				expect(warning).toHaveBeenCalledWith("Completed execution retained until terminal storage recovers."),
+			);
+			expect((await queue.get(first.id)).state).toBe("queued");
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 1 });
+			const nextProject = await projects.create("acm");
+			const next = await queue.submit("generate", nextProject.id);
+			await reaches(queue, next.id, "succeeded");
+			expect(run).toHaveBeenCalledTimes(1);
+			expect(run.mock.calls[0][0]).toBe(nextProject.id);
+		} finally {
+			await restore();
+			warning.mockRestore();
+			unblock();
+		}
+		await reaches(queue, first.id, "failed");
+		await queue.idle();
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+	});
+	it("settles an entry metadata failure and lets the next task run with telemetry disabled", async () => {
+		const policy = { ...sandboxPolicy({}), concurrency: 1 };
+		const scheduler = new ExecutionScheduler(1, policy);
+		const unblock = await scheduler.acquire("blocker", "entry", new AbortController().signal);
+		const { projects, queue } = await fixture("alice", scheduler, policy);
+		const task = await queue.submit("generate", (await projects.create("acm")).id);
+		const execution = queue as unknown as { execute(task: TaskRecord, controller: AbortController): Promise<void> };
+		const execute = execution.execute.bind(queue);
+		const failure = vi.spyOn(execution, "execute").mockImplementation(async (record, controller) => {
+			const metadata = vi
+				.spyOn(projects.database, "get")
+				.mockRejectedValueOnce(new Error("entry metadata unavailable"));
+			try {
+				await execute(record, controller);
+			} finally {
+				metadata.mockRestore();
+			}
+		});
+		const run = vi.spyOn(projects.pipeline, "generate").mockImplementation((id) => generated(projects, id));
+		try {
+			unblock();
+			await reaches(queue, task.id, "failed");
+			await queue.idle();
+			expect((await queue.get(task.id)).error).toContain("entry metadata unavailable");
+			expect(run).not.toHaveBeenCalled();
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+			failure.mockRestore();
+			const next = await queue.submit("generate", (await projects.create("acm")).id);
+			await reaches(queue, next.id, "succeeded");
+			await queue.idle();
+			expect(run).toHaveBeenCalledTimes(1);
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+		} finally {
+			failure.mockRestore();
+			unblock();
+		}
+	});
+	it("rolls back a failed running event and settles it without executing business work", async () => {
+		const policy = { ...sandboxPolicy({}), concurrency: 1 };
+		const scheduler = new ExecutionScheduler(1, policy);
+		const { projects, queue } = await fixture("alice", scheduler, policy);
+		const restore = await rejectWrites("task_events", "INSERT", "type", "running", "running event unavailable");
+		const run = vi.spyOn(projects.pipeline, "generate").mockImplementation((id) => generated(projects, id));
+		try {
+			const task = await queue.submit("generate", (await projects.create("acm")).id);
+			await reaches(queue, task.id, "failed");
+			await queue.idle();
+			expect(run).not.toHaveBeenCalled();
+			expect((await queue.events(task.id)).map((event) => event.type)).toEqual(["queued", "failed"]);
+			expect(scheduler.status("alice")).toMatchObject({ running: 0, outstanding: 0 });
+		} finally {
+			await restore();
+		}
+	});
 	it("deduplicates release exports at admission and cancels them through the shared scheduler", async () => {
 		const policy = { ...sandboxPolicy({}), concurrency: 1, maxOutstanding: 1, maxOutstandingPerUser: 1 };
 		const scheduler = new ExecutionScheduler(1, policy);

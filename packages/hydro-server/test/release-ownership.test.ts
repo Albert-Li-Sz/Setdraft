@@ -6,6 +6,7 @@ import type { ManualRelease } from "@setdraft/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
+import { exportFileName } from "../src/export-contract.ts";
 import { writeLegacyProblemExport } from "../src/legacy-exports.ts";
 import { ManualProjectStore } from "../src/manual-projects.ts";
 import { sandboxPolicy } from "../src/sandbox-policy.ts";
@@ -55,6 +56,20 @@ async function releaseFixture() {
 	await projects.database.put("release", id, release);
 	return release;
 }
+
+it("does not serve an old cached DOMjudge adapter after the export contract changes", async () => {
+	const release = await releaseFixture();
+	const old = join(root, "old-export.zip");
+	const current = join(root, "current-export.zip");
+	await writeFile(old, "old adapter");
+	await writeFile(current, "current adapter");
+	await projects.database.indexFile("release-file", release.id, "domjudge.v1.zip", old);
+	await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 404 });
+	const name = exportFileName("domjudge");
+	expect(name).toBe("domjudge.v2.zip");
+	await projects.database.indexFile("release-file", release.id, name, current);
+	expect(await projects.releases.releaseFile(release.id, "domjudge")).toMatchObject({ size: 15 });
+});
 it.each(["fps.xml", "qduoj.zip", "domjudge.zip"])(
 	"rejects a staged %s export committed after project deletion",
 	async (name) => {

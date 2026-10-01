@@ -504,7 +504,7 @@ export class TaskQueue {
 		if (this.controllers.size >= localLimit) return;
 		const queued = await this.database.sql.all<{ id: string }>(
 			"SELECT id FROM tasks WHERE state='queued' ORDER BY created_at,id LIMIT $1",
-			[localLimit],
+			[localLimit + this.settlements.size],
 		);
 		for (const task of queued) await this.dispatch(task, localLimit);
 	}
@@ -550,7 +550,8 @@ export class TaskQueue {
 	}
 
 	private async dispatch(queued: { id: string }, localLimit: number): Promise<void> {
-		if (this.controllers.has(queued.id) || this.controllers.size >= localLimit) return;
+		if (this.controllers.has(queued.id) || this.settlements.has(queued.id) || this.controllers.size >= localLimit)
+			return;
 		if (this.scheduling && !this.slots.has(queued.id)) {
 			if (!this.waiting.has(queued.id)) {
 				const dispatched = new Set([...this.controllers.keys(), ...this.waiting.keys(), ...this.slots.keys()]);
@@ -576,7 +577,13 @@ export class TaskQueue {
 			}
 			return;
 		}
-		const task = await this.get(queued.id);
+		let task: TaskRecord;
+		try {
+			task = await this.get(queued.id);
+		} catch (error) {
+			this.releaseSlot(queued.id);
+			throw error;
+		}
 		if (this.closed) {
 			this.releaseSlot(task.id);
 			return;
@@ -591,6 +598,32 @@ export class TaskQueue {
 	}
 
 	private async execute(task: TaskRecord, controller: AbortController): Promise<void> {
+		try {
+			await this.executeObserved(task, controller);
+		} catch (error) {
+			// Entry preparation failed before executeAttempt could own a terminal outcome.
+			if (!this.cleanup.has(task.id) && !this.settlements.has(task.id)) {
+				await this.settlements.settle(task.id, async () => {
+					await this.finish(
+						task.id,
+						this.closed ? "interrupted" : controller.signal.aborted ? "cancelled" : "failed",
+						undefined,
+						error instanceof Error ? error.message : String(error),
+					);
+					this.releaseAdmission(task.id);
+				});
+			}
+		} finally {
+			this.controllers.delete(task.id);
+			if (!this.cleanup.has(task.id)) {
+				this.releaseSlot(task.id);
+				if (!this.settlements.has(task.id) && this.closed) this.releaseAdmission(task.id);
+			}
+			this.wake();
+		}
+	}
+
+	private async executeObserved(task: TaskRecord, controller: AbortController): Promise<void> {
 		const options = await this.database.get<{ telemetry?: TraceCarrier }>("task-options", task.id);
 		await this.observability.withPropagation(options?.telemetry, () =>
 			this.observability.startSpan(
@@ -642,10 +675,8 @@ export class TaskQueue {
 		const resourceId = task.resource.split(":")[1] ?? "";
 		let timeout: NodeJS.Timeout | undefined;
 		let timedOut = false;
-		let settled = false;
 		const events = new EventWriter(() => controller.abort());
 		const end = async (state: TaskState, result?: unknown, error?: string) => {
-			settled = true;
 			await this.settlements.settle(task.id, async () => {
 				await this.database.transaction(async () => {
 					const cancelled = state === "succeeded" && (await this.cancellationRequested(task.id));
@@ -762,12 +793,6 @@ export class TaskQueue {
 			);
 		} finally {
 			if (timeout) clearTimeout(timeout);
-			this.controllers.delete(task.id);
-			if (!this.cleanup.has(task.id)) {
-				this.releaseSlot(task.id);
-				if (!this.settlements.has(task.id) && (settled || this.closed)) this.releaseAdmission(task.id);
-			}
-			this.wake();
 		}
 	}
 

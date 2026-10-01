@@ -23,6 +23,17 @@ const fixtures: Array<[number, string, number | undefined]> = [
 	[1, "wrong answer score(100) inconsistent", undefined],
 	[0, "points 1.0 inconsistent", undefined],
 	[40, "partially correct (40) partial", 40],
+	[7, "points 0.5 rescore(100) is only a diagnostic label", 50],
+	[7, "points 0.5 final_score(100)", 50],
+	[0, "ok rescore(0)", 100],
+	[0, "ok 中文score(0)", 100],
+	[0, "ok score(0)中文", 100],
+	[0, "ok score(0).", 100],
+	[0, "ok\nscore(80)\r\nscore(0)", 80],
+	[0, "ok\tscore(0)\t", 0],
+	[0, "ok accepted\u00a0score(0)", 100],
+	[0, "ok\u00a0score(0)", undefined],
+	[0, "ok score(０)", 100],
 ];
 
 it("local and exported score parsers agree with independent verdict fixtures", async () => {
@@ -75,6 +86,7 @@ it.skipIf(!sandboxAvailable)(
 int main(int argc,char**argv){registerTestlibCmd(argc,argv);const char* mode=std::getenv("MODE");
 if(mode && !std::strcmp(mode,"fault"))quitf(_fail,"judge fault");
 int expected=ans.readInt(),actual=ouf.readInt();
+if(mode && !std::strcmp(mode,"diagnostic")){if(actual==expected)quitf(_ok,"exact match");quitp(0.5,"rescore(100) is only a diagnostic label");}
 if(mode && !std::strcmp(mode,"points"))quitp(actual==expected?std::atof(std::getenv("FRACTION")):0.0,"fraction");
 quitf(_ok,"score(%d) value",actual==expected?100:0);}
 `,
@@ -95,6 +107,9 @@ quitf(_ok,"score(%d) value",actual==expected?100:0);}
 				]),
 				["score", "1", "bad\n", 0],
 				["fault", "1", "5\n", undefined],
+				["diagnostic", "1", "5\n", 100],
+				["diagnostic", "1", "bad\n", 0],
+				["diagnostic", "1", "6\n", 50],
 			];
 			await writeFile(join(directory, "cases.json"), JSON.stringify(cases));
 			await writeFile(

@@ -107,6 +107,18 @@
 )
 
 #let render-problem(problem, statement, language: "zh") = [
+  #let footnotes = statement.at("footnotes", default: ())
+  #if footnotes.len() > 0 { counter(footnote).update(0) }
+  #let md = md.with(label-prefix: "setdraft-" + problem.label + "-", html: (
+    setdraft-footnote: (attrs, body) => {
+      let index = int(attrs.at("data-note"))
+      assert(index >= 0 and index < footnotes.len(), message: "PDF 脚注引用无效")
+      let target = label("setdraft-" + problem.label + "-footnote-" + str(index))
+      if attrs.at("data-first") == "1" {
+        [#footnote(md(footnotes.at(index)))#target]
+      } else { footnote(target) }
+    },
+  ))
   #text(font: fonts.sans, size: 20.74pt, weight: "bold")[#problem.display-name]
   #v(3mm)
 

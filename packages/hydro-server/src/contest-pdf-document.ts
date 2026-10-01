@@ -1,5 +1,5 @@
 import type { ContestPdfOptions, ManualProject } from "@setdraft/contracts";
-import { preparePdfMarkdown, preparePdfMarkdownParts, typstString } from "./markdown-typst.ts";
+import { preparePdfFootnotes, preparePdfMarkdown, preparePdfMarkdownParts, typstString } from "./markdown-typst.ts";
 
 export interface PdfProblem
 	extends Pick<
@@ -37,16 +37,19 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 		}
 		const interactive = problem.judgingMode === "interactive";
 		const sections = problem.statementSections;
-		const [description, input, output, interaction, notes] = preparePdfMarkdownParts(
-			[
-				sections?.description ?? problem.statement,
-				interactive ? "" : (sections?.input ?? ""),
-				interactive ? "" : (sections?.output ?? ""),
-				interactive ? (sections?.interaction ?? "") : "",
-				sections?.notes ?? "",
-			],
-			images,
-		).map(typstString);
+		const prepared = preparePdfFootnotes(
+			preparePdfMarkdownParts(
+				[
+					sections?.description ?? problem.statement,
+					interactive ? "" : (sections?.input ?? ""),
+					interactive ? "" : (sections?.output ?? ""),
+					interactive ? (sections?.interaction ?? "") : "",
+					sections?.notes ?? "",
+				],
+				images,
+			),
+		);
+		const [description, input, output, interaction, notes] = prepared.parts.map(typstString);
 		const limits =
 			language === "en"
 				? [
@@ -62,6 +65,7 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
   limits: (${limits.map(([key, value]) => `(key: ${typstString(key)}, value: ${typstString(value)})`).join(", ")},),
   samples: (${problem.samples.map((sample) => `(input: ${typstString(sample.input)}, output: ${typstString(sample.output)}),`).join("\n")}),
 ), statement: (
+  footnotes: (${prepared.footnotes.map((note) => `${typstString(note)},`).join(" ")}),
   description: ${description},
   input: ${input},
   output: ${output},

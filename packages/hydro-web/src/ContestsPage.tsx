@@ -163,25 +163,24 @@ export function ContestsPage({ apiOrigin, paused = false }: Props) {
 	const [pdfDirty, setPdfDirty] = useState(false);
 	const scope = useRef(0);
 	const mutations = useRef(0);
+	const [catalogRevision, setCatalogRevision] = useState(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: API and authentication scope changes invalidate in-flight mutation owners.
 	useEffect(() => {
 		scope.current++;
 		setBusy(false);
-		if (paused)
-			return () => {
-				scope.current++;
-			};
+		return () => {
+			scope.current++;
+		};
+	}, [apiOrigin, paused]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Completed mutations must trigger a replacement GET, including failed mutations.
+	useEffect(() => {
+		if (paused) return;
 		let cancelled = false;
 		const revision = mutations.current;
-		void Promise.all([
-			requestJson<{ contests: ContestDraft[] }>(apiUrl(apiOrigin, "/contests")),
-			requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, "/releases")),
-			requestJson<{ releases: ContestRelease[] }>(apiUrl(apiOrigin, "/contest-releases")),
-		])
-			.then(([contestResult, problemResult, bundleResult]) => {
+		void requestJson<{ contests: ContestDraft[] }>(apiUrl(apiOrigin, "/contests"))
+			.then((contestResult) => {
 				if (cancelled || revision !== mutations.current) return;
 				setContests(contestResult.contests);
-				setReleases(problemResult.releases);
-				setBundles(bundleResult.releases);
 				setDraft(
 					(current) => contestResult.contests.find((item) => item.id === current?.id) ?? contestResult.contests[0],
 				);
@@ -191,7 +190,33 @@ export function ContestsPage({ apiOrigin, paused = false }: Props) {
 			});
 		return () => {
 			cancelled = true;
-			scope.current++;
+		};
+	}, [apiOrigin, paused, catalogRevision]);
+
+	useEffect(() => {
+		if (paused) return;
+		let cancelled = false;
+		setReleases([]);
+		setBundles([]);
+		const failed = (error: unknown) => {
+			if (!cancelled) setMessage(error instanceof Error ? error.message : "竞赛记录读取失败。");
+		};
+		void requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, "/releases"))
+			.then((problemResult) => {
+				if (cancelled) return;
+				setReleases(problemResult.releases);
+			})
+			.catch(failed);
+		void requestJson<{ releases: ContestRelease[] }>(apiUrl(apiOrigin, "/contest-releases"))
+			.then((bundleResult) => {
+				if (cancelled) return;
+				setBundles((current) => [
+					...new Map([...bundleResult.releases, ...current].map((item) => [item.id, item])).values(),
+				]);
+			})
+			.catch(failed);
+		return () => {
+			cancelled = true;
 		};
 	}, [apiOrigin, paused]);
 
@@ -216,7 +241,10 @@ export function ContestsPage({ apiOrigin, paused = false }: Props) {
 		} catch (error) {
 			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "新建竞赛失败。");
 		} finally {
-			if (owner === scope.current) setBusy(false);
+			if (owner === scope.current) {
+				setBusy(false);
+				setCatalogRevision((current) => current + 1);
+			}
 		}
 	}
 
@@ -245,7 +273,10 @@ export function ContestsPage({ apiOrigin, paused = false }: Props) {
 		} catch (error) {
 			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "保存竞赛失败。");
 		} finally {
-			if (owner === scope.current) setBusy(false);
+			if (owner === scope.current) {
+				setBusy(false);
+				setCatalogRevision((current) => current + 1);
+			}
 		}
 	}
 
@@ -293,7 +324,10 @@ export function ContestsPage({ apiOrigin, paused = false }: Props) {
 		} catch (error) {
 			if (owner === scope.current) setMessage(error instanceof Error ? error.message : "删除竞赛失败。");
 		} finally {
-			if (owner === scope.current) setBusy(false);
+			if (owner === scope.current) {
+				setBusy(false);
+				setCatalogRevision((current) => current + 1);
+			}
 		}
 	}
 

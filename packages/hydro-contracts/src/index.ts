@@ -2,7 +2,7 @@ export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-
 
 export type CheckerMode = "text" | "custom";
 export const verificationContractVersion = 1;
-export const exportContractVersion = 1;
+export const exportContractVersion = 2;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";

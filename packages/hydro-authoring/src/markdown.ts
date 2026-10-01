@@ -2,6 +2,7 @@ import type { Definition, Image, ImageReference, Link, LinkReference, Root, Root
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
+import remarkStringify from "remark-stringify";
 import { type PluggableList, unified } from "unified";
 
 export type MarkdownProfile = "statement" | "chat" | "guide";
@@ -54,6 +55,11 @@ export function parseMarkdown(markdown: string, profile: MarkdownProfile = "stat
 	const tree = parsers[profile].parse(markdown);
 	walkMarkdown(tree, () => {});
 	return tree;
+}
+
+const serializer = unified().use(richPlugins).use(remarkStringify);
+export function serializeMarkdown(tree: Root): string {
+	return serializer.stringify(tree);
 }
 
 /** The destination has already been decoded by CommonMark; suffixes do not name files. */

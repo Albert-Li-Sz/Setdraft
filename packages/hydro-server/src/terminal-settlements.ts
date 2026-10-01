@@ -9,6 +9,9 @@ export class TerminalSettlements {
 	has(id: string): boolean {
 		return this.pending.has(id);
 	}
+	get size(): number {
+		return this.pending.size;
+	}
 	async settle(id: string, commit: () => Promise<void>): Promise<void> {
 		this.pending.set(id, { commit, retryAt: 0, failures: 0 });
 		await this.tryCommit(id);
