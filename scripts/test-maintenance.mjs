@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -23,7 +23,9 @@ const environment = {
 	SETDRAFT_MAINTENANCE_TEST_ACCOUNT: account,
 };
 const docker = (args) => exec("docker", args, { maxBuffer: 1024 * 1024, timeout: 60_000 });
-const inImage = (args, overrides = {}) => docker(["run", "--rm", "--network", name, "--mount", `type=bind,source=${root},target=/scenario`, ...Object.entries({ ...environment, ...overrides }).flatMap(([key, value]) => ["-e", `${key}=${value}`]), "--entrypoint", "node", image, ...args]);
+// Match the bind mount's owner so private 0700/0600 archives remain readable on Linux.
+const owner = typeof process.getuid === "function" && typeof process.getgid === "function" ? ["--user", `${process.getuid()}:${process.getgid()}`] : [];
+const inImage = (args, overrides = {}) => docker(["run", "--rm", ...owner, "--network", name, "--mount", `type=bind,source=${root},target=/scenario`, ...Object.entries({ ...environment, ...overrides }).flatMap(([key, value]) => ["-e", `${key}=${value}`]), "--entrypoint", "node", image, ...args]);
 const native = (command, target) => inImage(["scripts/hydro-local.mjs", command, `/scenario/${target}`]);
 const sql = async (statement) => (await docker(["exec", name, "psql", "--no-psqlrc", "-qAt", "-U", "postgres", "-d", "setdraft_test", "-c", statement])).stdout.trim();
 try {
@@ -46,6 +48,12 @@ await closeDatabasePools();`]);
 	await sql(`INSERT INTO identity.users(id,username,password_hash,role,created_at) VALUES('${account}','maintenance-test','test-only','admin',0)`);
 	await sql(`INSERT INTO identity.sessions VALUES('test-session','${account}','test-csrf',0,0,9999999999999)`);
 	await native("backup", "healthy");
+	if (process.platform === "linux") {
+		const archive = await stat(join(root, "healthy"));
+		assert.equal(archive.uid, process.getuid());
+		assert.equal(archive.mode & 0o777, 0o700);
+		assert.equal((await stat(join(root, "healthy/manifest.json"))).mode & 0o777, 0o600);
+	}
 	assert.equal(JSON.parse(await readFile(join(root, "healthy/manifest.json"), "utf8")).format, "setdraft-postgres-1");
 	// A reference to a now-missing blob must not prevent a known healthy restore.
 	await rm(blob);

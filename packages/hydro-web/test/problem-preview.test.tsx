@@ -25,6 +25,7 @@ describe("Hydro-style statement preview", () => {
 		expect(html).toContain("file://missing.png");
 		expect(source).toBe(readFileSync(new URL("../../../fixtures/markdown/statement.md", import.meta.url), "utf8"));
 	});
+	// The fixture builds over 30,000 AST nodes before the shared guard rejects it.
 	it("shows escaped original text and a brief alert when parsing exceeds the shared limit", () => {
 		const source = `${"- item\n".repeat(16_000)}<script>alert(1)</script>`;
 		const html = renderToStaticMarkup(
@@ -33,7 +34,7 @@ describe("Hydro-style statement preview", () => {
 		expect(html).toContain('role="alert"');
 		expect(html).toContain("&lt;script&gt;");
 		expect(html).not.toContain("<script>");
-	});
+	}, 15_000);
 	it("uses the same attachment destination for encoded, mixed-case and suffixed links", () => {
 		const html = renderToStaticMarkup(
 			<ProblemPreview
