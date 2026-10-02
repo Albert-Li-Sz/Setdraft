@@ -1,4 +1,4 @@
-import type { ChatRequest } from "@setdraft/contracts";
+import type { ChatRequest, SearchQueryResult } from "@setdraft/contracts";
 import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppSidebar } from "./AppShell.tsx";
@@ -14,6 +14,7 @@ import {
 } from "./chat-request-lifecycle.ts";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
+import { Dialog } from "./Dialog.tsx";
 import { transferFiles } from "./file-transfer.ts";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
@@ -25,6 +26,8 @@ import {
 	readAiConfiguration,
 	responseError,
 } from "./platform.ts";
+
+import { SearchProgress } from "./SearchProgress.tsx";
 
 interface ChatSummary {
 	id: string;
@@ -96,6 +99,9 @@ export function AiChatPage(props: Props) {
 	const [wide, setWide] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [searchPhase, setSearchPhase] = useState("");
+	const [actualQueries, setActualQueries] = useState("");
+	const [queryResults, setQueryResults] = useState<SearchQueryResult[]>();
+	const [research, setResearch] = useState<{ content: string; queries: string; context?: string }>();
 	const [streaming, setStreaming] = useState("");
 	const deferredStreaming = useDeferredValue(streaming);
 	const [streamFailed, setStreamFailed] = useState(false);
@@ -391,9 +397,10 @@ export function AiChatPage(props: Props) {
 		}
 	}
 
-	async function send(): Promise<void> {
-		const content = input.trim();
-		if ((!content && images.length === 0) || loading || busy || readingImages || sendingRef.current) return;
+	async function send(researchInput?: { content: string; queries: string; context?: string }): Promise<void> {
+		const content = researchInput?.content ?? input.trim();
+		const messageImages = researchInput ? [] : images;
+		if ((!content && messageImages.length === 0) || loading || busy || readingImages || sendingRef.current) return;
 		if (!selectedProfileId) {
 			showMessage("请先在设置中添加 API / 模型配置。", "failed");
 			return;
@@ -406,6 +413,8 @@ export function AiChatPage(props: Props) {
 		setBusy(true);
 		setStreaming("");
 		setSearchPhase("");
+		setActualQueries("");
+		setQueryResults(undefined);
 		setStreamFailed(false);
 		setStreamCancelled(false);
 		followOutputRef.current = true;
@@ -422,11 +431,14 @@ export function AiChatPage(props: Props) {
 			form.set("requestId", requestId);
 			form.set("attemptId", activeRequestRef.current.attemptId ?? requestId);
 			form.set("message", content);
-			form.set("webSearch", String(webSearch));
-			if (searchQuery.trim()) form.set("searchQuery", searchQuery.trim());
+			form.set("webSearch", String(researchInput ? true : webSearch));
+			const keywords = researchInput?.queries ?? searchQuery;
+			if (keywords.trim()) form.set("searchQuery", keywords.trim());
 			form.set("profileId", selectedProfileId);
-			if (attachProject && props.projectSnapshot) form.set("contextSnapshot", props.projectSnapshot);
-			for (const image of images) {
+			if (researchInput?.context) form.set("contextSnapshot", researchInput.context);
+			else if (!researchInput && attachProject && props.projectSnapshot)
+				form.set("contextSnapshot", props.projectSnapshot);
+			for (const image of messageImages) {
 				const binary = atob(image.data);
 				const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
 				form.append("images", new File([bytes], image.name, { type: image.mimeType }));
@@ -438,8 +450,8 @@ export function AiChatPage(props: Props) {
 					body: form,
 					onUploadProgress,
 				});
-			const response = images.length
-				? await transferFiles(images.map((image) => image.name).join(", "), async (report) => {
+			const response = messageImages.length
+				? await transferFiles(messageImages.map((image) => image.name).join(", "), async (report) => {
 						const response = await submit((loaded, total) =>
 							report({ phase: total && loaded >= total ? "saving" : "uploading", loaded, total }),
 						);
@@ -450,8 +462,11 @@ export function AiChatPage(props: Props) {
 			if (!response.ok) throw new Error(responseError(await response.json()));
 			controller.signal.throwIfAborted();
 			if (!ownsRequest(controller)) return;
-			setInput("");
-			setImages([]);
+			if (!researchInput) {
+				setInput("");
+				setImages([]);
+			}
+			setResearch(undefined);
 			let completed = false;
 			let after = 0;
 			let attempts = 0;
@@ -462,6 +477,8 @@ export function AiChatPage(props: Props) {
 				if (sequence !== undefined) after = sequence;
 				if (event.type === "search") {
 					setSearchPhase(event.phase);
+					setActualQueries(event.query);
+					setQueryResults(event.results);
 					if (event.message) showMessage(event.message);
 				} else if (event.type === "start") {
 					activeChat = event.chat;
@@ -589,6 +606,8 @@ export function AiChatPage(props: Props) {
 						if (sequence !== undefined) after = sequence;
 						if (event.type === "search") {
 							setSearchPhase(event.phase);
+							setActualQueries(event.query);
+							setQueryResults(event.results);
 							if (event.message) showMessage(event.message);
 						} else if (event.type === "start") setChat(event.chat);
 						else if (event.type === "delta") setStreaming((current) => current + event.delta);
@@ -776,6 +795,48 @@ export function AiChatPage(props: Props) {
 										)}
 									</div>
 									{item.content && <ChatMarkdown content={item.content} />}
+									{item.searchPlan && (
+										<details className="chat-search-sources" open>
+											<summary>
+												{t("搜索关键词")} ·{" "}
+												{t(
+													item.searchPlan.state === "failed"
+														? "规划失败，未使用网络资料"
+														: item.searchPlan.source === "manual"
+															? "手动指定"
+															: "AI 生成",
+												)}
+											</summary>
+											<SearchProgress queries={item.searchPlan.queries} results={item.searchPlan.results} />
+											{item.searchPlan.usage && (
+												<small>
+													{t(
+														"关键词生成：输入 {0} · 输出 {1} tokens",
+														item.searchPlan.usage.input,
+														item.searchPlan.usage.output,
+													)}
+												</small>
+											)}
+											<button
+												className="button secondary"
+												type="button"
+												disabled={busy}
+												onClick={() => {
+													const original = chat.messages.find(
+														(message) => message.role === "user" && message.requestId === item.requestId,
+													);
+													if (original?.content)
+														setResearch({
+															content: original.content,
+															queries: item.searchPlan?.queries.join("\n") ?? "",
+															context: original.contextSnapshot,
+														});
+												}}
+											>
+												{t("改词重搜")}
+											</button>
+										</details>
+									)}
 									{item.search && (
 										<details className="chat-search-sources">
 											<summary>
@@ -789,6 +850,7 @@ export function AiChatPage(props: Props) {
 														<a href={source.url} target="_blank" rel="noopener noreferrer">
 															[{source.id}] {source.title}
 														</a>
+														<small className="search-source-domain">{new URL(source.url).hostname}</small>
 														<p>{source.snippet}</p>
 													</li>
 												))}
@@ -882,8 +944,19 @@ export function AiChatPage(props: Props) {
 											<i />
 											<i />
 										</span>
-										<span>{t(searchPhase === "searching" ? "正在搜索网络资料…" : "正在等待模型输出…")}</span>
+										<span>
+											{t(
+												searchPhase === "planning"
+													? "正在生成搜索关键词…"
+													: searchPhase === "searching"
+														? "正在搜索网络资料…"
+														: "正在等待模型输出…",
+											)}
+										</span>
 									</output>
+								)}
+								{busy && actualQueries && (
+									<SearchProgress queries={actualQueries.split("\n")} results={queryResults} />
 								)}
 								{busy && streaming && <output className="streaming-indicator" aria-label={t("生成中")} />}
 							</article>
@@ -951,12 +1024,13 @@ export function AiChatPage(props: Props) {
 							{webSearch && (
 								<label className="chat-search-query">
 									<span>{t("搜索关键词")}</span>
-									<input
+									<textarea
+										rows={2}
 										value={searchQuery}
-										maxLength={500}
+										maxLength={1502}
 										disabled={busy}
 										onChange={(event) => setSearchQuery(event.target.value)}
-										placeholder={t("留空使用本条消息前 500 字；不会发送题目和附件")}
+										placeholder={t("留空由 AI 生成 1–3 组关键词；手填每行一组，最多 3 组")}
 									/>
 								</label>
 							)}
@@ -1066,6 +1140,37 @@ export function AiChatPage(props: Props) {
 					</div>
 				</section>
 			</div>
+			<Dialog open={!!research} onClose={() => setResearch(undefined)} labelledBy="research-title">
+				<form
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (research) void send(research);
+					}}
+				>
+					<h2 id="research-title">{t("改词重搜")}</h2>
+					<p>{t("使用新关键词创建请求，保留旧回答。")}</p>
+					<label className="field">
+						<span>{t("搜索关键词（每行一组，最多 3 组）")}</span>
+						<textarea
+							required
+							rows={3}
+							maxLength={1502}
+							value={research?.queries ?? ""}
+							onChange={(event) =>
+								setResearch((current) => (current ? { ...current, queries: event.target.value } : current))
+							}
+						/>
+					</label>
+					<div className="confirmation-actions">
+						<button className="button secondary" type="button" onClick={() => setResearch(undefined)}>
+							{t("取消")}
+						</button>
+						<button className="button primary" type="submit" disabled={busy || !research?.queries.trim()}>
+							{t("重新搜索")}
+						</button>
+					</div>
+				</form>
+			</Dialog>
 		</main>
 	);
 }

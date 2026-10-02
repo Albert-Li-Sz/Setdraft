@@ -1,4 +1,4 @@
-import { type ProjectSnapshot, readProjectSnapshot } from "@setdraft/contracts";
+import { type ProjectSnapshot, readProjectSnapshot, synchronizeSolutions } from "@setdraft/contracts";
 import { RevisionConflict } from "./api-client.ts";
 import { editableProject } from "./problem.ts";
 
@@ -103,8 +103,10 @@ export class ProjectSession {
 				patch[key] = rebaseValue(baseline[key], this.state.project[key], project[key]);
 		}
 		this.baseline = project;
+		const next = { ...project, ...patch };
+		if (next.solutions) synchronizeSolutions(next);
 		this.publish({
-			project: { ...project, ...patch },
+			project: next,
 			status: dirty ? "dirty" : "saved",
 		});
 	}

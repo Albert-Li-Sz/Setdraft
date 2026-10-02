@@ -39,4 +39,25 @@ describe("AI chat event stream", () => {
 		});
 		await expect(readChatStream(body, () => {})).rejects.toThrow("格式无效");
 	});
+	it("retains per-query progress and metrics in resumable search events", async () => {
+		const results = [
+			{ query: "first", state: "complete", count: 2, durationMs: 42, cached: true },
+			{ query: "second", state: "failed", count: 0, durationMs: 81, message: "offline" },
+		];
+		const frame = `id: 12\nevent: search\ndata: ${JSON.stringify({ phase: "complete", query: "first · second", results })}\n\n`;
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(frame));
+				controller.close();
+			},
+		});
+		const events: Array<{ event: ChatStreamEvent; sequence?: number }> = [];
+		await readChatStream(body, (event, sequence) => events.push({ event, sequence }));
+		expect(events).toEqual([
+			{
+				event: { type: "search", phase: "complete", query: "first · second", results, message: undefined },
+				sequence: 12,
+			},
+		]);
+	});
 });

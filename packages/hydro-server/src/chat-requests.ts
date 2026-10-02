@@ -224,6 +224,9 @@ export class ChatRequestQueue {
 		for (const row of rows) {
 			await this.database.removeOwnerFiles("chat-request-image", row.id);
 			await this.database.delete("search-cache", `request:${row.id}`);
+			for (let index = 0; index < 3; index++)
+				await this.database.delete("search-cache", `request:${row.id}:${index}`);
+			await this.database.delete("search-plan", row.id);
 			await this.database.sql.execute("DELETE FROM chat_request_events WHERE request_id=$1", [row.id]);
 			await this.database.sql.execute("DELETE FROM chat_requests WHERE id=$1", [row.id]);
 		}
@@ -682,9 +685,9 @@ export class ChatRequestQueue {
 						arm();
 						events.append(() => this.emit(id, "delta", { delta }));
 					},
-					onSearch: (phase, query, message) => {
+					onSearch: (phase, query, message, results) => {
 						arm();
-						events.append(() => this.emit(id, "search", { phase, query, message }));
+						events.append(() => this.emit(id, "search", { phase, query, message, results }));
 					},
 				},
 				controller.signal,

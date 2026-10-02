@@ -40,6 +40,7 @@ async function releaseFixture() {
 		slug: "test",
 		createdAt: new Date().toISOString(),
 		report: {
+			verificationContractVersion,
 			mode: "finalize",
 			success: true,
 			checks: [{ stage: "reference", passed: true, message: "ok" }],
@@ -74,28 +75,31 @@ it("does not serve an old cached DOMjudge adapter after the export contract chan
 	expect(await projects.releases.releaseFile(release.id, "domjudge")).toMatchObject({ size: 15 });
 });
 
-it.each(["custom", "interactive"] as const)("requires a new verification for an old %s release", async (mode) => {
-	const release = {
-		...(await releaseFixture()),
-		checkerMode: "custom" as const,
-		...(mode === "interactive" ? { judgingMode: "interactive" as const } : {}),
-	};
-	release.report = { ...release.report, interactorUsed: mode === "interactive", verificationContractVersion: 3 };
-	expect(requiresReverification(release)).toBe(true);
-	expect(isContestReadyRelease(release)).toBe(false);
-	await projects.database.put("release", release.id, release);
-	await projects.database.storeBuffer(
-		"release-file",
-		release.id,
-		exportFileName("domjudge"),
-		Buffer.from("old export"),
-	);
-	await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 422 });
-	await expect(projects.releases.exportDomjudge(release.id)).rejects.toMatchObject({ statusCode: 422 });
-	release.report.verificationContractVersion = verificationContractVersion;
-	expect(requiresReverification(release)).toBe(false);
-	expect(isContestReadyRelease(release)).toBe(true);
-});
+it.each(["text", "custom", "interactive"] as const)(
+	"requires a new verification for an old %s release",
+	async (mode) => {
+		const release = {
+			...(await releaseFixture()),
+			checkerMode: mode === "text" ? ("text" as const) : ("custom" as const),
+			...(mode === "interactive" ? { judgingMode: "interactive" as const } : {}),
+		};
+		release.report = { ...release.report, interactorUsed: mode === "interactive", verificationContractVersion: 3 };
+		expect(requiresReverification(release)).toBe(true);
+		expect(isContestReadyRelease(release)).toBe(false);
+		await projects.database.put("release", release.id, release);
+		await projects.database.storeBuffer(
+			"release-file",
+			release.id,
+			exportFileName("domjudge"),
+			Buffer.from("old export"),
+		);
+		await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 422 });
+		await expect(projects.releases.exportDomjudge(release.id)).rejects.toMatchObject({ statusCode: 422 });
+		release.report.verificationContractVersion = verificationContractVersion;
+		expect(requiresReverification(release)).toBe(false);
+		expect(isContestReadyRelease(release)).toBe(true);
+	},
+);
 it.each(["fps.xml", "qduoj.zip", "domjudge.zip"])(
 	"rejects a staged %s export committed after project deletion",
 	async (name) => {

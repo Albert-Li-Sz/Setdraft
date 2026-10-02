@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSafeFlatName } from "@setdraft/authoring";
-import { isProjectSnapshot, type ManualProjectSnapshot } from "@setdraft/contracts";
+import { isProjectSnapshot, type ManualProjectSnapshot, synchronizeSolutions } from "@setdraft/contracts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { hashFile } from "./project-files.ts";
@@ -193,9 +193,12 @@ export async function restoreProject(
 			domjudgePdf: content.domjudgePdf,
 			checkerMode: content.checkerMode ?? (content.checkerSource.trim() ? "custom" : "text"),
 			oracle: content.oracle,
+			solutions: content.solutions,
+			referenceSolutionId: content.referenceSolutionId,
 			statementSections: content.statementSections,
 			generatedFromHash: content.generatedFromHash,
 		});
+		synchronizeSolutions(current);
 		await projects.database.commitFiles(
 			files,
 			async () => {

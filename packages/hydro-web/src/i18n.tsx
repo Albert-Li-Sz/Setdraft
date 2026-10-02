@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { englishMessages } from "./locales/en.ts";
+import { verificationMessages } from "./locales/verification-en.ts";
 
 export type Locale = "zh-CN" | "en";
 export type UiMessage = string | { key: string; values: readonly MessageValue[] };
@@ -14,7 +15,7 @@ export function translate(locale: Locale, value: UiMessage, ...parameters: Messa
 	const key = typeof value === "string" ? value : value.key;
 	const values = typeof value === "string" ? parameters : value.values;
 	const normalized = key.replace(/\s+/gu, " ").trim();
-	const translated = englishMessages[normalized];
+	const translated = verificationMessages[normalized] ?? englishMessages[normalized];
 	const template =
 		locale === "en" && translated !== undefined
 			? `${key.match(/^\s*/u)?.[0] ?? ""}${translated}${key.match(/\s*$/u)?.[0] ?? ""}`

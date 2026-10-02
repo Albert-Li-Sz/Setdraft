@@ -26,8 +26,9 @@ export function editableProject(project: ProjectSnapshot) {
 		samples: project.samples,
 		timeLimit: project.timeLimit,
 		memoryLimit: project.memoryLimit,
-		reference: project.reference,
-		oracle: project.oracle ?? null,
+		...(project.solutions
+			? { solutions: project.solutions, referenceSolutionId: project.referenceSolutionId }
+			: { reference: project.reference, oracle: project.oracle ?? null }),
 		generatorSource: project.generatorSource,
 		generatorStandard: project.generatorStandard,
 		generatorScript: project.generatorScript,

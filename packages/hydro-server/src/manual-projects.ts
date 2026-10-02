@@ -7,12 +7,14 @@ import {
 	type AddedManualCase,
 	type CppLanguage,
 	cppLanguages,
+	legacyOracleSolution,
 	type ManualCaseSummary,
 	type ManualProgram,
 	type ManualProject,
 	type ManualProjectSnapshot,
 	type ManualRelease,
 	type ManualSubtask,
+	synchronizeSolutions,
 } from "@setdraft/contracts";
 import { assertReleasesUnreferenced } from "./contest-references.ts";
 import type { ExecutionContext } from "./execution-context.ts";
@@ -21,6 +23,8 @@ import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, dataStem, hashFile } from "./project-files.ts";
 import { ProjectPipeline } from "./project-pipeline.ts";
 import { ReleaseStore } from "./releases.ts";
+import { updateSolutions } from "./solution-model.ts";
+import { VerificationRuns } from "./verification-runs.ts";
 import { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type {
@@ -98,6 +102,7 @@ export interface ManualProjectStoreOptions {
 
 export class ManualProjectStore {
 	readonly pipeline: ProjectPipeline;
+	readonly runs: VerificationRuns;
 	readonly releases: ReleaseStore;
 	readonly root: string;
 	readonly database: WorkspaceDatabase;
@@ -124,6 +129,7 @@ export class ManualProjectStore {
 			throw new Error("maxProjectBytes must be an integer at least as large as maxFileBytes.");
 		}
 		this.pipeline = new ProjectPipeline(this);
+		this.runs = new VerificationRuns(this);
 		this.releases = new ReleaseStore(this);
 	}
 
@@ -201,6 +207,7 @@ export class ManualProjectStore {
 				validatorStandard: stored.validatorStandard ?? "cpp17",
 			};
 			if (version !== undefined) this.documentVersions.set(project, version);
+			synchronizeSolutions(project);
 			return project;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ManualProjectError("项目不存在。", 404);
@@ -368,9 +375,41 @@ export class ManualProjectStore {
 			}
 			project.checkerMode = input.checkerMode;
 		}
-		if (input.reference !== undefined) project.reference = readProgram(input.reference, "reference");
-		if (input.oracle !== undefined)
-			project.oracle = input.oracle === null ? undefined : readProgram(input.oracle, "oracle");
+		if (input.solutions !== undefined || input.referenceSolutionId !== undefined) {
+			if (input.reference !== undefined || input.oracle !== undefined)
+				throw new ManualProjectError("请分别使用解法库或旧程序字段更新。", 422);
+			updateSolutions(project, input);
+		} else {
+			if (input.reference !== undefined) {
+				const reference = readProgram(input.reference, "reference");
+				project.solutions = project.solutions?.map((item) =>
+					item.id === project.referenceSolutionId ? { ...item, ...reference } : item,
+				);
+			}
+			if (input.oracle !== undefined) {
+				const previous = legacyOracleSolution(project);
+				if (input.oracle === null)
+					project.solutions = project.solutions?.filter((item) => item.id !== previous?.id);
+				else if (previous) {
+					const program = readProgram(input.oracle, "oracle");
+					project.solutions = project.solutions?.map((item) =>
+						item.id === previous.id ? { ...item, ...program } : item,
+					);
+				} else {
+					let id = "oracle";
+					for (let index = 1; project.solutions?.some((item) => item.id === id); index++) id = `oracle-${index}`;
+					project.solutions?.push({
+						...readProgram(input.oracle, "oracle"),
+						id,
+						name: "第二标准程序",
+						purpose: "accepted",
+						required: true,
+						expectation: { kind: "AC" },
+					});
+				}
+			}
+			updateSolutions(project, {});
+		}
 		if (input.tags !== undefined) {
 			if (!Array.isArray(input.tags) || input.tags.some((tag) => typeof tag !== "string" || tag.length > 100)) {
 				throw new ManualProjectError("标签必须是短文本数组。");
@@ -834,6 +873,15 @@ export class ManualProjectStore {
 				await this.database.removeOwnerFiles("release-file", release.id);
 			}
 			for (const kind of ["manual", "generated", "pdf"]) await this.database.removeOwnerFiles(kind, id);
+			for (const run of await this.database.list<{ id: string; projectId: string }>("verification-run")) {
+				if (run.projectId !== id) continue;
+				await this.database.removeOwnerFiles("verification-file", run.id);
+				await this.database.delete("verification-run", run.id);
+			}
+			await this.database.sql.execute(
+				"DELETE FROM documents WHERE kind='verification-progress' AND body->>'projectId'=$1",
+				[id],
+			);
 			await this.database.delete("project", id);
 			return releases;
 		});

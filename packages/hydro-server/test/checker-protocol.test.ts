@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { awkCheckerProtocol, checkerScore, pythonCheckerProtocol } from "../src/checker-protocol.ts";
+import { awkCheckerProtocol, checkerRatio, checkerScore, pythonCheckerProtocol } from "../src/checker-protocol.ts";
 
 const fixtures: Array<[number, string, number | undefined]> = [
 	[0, "ok accepted", 100],
@@ -43,6 +43,29 @@ const fixtures: Array<[number, string, number | undefined]> = [
 	[0, "ok\u00a0score(0)", undefined],
 	[0, "ok score(０)", 100],
 ];
+
+it("preserves unrounded partial fractions in TypeScript and Python without accepting invalid verdicts", () => {
+	const values: Array<[number, string, number | undefined]> = [
+		[7, "points 0.0199 precise", 0.0199],
+		[7, "points 99.6 precise", 0.996],
+		[40, "partially correct (40) partial", 0.4],
+		[7, "points 0.0199 rescore(100)", 0.0199],
+		[7, "points 0.0199 score(50)", 0.5],
+		[0, "points 0.0199 wrong exit code", undefined],
+		[7, "points 101 invalid", undefined],
+		[1, "wrong answer score(100)", undefined],
+	];
+	for (const [code, message, expected] of values) expect(checkerRatio(code, message)).toBe(expected);
+	const output = execFileSync(
+		"python3",
+		[
+			"-c",
+			`import json,re,math,sys\n${pythonCheckerProtocol}\nprint(json.dumps([normalized_checker_ratio(*x) for x in json.load(sys.stdin)]))`,
+		],
+		{ input: JSON.stringify(values.map(([code, message]) => [code, message])), encoding: "utf8" },
+	);
+	expect(JSON.parse(output)).toEqual(values.map(([, , expected]) => expected ?? null));
+});
 
 it("local and exported score parsers agree with independent verdict fixtures", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "setdraft-score-"));

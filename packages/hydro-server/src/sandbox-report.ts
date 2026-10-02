@@ -28,6 +28,16 @@ export function readSandboxCheck(value: unknown): ManualCheck {
 		check.verdict = verdict as ManualCheck["verdict"];
 	}
 	if (item.score !== undefined) check.score = count(item.score, 100);
+	if (item.scoreRatio !== undefined) {
+		if (
+			typeof item.scoreRatio !== "number" ||
+			!Number.isFinite(item.scoreRatio) ||
+			item.scoreRatio < 0 ||
+			item.scoreRatio > 1
+		)
+			throw new Error("沙箱报告数值无效。");
+		check.scoreRatio = item.scoreRatio;
+	}
 	if (item.durationMs !== undefined) check.durationMs = count(item.durationMs, 86_400_000);
 	if (item.logPath !== undefined) check.logPath = text(item.logPath, 500);
 	return check;

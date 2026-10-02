@@ -47,8 +47,8 @@ it("normalizes sources, scopes caches and quotas, and reuses completed searches 
 	expect(first.results).toEqual([
 		{ id: 1, title: "Official docs", url: "https://example.com/docs", snippet: "External reference" },
 	]);
-	expect(await search.search(a, id, "request", "public query")).toEqual(first);
-	expect(await search.search(a, id, "next-request", "public query")).toEqual(first);
+	expect(await search.search(a, id, "request", "public query")).toEqual({ ...first, cached: true });
+	expect(await search.search(a, id, "next-request", "public query")).toEqual({ ...first, cached: true });
 	expect(calls).toBe(1);
 	await expect(search.search(a, id, "other", "another query")).rejects.toMatchObject({ statusCode: 429 });
 	await search.search(b, b.sql.accountId!, "request", "public query");
@@ -277,6 +277,7 @@ it("persists search events and sources and sends only explicit query text to the
 			"start",
 			"search",
 			"search",
+			"search",
 			"delta",
 			"done",
 		]);
@@ -310,10 +311,11 @@ it("continues the model reply with a visible search failure and no invented sour
 		[],
 		randomUUID(),
 		true,
+		"question",
 	);
 	expect(result.messages.at(-1)).toMatchObject({
 		content: "offline answer",
-		searchError: "联网搜索暂时不可用，本次回复未使用网络资料。",
+		searchError: "未取得可用资料，本次回复未使用网络资料。",
 	});
 	expect(result.messages.at(-1)?.search).toBeUndefined();
 });

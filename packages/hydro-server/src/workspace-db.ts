@@ -14,6 +14,9 @@ export type DocumentKind =
 	| "sandbox-cleanup"
 	| "ai-config"
 	| "task-options"
+	| "search-plan"
+	| "verification-run"
+	| "verification-progress"
 	| "search-cache";
 
 interface FileRow {

@@ -1,5 +1,5 @@
 import type { AuthUser } from "@setdraft/contracts";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { AppShell } from "./AppShell.tsx";
 import { RevisionConflict, requestJson } from "./api-client.ts";
 import { authClient, authFetch } from "./auth-client.ts";
@@ -26,6 +26,8 @@ import { UploadProgressDialog } from "./UploadProgressDialog.tsx";
 import { useProjectSession } from "./use-project-session.ts";
 import { WorkspaceHome } from "./WorkspaceHome.tsx";
 
+import { readWorkspaceLocation, useLocationHash, workspaceHash } from "./workspace-navigation.ts";
+
 const AiChatPage = lazy(() => import("./AiChatPage.tsx").then((module) => ({ default: module.AiChatPage })));
 const ContestsPage = lazy(() => import("./ContestsPage.tsx").then((module) => ({ default: module.ContestsPage })));
 const ManualWorkspace = lazy(() =>
@@ -45,6 +47,8 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const currentProjectKey = `setdraft.project-id.${user.id}`;
 	const { t } = useLocale();
 	const [page, setPage] = useState<PageRoute>(() => pageFromHash(window.location.hash));
+	const locationHash = useLocationHash();
+	const linkedProject = readWorkspaceLocation(locationHash).project;
 	const [chatVisited, setChatVisited] = useState(page === "chat");
 	useEffect(() => {
 		if (page === "chat") setChatVisited(true);
@@ -191,7 +195,6 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 
 	useEffect(() => {
 		const updatePage = (): void => {
-			selection.current?.abort();
 			setPage(pageFromHash(window.location.hash));
 		};
 		window.addEventListener("hashchange", updatePage);
@@ -255,7 +258,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		}
 	}
 
-	async function openProject(id: string): Promise<void> {
+	async function openProject(id: string, preserveRoute = false): Promise<void> {
 		if (contentOperation.current) return;
 		selection.current?.abort();
 		const controller = new AbortController();
@@ -279,13 +282,22 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			setRelease(history.releases.find((item) => item.id === selected.latestReleaseId));
 
 			showNotice(uiMessage("已打开“{0}”。", selected.title || uiMessage("未命名题目")), "passed");
-			window.location.hash = "workspace";
+			if (!preserveRoute) window.location.hash = workspaceHash({ project: id });
 		} catch (error) {
 			if (controller.signal.aborted) return;
 			setRecordsMessage(error instanceof Error ? error.message : "项目读取失败。");
 			setRecordsTone("failed");
 		}
 	}
+
+	const openLinkedProject = useEffectEvent((id: string) => {
+		if (session.getSnapshot().project?.id !== id) void openProject(id, true);
+	});
+	useEffect(() => {
+		if (paused || !linkedProject) return;
+		openLinkedProject(linkedProject);
+		return () => selection.current?.abort();
+	}, [linkedProject, paused]);
 
 	async function deleteProject(id: string): Promise<void> {
 		setDeletingProjectId(id);
@@ -678,6 +690,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 							<ManualWorkspace
 								key={project.id}
 								apiOrigin={apiOrigin}
+								session={session}
 								project={project}
 								release={release}
 								report={report}

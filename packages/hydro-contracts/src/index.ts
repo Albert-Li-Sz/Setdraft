@@ -1,12 +1,20 @@
 export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-templates.ts";
 
+import type { Solution, VerificationOptions } from "./verification.ts";
+import { isSolution } from "./verification.ts";
+
+export * from "./verification.ts";
+
 export type CheckerMode = "text" | "custom";
-export const verificationContractVersion = 4;
+export const verificationContractVersion = 5;
 export const exportContractVersion = 4;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
-export const cppLanguages = ["cpp11", "cpp14", "cpp17", "cpp20", "cpp23", "cpp26"] as const;
+
+import { cppLanguages } from "./languages.ts";
+
+export { cppLanguages } from "./languages.ts";
 export type CppLanguage = (typeof cppLanguages)[number];
 export type ProgramLanguage = CppLanguage | "python3" | "java";
 export interface ManualProgram {
@@ -21,6 +29,7 @@ export interface ManualCheck {
 	message: string;
 	verdict?: "AC" | "WA" | "CE" | "RE" | "TLE" | "SYSTEM_ERROR";
 	score?: number;
+	scoreRatio?: number;
 	durationMs?: number;
 	logPath?: string;
 }
@@ -72,6 +81,8 @@ export interface ManualProject {
 	memoryLimit: string;
 	reference: ManualProgram;
 	oracle?: ManualProgram;
+	solutions?: Solution[];
+	referenceSolutionId?: string;
 	generatorSource: string;
 	generatorStandard: CppLanguage;
 	generatorScript: string;
@@ -117,6 +128,7 @@ export interface ManualVerificationReport extends ManualSandboxReport {
 	projectHash: string;
 	issues: Array<{ severity: "error" | "warning"; code: string; path: string; message: string }>;
 	verifiedAt: string;
+	matrixRunId?: string;
 }
 
 export interface HistoricHydroVerification {
@@ -257,11 +269,30 @@ export interface SearchDiagnosticReport {
 	engines: Array<{ name: string; diagnostics: SearchDiagnostics }>;
 }
 export interface SearchSnapshot {
+	cached?: boolean;
 	query: string;
+	queries?: string[];
 	provider: "searxng" | "tavily";
 	searchedAt: string;
 	results: SearchResult[];
 	diagnostics?: SearchDiagnostics;
+}
+export type SearchPhase = "planning" | "searching" | "complete" | "failed";
+export interface SearchQueryResult {
+	query: string;
+	state?: "pending" | "searching" | "complete" | "failed" | "cancelled";
+	status?: SearchHealth;
+	message?: string;
+	count?: number;
+	durationMs?: number;
+	cached?: boolean;
+}
+export interface SearchPlan {
+	queries: string[];
+	source: "manual" | "ai";
+	state: "ready" | "failed";
+	usage?: ChatUsage;
+	results?: SearchQueryResult[];
 }
 export interface ChatMessage {
 	finishReason?: "stop" | "length" | "refusal" | "toolUse";
@@ -269,6 +300,8 @@ export interface ChatMessage {
 	search?: SearchSnapshot;
 	searchError?: string;
 	searchStatus?: SearchHealth;
+	searchPlan?: SearchPlan;
+	answerUsage?: ChatUsage;
 	id: string;
 	role: "user" | "assistant";
 	content: string;
@@ -308,12 +341,21 @@ export interface ChatRequestEvent {
 	data: unknown;
 }
 
-export type TaskKind = "generate" | "finalize" | "contest-export" | "release-export" | "image-build";
+export type TaskKind =
+	| "generate"
+	| "finalize"
+	| "contest-export"
+	| "release-export"
+	| "image-build"
+	| "matrix"
+	| "stress";
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "stale" | "interrupted";
 
 export interface TaskRecord {
 	resourceTitle?: string;
 	releaseName?: string;
+	verification?: VerificationOptions;
+	replayOf?: string;
 	id: string;
 	kind: TaskKind;
 	resource: string;
@@ -373,7 +415,7 @@ export interface ApiErrorBody {
 	current?: unknown;
 }
 export type ChatStreamEvent =
-	| { type: "search"; phase: "searching" | "complete" | "failed"; query: string; message?: string }
+	| { type: "search"; phase: SearchPhase; query: string; message?: string; results?: SearchQueryResult[] }
 	| { type: "start"; chat: ChatConversation }
 	| { type: "delta"; delta: string }
 	| { type: "done"; chat: ChatConversation }
@@ -423,10 +465,7 @@ export function isContestReadyRelease(release: ManualRelease): boolean {
 }
 
 export function requiresReverification(release: ManualRelease): boolean {
-	return (
-		(release.judgingMode === "interactive" || release.checkerMode !== "text") &&
-		release.report?.verificationContractVersion !== verificationContractVersion
-	);
+	return release.report?.verificationContractVersion !== verificationContractVersion;
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -469,6 +508,18 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 		!["acm", "oi"].includes(String(value.scoringMode)) ||
 		!Number.isSafeInteger(value.revision) ||
 		Number(value.revision) < 0
+	)
+		return false;
+	if (
+		value.solutions !== undefined &&
+		(!Array.isArray(value.solutions) ||
+			!value.solutions.length ||
+			value.solutions.length > 32 ||
+			!value.solutions.every(isSolution) ||
+			new Set(value.solutions.map((item) => item.id)).size !== value.solutions.length ||
+			!value.solutions.some(
+				(item) => item.id === value.referenceSolutionId && item.required && item.expectation.kind === "AC",
+			))
 	)
 		return false;
 	if (

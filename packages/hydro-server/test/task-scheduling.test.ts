@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ManualRelease, TaskRecord, TaskState } from "@setdraft/contracts";
+import { type ManualRelease, type TaskRecord, type TaskState, verificationContractVersion } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
@@ -264,6 +264,7 @@ describe("sandbox admission and durable dispatch", () => {
 			slug: "test",
 			createdAt: new Date().toISOString(),
 			report: {
+				verificationContractVersion,
 				mode: "finalize",
 				success: true,
 				checks: [{ stage: "reference", passed: true, message: "ok" }],

@@ -67,6 +67,22 @@ export function Dialog({
 				onClose();
 			}}
 			onKeyDown={(event) => {
+				if (event.key === "Tab") {
+					const focusable = [
+						...event.currentTarget.querySelectorAll<HTMLElement>(
+							"button, a[href], input, select, textarea, summary, [tabindex], [contenteditable=true]",
+						),
+					].filter(
+						(element) =>
+							element.tabIndex >= 0 && !element.matches(":disabled") && element.getClientRects().length > 0,
+					);
+					const first = focusable[0],
+						last = focusable.at(-1);
+					if (!first || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+						event.preventDefault();
+						(event.shiftKey ? last : first)?.focus();
+					}
+				}
 				if (event.key === "Escape") {
 					event.preventDefault();
 					onClose();

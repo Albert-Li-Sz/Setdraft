@@ -30,6 +30,18 @@ export function checkerScore(code: number | null, message: string, adapted = fal
 	return score;
 }
 
+/** Preserve quitp precision while retaining the strict verdict validation above. */
+export function checkerRatio(code: number | null, message: string, adapted = false): number | undefined {
+	const score = checkerScore(code, message, adapted);
+	if (score === undefined) return undefined;
+	if (/(?:^|[ \t\r\n\f\v])score\((-?[0-9]+)\)(?=$|[ \t\r\n\f\v])/u.test(message)) return score / 100;
+	const points = /^points ([0-9]+(?:\.[0-9]+)?)(?:[ \t\r\n\f\v]|$)/u.exec(message);
+	const partial = /^partially correct \(([0-9]+)\)(?:[ \t\r\n\f\v]|$)/u.exec(message);
+	if (!points && !partial) return score / 100;
+	const value = Number((points ?? partial)?.[1]);
+	return value > 1 ? value / 100 : value;
+}
+
 export const pythonCheckerProtocol = String.raw`
 def normalized_checker_score(code, message):
     wrong = False
@@ -49,6 +61,16 @@ def normalized_checker_score(code, message):
     if explicit: score = int(explicit.group(1))
     if not 0 <= score <= 100 or (wrong and score == 100): return None
     return score
+
+def normalized_checker_ratio(code, message):
+    score = normalized_checker_score(code, message)
+    if score is None: return None
+    if re.search(r'(?:^|[ \t\r\n\f\v])score\((-?[0-9]+)\)(?=$|[ \t\r\n\f\v])', message): return score / 100
+    points = re.match(r'^points ([0-9]+(?:\.[0-9]+)?)(?:[ \t\r\n\f\v]|$)', message)
+    partial = re.match(r'^partially correct \(([0-9]+)\)(?:[ \t\r\n\f\v]|$)', message)
+    if not points and not partial: return score / 100
+    value = float((points or partial).group(1))
+    return value / 100 if value > 1 else value
 `;
 
 export const awkCheckerProtocol = String.raw`LC_ALL=C awk -v status="$status" '

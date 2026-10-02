@@ -205,6 +205,58 @@ describe("persistent task queue", () => {
 		projects.database.sql.close();
 	});
 
+	it("interrupts a persisted matrix run with its task and preserves retry options", async () => {
+		const projects = new ManualProjectStore({ root });
+		const project = await projects.create("acm");
+		const id = randomUUID(),
+			runId = randomUUID(),
+			now = new Date().toISOString();
+		await projects.database.sql.execute(
+			"INSERT INTO tasks (id,kind,resource,state,fingerprint,created_at,updated_at,owner_pid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+			[id, "matrix", `project:${project.id}`, "running", "old-hash", now, now, 999999],
+		);
+		await projects.database.put("task-options", id, { verification: { kind: "matrix", solutionIds: ["reference"] } });
+		await projects.database.put("verification-run", runId, {
+			id: runId,
+			taskId: id,
+			projectId: project.id,
+			state: "running",
+			solutions: [],
+			createdAt: now,
+		});
+		const queue = new TaskQueue(projects, new ContestStore(projects));
+		queues.push(queue);
+		await queue.ready;
+		queue.close();
+		expect((await queue.get(id)).state).toBe("interrupted");
+		expect(await projects.runs.get(project.id, runId)).toMatchObject({
+			state: "failed",
+			error: expect.stringContaining("中断"),
+		});
+		expect(await queue.retry(id)).toMatchObject({
+			kind: "matrix",
+			verification: { kind: "matrix", solutionIds: ["reference"] },
+		});
+	});
+
+	it("rejects a matrix submission if the draft changes during option validation", async () => {
+		const projects = new ManualProjectStore({ root });
+		const project = await projects.create("acm");
+		const queue = new TaskQueue(projects, new ContestStore(projects));
+		queues.push(queue);
+		await queue.ready;
+		queue.close();
+		const validate = projects.runs.validate.bind(projects.runs);
+		vi.spyOn(projects.runs, "validate").mockImplementation(async (id, options) => {
+			await validate(id, options);
+			await projects.update(id, { title: "concurrent edit" });
+		});
+		await expect(
+			queue.submitVerification(project.id, { kind: "matrix" }, undefined, project.revision),
+		).rejects.toMatchObject({ statusCode: 409 });
+		expect(await queue.list()).toHaveLength(0);
+	});
+
 	it("resumes queued tasks in durable order when submission timestamps tie", async () => {
 		const projects = new ManualProjectStore({ root });
 		const resolvers = new Map<string, () => void>();

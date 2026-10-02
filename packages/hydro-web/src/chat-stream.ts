@@ -1,4 +1,4 @@
-import type { ChatStreamEvent } from "@setdraft/contracts";
+import type { ChatStreamEvent, SearchPhase, SearchQueryResult } from "@setdraft/contracts";
 import type { ChatConversation } from "./platform.ts";
 
 export type { ChatStreamEvent } from "@setdraft/contracts";
@@ -17,14 +17,23 @@ function decodeEvent(name: string, data: string): ChatStreamEvent | undefined {
 	const record = payload as Record<string, unknown>;
 	if (
 		name === "search" &&
-		["searching", "complete", "failed"].includes(String(record.phase)) &&
+		["planning", "searching", "complete", "failed"].includes(String(record.phase)) &&
 		typeof record.query === "string"
 	)
 		return {
 			type: "search",
-			phase: record.phase as "searching" | "complete" | "failed",
+			phase: record.phase as SearchPhase,
 			query: record.query,
 			message: typeof record.message === "string" ? record.message : undefined,
+			results:
+				Array.isArray(record.results) &&
+				record.results.length <= 3 &&
+				record.results.every(
+					(item: unknown) =>
+						!!item && typeof item === "object" && "query" in item && typeof item.query === "string",
+				)
+					? (record.results as SearchQueryResult[])
+					: undefined,
 		};
 	if (name === "delta" && typeof record.delta === "string") return { type: "delta", delta: record.delta };
 	if (name === "error" && typeof record.message === "string") return { type: "error", message: record.message };

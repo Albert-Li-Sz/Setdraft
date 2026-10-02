@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { verificationContractVersion } from "@setdraft/contracts";
 import { writeStoredArchiveFromFiles } from "../packages/hydro-authoring/dist/index.js";
 import { ManualProjectStore } from "../packages/hydro-server/dist/index.js";
 import { WorkspaceDatabase } from "../packages/hydro-server/dist/workspace-db.js";
@@ -22,7 +23,7 @@ export async function seedRelease(root, userId) {
 	for (const name of await readdir(join(fixture, "hydro"), { recursive: true, withFileTypes: true }))
 		if (name.isFile()) files.set(join(name.parentPath, name.name).slice(join(fixture, "hydro").length + 1).replaceAll("\\", "/"), join(name.parentPath, name.name));
 	await writeStoredArchiveFromFiles(join(directory, "hydro.zip"), "", files);
-	const report = { mode: "finalize", success: true, checks: [], caseCount: 3, generatedCount: 0, oracleCount: 0, validatorUsed: false, checkerUsed: true, revision: snapshot.revision, projectHash: "fixed-contract-fixture", issues: [], verifiedAt: "2026-09-29T00:00:00.000Z" };
+	const report = { mode: "finalize", success: true, verificationContractVersion, checks: [], caseCount: 3, generatedCount: 0, oracleCount: 0, validatorUsed: false, checkerUsed: true, revision: snapshot.revision, projectHash: "fixed-contract-fixture", issues: [], verifiedAt: "2026-09-29T00:00:00.000Z" };
 	const release = { id, projectId: project.id, title: snapshot.title, slug: snapshot.slug, scoringMode: "acm", judgingMode: "default", checkerMode: "text", revision: snapshot.revision, projectHash: report.projectHash, createdAt: report.verifiedAt, report };
 	await projects.database.commitFiles([{ ownerKind: "release-file", ownerId: id, name: "hydro.zip", source: { path: join(directory, "hydro.zip") } }], () => projects.database.put("release", id, release));
 	await mkdir(join(directory, "source"), { recursive: true });

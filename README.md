@@ -5,9 +5,9 @@
 Setdraft 是面向个人和小团队的自部署算法竞赛制题工作台，将题面编辑、测试数据管理、程序验证和题包导出集中在一个界面中。
 
 - **编辑题目**：支持 Markdown、LaTeX、样例和附件，自动保存草稿并保留发布历史。
-- **生成与验证**：支持 Gen、标准程序、第二标准程序、Validator 和 Checker，在 Docker 沙箱中运行 C++、Python、Java 程序。
+- **生成与验证**：支持多解法库、验证矩阵、可复现对拍、Validator 和 Checker，在 Docker 沙箱中运行 C++、Python、Java 程序，并保留运行记录与诊断日志。
 - **题型与导出**：支持普通题、全交互题、半对拍及 ACM/OI 计分；可导出 Hydro 题目与竞赛包、DOMjudge ACM 题目与竞赛包，并生成 PDF 题册。
-- **个人工作区**：提供账号隔离、后台任务管理和独立 AI 对话，AI 服务由管理员统一配置。
+- **个人工作区**：提供账号隔离、后台任务管理和独立 AI 对话；AI 可规划搜索关键词并结合来源回答，服务由管理员统一配置。
 
 使用方法见 [出题文档](docs/authoring-guide.md) 和 [交互题说明](docs/interactive-problems.md)。
 

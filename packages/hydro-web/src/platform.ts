@@ -23,6 +23,7 @@ export const cppLanguageOptions: ReadonlyArray<{ value: CppLanguage; label: stri
 ];
 
 export function pageFromHash(hash: string): PageRoute {
+	hash = hash.split("?")[0];
 	if (hash === "#chat") return "chat";
 	if (hash === "#records") return "records";
 	if (hash === "#contests") return "contests";

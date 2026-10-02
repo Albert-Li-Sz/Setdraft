@@ -39,7 +39,7 @@ export class ProjectPipeline {
 	constructor(projects: ManualProjectStore) {
 		this.projects = projects;
 	}
-	private limits(project: ManualProject): { timeLimitMs: number; memoryLimitMb: number } {
+	limits(project: ManualProject): { timeLimitMs: number; memoryLimitMb: number } {
 		const timeLimitMs = parseHydroTimeLimitMs(project.timeLimit);
 		const memory = /^(\d+(?:\.\d+)?)(k|m|g|kb|mb|gb)$/iu.exec(project.memoryLimit);
 		const memoryLimitMb = memory
@@ -185,6 +185,8 @@ export class ProjectPipeline {
 				reference: project.reference,
 				oracle: project.oracle,
 				generatorSource: project.generatorSource,
+				solutions: project.solutions,
+				referenceSolutionId: project.referenceSolutionId,
 				generatorStandard: project.generatorStandard,
 				generatorScript: project.generatorScript,
 				checkerSource: project.checkerSource,
@@ -398,6 +400,18 @@ export class ProjectPipeline {
 				issues: structural.issues,
 				verifiedAt: new Date().toISOString(),
 			};
+			if (report.success) {
+				const run = await this.projects.runs.required(project, context);
+				report.matrixRunId = run.id;
+				for (const result of run.matrix?.solutions ?? [])
+					report.checks.push({
+						stage: "solution-expectation",
+						passed: result.matches,
+						message: `${run.solutions.find((item) => item.id === result.solutionId)?.name}: ${result.message}`,
+						score: result.score,
+					});
+				report.success = run.state === "complete" && run.matrix?.requiredPassed === true;
+			}
 			project.lastReport = report;
 			await this.projects.save(project, context);
 			if (!report.success) return { report };

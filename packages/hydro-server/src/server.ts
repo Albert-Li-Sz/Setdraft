@@ -14,7 +14,9 @@ import { ManualProjectError, type ManualProjectStore } from "./manual-projects.t
 import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
 import { copyProject, restoreProject } from "./project-history.ts";
 import { releaseName } from "./releases.ts";
+import { searchQueries } from "./search-planner.ts";
 import { serveStatic } from "./static-files.ts";
+import { readVerificationOptions } from "./verification-runs.ts";
 import { WorkspaceRegistry } from "./workspace-registry.ts";
 
 export interface HydroServerOptions {
@@ -110,6 +112,8 @@ async function readChatSubmission(
 		return typeof value === "string" ? value : undefined;
 	};
 	const images: ChatImageUpload[] = [];
+	if (field("searchQueries") !== undefined && field("searchQuery") !== undefined)
+		throw new ChatError("单组与多组关键词不能同时提供。", 422);
 	for (const item of form.getAll("images")) {
 		if (typeof item === "string") throw new ChatError("图片格式无效。", 422);
 		images.push({
@@ -126,8 +130,16 @@ async function readChatSubmission(
 		profileId: field("profileId"),
 		images,
 		webSearch: field("webSearch") === "true",
-		searchQuery: field("searchQuery"),
+		searchQuery: field("searchQueries") ? readMultipleQueries(field("searchQueries")) : field("searchQuery"),
 	};
+}
+
+function readMultipleQueries(value: string | undefined): string {
+	try {
+		return searchQueries(JSON.parse(value ?? "[]")).join("\n");
+	} catch {
+		throw new ChatError("搜索关键词格式无效。", 422);
+	}
 }
 
 async function sendFile(
@@ -170,8 +182,15 @@ function readChatMessage(value: unknown): {
 	if (record.images !== undefined && !Array.isArray(record.images)) throw new ChatError("图片列表格式无效。");
 	if (record.webSearch !== undefined && typeof record.webSearch !== "boolean")
 		throw new ChatError("搜索开关无效。", 422);
-	if (record.searchQuery !== undefined && (typeof record.searchQuery !== "string" || record.searchQuery.length > 500))
-		throw new ChatError("搜索关键词最多 500 个字符。", 422);
+	if (record.searchQuery !== undefined && typeof record.searchQuery !== "string")
+		throw new ChatError("搜索关键词格式无效。", 422);
+	if (record.searchQuery !== undefined && record.searchQueries !== undefined)
+		throw new ChatError("请使用单个或多个关键词字段之一。", 422);
+	const query =
+		record.searchQueries !== undefined
+			? searchQueries(record.searchQueries).join("\n")
+			: (record.searchQuery as string | undefined);
+	if (query?.trim()) searchQueries(query.split("\n").filter((item) => item.trim()));
 	const images = record.images as unknown[] | undefined;
 	if (
 		images?.some((image) => {
@@ -191,7 +210,7 @@ function readChatMessage(value: unknown): {
 		profileId: record.profileId as string | undefined,
 		images: images as ChatImageUpload[] | undefined,
 		webSearch: record.webSearch as boolean | undefined,
-		searchQuery: record.searchQuery as string | undefined,
+		searchQuery: query,
 	};
 }
 
@@ -470,6 +489,74 @@ export async function createHydroServer(
 					}
 					sendJson(response, 201, await projects.create(scoringMode));
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const runRoute =
+				/^\/api\/projects\/([^/]+)\/runs(?:\/([^/]+)(?:\/(replay|import|download|diagnostics|artifact|cell))?)?$/u.exec(
+					url.pathname,
+				);
+			if (runRoute) {
+				const [, projectId, runId, action] = runRoute;
+				if (request.method === "GET" && !runId)
+					sendJson(
+						response,
+						200,
+						await projects.runs.page(projectId, {
+							limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+							cursor: url.searchParams.get("cursor") ?? undefined,
+							kind: url.searchParams.get("kind") ?? undefined,
+							taskId: url.searchParams.get("task") ?? undefined,
+						}),
+					);
+				else if (request.method === "GET" && runId && !action)
+					sendJson(response, 200, await projects.runs.get(projectId, runId));
+				else if (request.method === "GET" && runId && action === "cell")
+					sendJson(
+						response,
+						200,
+						await projects.runs.cell(
+							projectId,
+							runId,
+							url.searchParams.get("solution") ?? "",
+							url.searchParams.get("case") ?? "",
+						),
+					);
+				else if (request.method === "GET" && runId && (action === "diagnostics" || action === "artifact")) {
+					const name = action === "artifact" ? (url.searchParams.get("name") ?? "") : undefined;
+					if (name === "") throw new ManualProjectError("诊断文件路径无效。", 422);
+					await sendFile(
+						response,
+						await projects.runs.diagnosticFile(projectId, runId, name),
+						name?.split("/").at(-1) ?? "diagnostics.zip",
+						undefined,
+						name ? "application/octet-stream" : "application/zip",
+					);
+				} else if (request.method === "GET" && runId && action === "download")
+					await sendFile(response, await projects.runs.archive(projectId, runId), "reproduction.zip");
+				else if (request.method === "POST" && runId && action === "replay") {
+					const original = await projects.runs.get(projectId, runId);
+					if (original.stress?.reason !== "counterexample")
+						throw new ManualProjectError("此运行没有可重放反例。", 422);
+					sendJson(response, 202, { task: await tasks.submitVerification(projectId, original.options, runId) });
+				} else if (request.method === "POST" && (!runId || action === "import")) {
+					const value = await readJson(request, 64 * 1024);
+					if (!value || typeof value !== "object" || Array.isArray(value))
+						throw new ManualProjectError("运行参数无效。", 422);
+					const input = value as Record<string, unknown>;
+					if (runId) sendJson(response, 201, await projects.runs.importCase(projectId, runId, input));
+					else {
+						if (typeof input.expectedRevision !== "number" || !Number.isSafeInteger(input.expectedRevision))
+							throw new ManualProjectError("请提供当前题目版本。", 422);
+						sendJson(response, 202, {
+							task: await tasks.submitVerification(
+								projectId,
+								readVerificationOptions(input),
+								undefined,
+								input.expectedRevision,
+							),
+						});
+					}
+				} else sendJson(response, 405, { message: "不支持该方法。" });
 				return;
 			}
 			const textCaseRoute = /^\/api\/projects\/([^/]+)\/cases$/u.exec(url.pathname);

@@ -7,6 +7,8 @@ import { Icon } from "./Icon.tsx";
 import { useLocale } from "./i18n.tsx";
 import { apiUrl, type BackgroundTask, type TaskEvent } from "./platform.ts";
 
+import { workspaceHash } from "./workspace-navigation.ts";
+
 function checkDetails(data: unknown): { caseId?: string; passed?: boolean } {
 	if (typeof data !== "object" || data === null) return {};
 	return {
@@ -16,6 +18,8 @@ function checkDetails(data: unknown): { caseId?: string; passed?: boolean } {
 }
 
 const taskNames: Record<BackgroundTask["kind"], string> = {
+	matrix: "验证矩阵",
+	stress: "随机对拍",
 	generate: "生成数据",
 	finalize: "完整验证与打包",
 	"contest-export": "竞赛导出",
@@ -280,6 +284,19 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									)}
 								</div>
 							</div>
+							{["matrix", "stress", "finalize"].includes(task.kind) && (
+								<a
+									className="button secondary button-link"
+									href={workspaceHash({
+										project: task.resource.split(":")[1],
+										tab: "validation",
+										task: task.id,
+										mode: task.kind === "stress" ? "stress" : "matrix",
+									})}
+								>
+									{t("打开对应运行")}
+								</a>
+							)}
 							{task.error && <p className="tasks-error">{t(task.error)}</p>}
 							<div className="tasks-events" role="log" aria-live="polite">
 								{events.map((item) => {

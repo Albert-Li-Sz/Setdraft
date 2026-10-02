@@ -2,7 +2,15 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
-import type { ContestFormat, TaskEvent, TaskKind, TaskRecord, TaskState } from "@setdraft/contracts";
+import type {
+	ContestFormat,
+	ManualProject,
+	TaskEvent,
+	TaskKind,
+	TaskRecord,
+	TaskState,
+	VerificationOptions,
+} from "@setdraft/contracts";
 import { exportContractVersion, isContestReadyRelease } from "@setdraft/contracts";
 import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
@@ -132,6 +140,7 @@ export class TaskQueue {
 						},
 						async (span) => {
 							await removeTaskContainer(task.id);
+							await this.projects.runs.interrupt(task.id);
 							await this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
 							span.setAttributes({ "task.state": "interrupted" });
 							span.setStatus({ status: "error" });
@@ -194,7 +203,7 @@ export class TaskQueue {
 		this.admissions.delete(id);
 	}
 
-	private async fingerprint(kind: TaskKind, resource: string): Promise<string> {
+	private async fingerprint(kind: TaskKind, resource: string, expectedRevision?: number): Promise<string> {
 		if (kind === "image-build") return digest({ image: this.projects.image });
 		if (kind === "release-export") {
 			const { name: _name, exports: _exports, ...content } = await this.projects.releases.release(resource);
@@ -202,8 +211,11 @@ export class TaskQueue {
 		}
 		if (kind === "contest-export")
 			return digest({ content: await this.database.get("contest", resource), version: exportContractVersion });
+		const project = await this.database.get<ManualProject>("project", resource);
+		if (expectedRevision !== undefined && project?.revision !== expectedRevision)
+			throw new ManualProjectError("题目版本已变化，请保存后重试。", 409);
 		return digest({
-			project: await this.database.get("project", resource),
+			project,
 			files: [
 				...(await this.database.fileEntries("manual", resource)),
 				...(await this.database.fileEntries("generated", resource)),
@@ -230,11 +242,33 @@ export class TaskQueue {
 		return flight;
 	}
 
+	async submitVerification(
+		resourceId: string,
+		verification: VerificationOptions,
+		replayOf?: string,
+		expectedRevision?: number,
+	): Promise<TaskRecord> {
+		if (replayOf) await this.projects.runs.get(resourceId, replayOf);
+		else await this.projects.runs.validate(resourceId, verification);
+		return this.submitTask(
+			verification.kind,
+			resourceId,
+			undefined,
+			undefined,
+			verification,
+			replayOf,
+			expectedRevision,
+		);
+	}
+
 	private async submitTask(
 		kind: TaskKind,
 		resourceId: string,
 		format?: ContestFormat,
 		releaseName?: string,
+		verification?: VerificationOptions,
+		replayOf?: string,
+		expectedRevision?: number,
 	): Promise<TaskRecord> {
 		await this.ready;
 		await this.assertWritable();
@@ -269,7 +303,7 @@ export class TaskQueue {
 			releaseName,
 			resourceTitle,
 			state: "queued",
-			fingerprint: await this.fingerprint(kind, resourceId),
+			fingerprint: await this.fingerprint(kind, resourceId, expectedRevision),
 			createdAt: now,
 			updatedAt: now,
 		};
@@ -284,6 +318,8 @@ export class TaskQueue {
 				await this.database.put("task-options", task.id, {
 					releaseName,
 					resourceTitle,
+					verification,
+					replayOf,
 					telemetry: this.observability.capture(),
 				});
 				await this.emit(task.id, "queued", "任务已排队。", { kind, resourceId });
@@ -310,7 +346,12 @@ export class TaskQueue {
 			| Record<string, unknown>
 			| undefined;
 		if (!row) throw new ManualProjectError("任务不存在。", 404);
-		const options = await this.database.get<{ releaseName?: string; resourceTitle?: string }>("task-options", id);
+		const options = await this.database.get<{
+			releaseName?: string;
+			resourceTitle?: string;
+			verification?: VerificationOptions;
+			replayOf?: string;
+		}>("task-options", id);
 		const [kind, resourceId] = String(row.resource).split(":");
 		const title =
 			kind === "project" || kind === "contest"
@@ -342,6 +383,8 @@ export class TaskQueue {
 			id: String(row.id),
 			resourceTitle: title ?? options?.resourceTitle,
 			releaseName: options?.releaseName,
+			verification: options?.verification,
+			replayOf: options?.replayOf,
 			kind: row.kind as TaskKind,
 			resource: String(row.resource),
 			format: row.format as ContestFormat | undefined,
@@ -478,6 +521,8 @@ export class TaskQueue {
 		const task = await this.get(id);
 		if (!["failed", "cancelled", "stale", "interrupted"].includes(task.state))
 			throw new ManualProjectError("当前任务不可重试。", 409);
+		if (task.verification)
+			return this.submitVerification(task.resource.split(":")[1], task.verification, task.replayOf);
 		return await this.submit(task.kind, task.resource.split(":")[1] ?? "", task.format, task.releaseName);
 	}
 
@@ -720,7 +765,7 @@ export class TaskQueue {
 				controller.abort();
 				controller.signal.throwIfAborted();
 			}
-			if (task.fingerprint !== currentFingerprint) {
+			if (!task.replayOf && task.fingerprint !== currentFingerprint) {
 				await end("stale", undefined, "排队期间内容发生变化，请重试。");
 				return;
 			}
@@ -732,7 +777,12 @@ export class TaskQueue {
 			};
 			let result: unknown;
 			if (task.kind === "generate") result = await this.projects.pipeline.generate(resourceId, context);
-			else if (task.kind === "finalize")
+			else if (task.kind === "matrix" || task.kind === "stress") {
+				if (!task.verification || task.verification.kind !== task.kind)
+					throw new ManualProjectError("验证任务配置缺失。", 422);
+				const run = await this.projects.runs.execute(resourceId, task.verification, context, task.replayOf);
+				result = { runId: run.id };
+			} else if (task.kind === "finalize")
 				result = await this.projects.pipeline.finalize(resourceId, context, task.releaseName);
 			else if (task.kind === "release-export") {
 				if (task.format !== "domjudge") throw new ManualProjectError("发布格式无效。", 422);

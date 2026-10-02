@@ -4,7 +4,16 @@ import { join, resolve } from "node:path";
 import type { Api, Context, ImageContent, Message, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
-import type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage, SearchSnapshot } from "@setdraft/contracts";
+import type {
+	ChatConversation,
+	ChatImage,
+	ChatImageUpload,
+	ChatMessage,
+	SearchPhase,
+	SearchPlan,
+	SearchQueryResult,
+	SearchSnapshot,
+} from "@setdraft/contracts";
 import {
 	AiConfigurationStore,
 	type ChatConfigurationSnapshot,
@@ -13,11 +22,12 @@ import {
 } from "./ai-configuration.ts";
 import { ChatError } from "./chat-error.ts";
 import { NOOP_OBSERVABILITY, type Observability, secondsSince } from "./observability.ts";
+import { plannedSearch, searchQueries, totalUsage } from "./search-planner.ts";
 
 export type { ChatConfigurationSnapshot, ChatProfileSnapshot } from "./ai-configuration.ts";
 export { ChatError } from "./chat-error.ts";
 
-import { SearchFailure, type WebSearch } from "./web-search.ts";
+import type { WebSearch } from "./web-search.ts";
 import { WorkspaceDatabase } from "./workspace-db.ts";
 
 export type { ChatConversation, ChatImage, ChatImageUpload, ChatMessage, SearchSnapshot } from "@setdraft/contracts";
@@ -31,7 +41,7 @@ export interface ChatModelRequest {
 }
 
 export interface ChatSendEvents {
-	onSearch?(phase: "searching" | "complete" | "failed", query: string, message?: string): void;
+	onSearch?(phase: SearchPhase, query: string, message?: string, results?: SearchQueryResult[]): void;
 	onStart(chat: ChatConversation): void;
 	onDelta(delta: string): void;
 }
@@ -387,6 +397,9 @@ export class ChatService {
 			for (const request of requests) {
 				await this.database.removeOwnerFiles("chat-request-image", request.id);
 				await this.database.delete("search-cache", `request:${request.id}`);
+				for (let index = 0; index < 3; index++)
+					await this.database.delete("search-cache", `request:${request.id}:${index}`);
+				await this.database.delete("search-plan", request.id);
 				await this.database.sql.execute("DELETE FROM chat_request_events WHERE request_id=$1", [request.id]);
 			}
 			await this.database.sql.execute("DELETE FROM chat_requests WHERE chat_id=$1", [id]);
@@ -424,7 +437,7 @@ export class ChatService {
 		if ((!message.trim() && images.length === 0) || message.length > 40_000)
 			throw new ChatError("请填写消息或添加图片；文字最多 40000 个字符。");
 		if (contextSnapshot && contextSnapshot.length > 80_000) throw new ChatError("附带的题目上下文过长。");
-		if (searchQuery && searchQuery.length > 500) throw new ChatError("搜索词最多 500 个字符。", 422);
+		if (searchQuery?.trim()) searchQueries(searchQuery.split("\n").filter((item) => item.trim()));
 		const selectedProfileId = profileId ?? chat.profileId ?? this.catalog.defaultProfileId;
 		const configuration = this.catalog.profiles.find((item) => item.id === selectedProfileId);
 		if (!configuration) throw new ChatError("当前对话使用的 AI 配置不存在，请重新选择。", 422);
@@ -502,27 +515,24 @@ export class ChatService {
 			let search: SearchSnapshot | undefined;
 			let searchError: string | undefined;
 			let searchStatus: ChatMessage["searchStatus"];
+			let searchPlan: SearchPlan | undefined;
 			if (webSearch) {
-				const query = (searchQuery?.trim() || message.trim()).slice(0, 500);
-				events.onSearch?.("searching", query);
-				try {
-					if (!this.search) throw new ChatError("联网搜索尚未配置。", 503);
-					search = await this.search.service.search(
-						this.database,
-						this.search.userId,
-						requestId ?? user.id,
-						query,
-						signal,
-					);
-					searchStatus = search.diagnostics?.status;
-					events.onSearch?.("complete", query);
-				} catch (error) {
-					signal?.throwIfAborted();
-					searchError =
-						error instanceof ChatError ? error.message : "联网搜索暂时不可用，本次回复未使用网络资料。";
-					searchStatus = error instanceof SearchFailure ? error.diagnostics.status : "configuration";
-					events.onSearch?.("failed", query, searchError);
-				}
+				const result = await plannedSearch({
+					database: this.database,
+					requestId: requestId ?? user.id,
+					chatId: id,
+					messages: chat.messages,
+					manual: searchQuery,
+					configuration,
+					invoke: (request) => this.invoke(request),
+					search: this.search,
+					signal,
+					emit: events.onSearch,
+				});
+				search = result.search;
+				searchPlan = result.plan;
+				searchError = result.error;
+				searchStatus = result.status;
 			}
 			const latestSize =
 				message.trim().length + (contextSnapshot?.length ?? 0) + images.length * imageContextCharacters;
@@ -609,7 +619,9 @@ export class ChatService {
 				modelId: configuration.modelId,
 				api: configuration.provider,
 				requestId,
-				usage: typeof reply === "string" ? undefined : reply.usage,
+				searchPlan,
+				answerUsage: typeof reply === "string" ? undefined : reply.usage,
+				usage: totalUsage(searchPlan?.usage, typeof reply === "string" ? undefined : reply.usage),
 				finishReason: typeof reply === "string" ? undefined : reply.finishReason,
 				complete: typeof reply === "string" ? undefined : (reply.complete ?? reply.finishReason !== "length"),
 			});

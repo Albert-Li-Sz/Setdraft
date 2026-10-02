@@ -1,0 +1,278 @@
+.verification-panel {
+	border-block: 1px solid var(--line);
+	padding-block: 20px;
+	margin-block: 20px;
+	min-width: 0;
+	display: grid;
+	gap: 16px;
+}
+.verification-heading,
+.matrix-mobile-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.verification-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 12px;
+}
+.verification-fields .field {
+	min-width: 0;
+	margin: 0;
+}
+.verification-panel > .field,
+.verification-panel > p,
+.verification-panel .manual-report-status {
+	margin: 0;
+}
+.verification-fields input:not([type="checkbox"]),
+.verification-fields select,
+.verification-panel > .field select {
+	width: 100%;
+	min-width: 0;
+}
+.verification-targets {
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	padding: 12px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+}
+.verification-targets label,
+.verification-checkbox {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	overflow-wrap: anywhere;
+}
+.verification-checkbox {
+	align-self: end;
+	min-height: var(--control-height);
+	font-size: 13px;
+}
+.verification-checkbox input {
+	width: auto;
+	flex-shrink: 0;
+}
+.solution-settings,
+.stress-options {
+	display: grid;
+	gap: 12px;
+}
+.solution-summaries {
+	display: grid;
+	gap: 8px;
+}
+.solution-summaries > div {
+	display: grid;
+	gap: 4px;
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+.matrix-scroll {
+	max-width: 100%;
+	max-height: 520px;
+	overflow: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+}
+.matrix-table {
+	border-collapse: separate;
+	border-spacing: 0;
+	width: max-content;
+	min-width: 100%;
+	font-size: 13px;
+}
+.matrix-table th,
+.matrix-table td {
+	border-bottom: 1px solid var(--line);
+	border-right: 1px solid var(--line);
+	padding: 8px;
+	min-width: 136px;
+	text-align: left;
+}
+.matrix-table th {
+	background: var(--panel);
+	max-width: 220px;
+	overflow-wrap: anywhere;
+}
+.matrix-table thead th {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+}
+.matrix-table tr > :first-child {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	max-width: 200px;
+}
+.matrix-table thead th:first-child {
+	z-index: 3;
+}
+.matrix-table small {
+	display: block;
+	font-weight: normal;
+}
+.matrix-cell {
+	display: grid;
+	gap: 3px;
+	width: 100%;
+	text-align: left;
+	border: 0;
+	background: transparent;
+	padding: 4px;
+	cursor: pointer;
+	font: inherit;
+	border-radius: 4px;
+}
+.matrix-cell.failed {
+	color: var(--danger);
+}
+.matrix-cell:hover {
+	background: var(--surface-subtle);
+}
+.matrix-cell:focus-visible,
+.matrix-scroll:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: -2px;
+}
+.matrix-mobile {
+	display: none;
+}
+.verification-previews {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+.verification-panel pre,
+.verification-detail pre {
+	max-height: 260px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	padding: 12px;
+	background: var(--surface-subtle);
+	border-radius: 6px;
+	font-size: 12px;
+}
+.verification-panel details {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.verification-detail {
+	width: min(900px, calc(100vw - 32px));
+}
+.manual-program-menu :where(button > span) {
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.chat-search-query > span {
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+.chat-search-query textarea {
+	flex: 1;
+	width: 100%;
+	min-width: 0;
+	min-height: 48px;
+	max-height: 120px;
+	border: 0;
+	background: transparent;
+	padding: 8px 0;
+	font: inherit;
+	resize: vertical;
+}
+.chat-actual-queries {
+	white-space: pre-wrap;
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+	.matrix-scroll {
+		display: none;
+	}
+	.matrix-mobile {
+		display: block;
+	}
+	.matrix-mobile-row {
+		border-bottom: 1px solid var(--line);
+		padding-block: 8px;
+		flex-wrap: nowrap;
+	}
+	.matrix-mobile-row > span {
+		overflow-wrap: anywhere;
+	}
+	.matrix-mobile-row .matrix-cell {
+		width: auto;
+		flex-shrink: 0;
+	}
+	.verification-previews {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.verification-fields {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.verification-pagination,
+.search-query-meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+.verification-progress {
+	display: grid;
+	gap: 6px;
+	font-size: 13px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.verification-progress progress {
+	width: 100%;
+	accent-color: var(--accent);
+}
+.output-difference mark {
+	background: #fce6a7;
+	color: #422f00;
+	padding-inline: 2px;
+	border-radius: 2px;
+}
+.search-query-results {
+	list-style: none;
+	padding: 0;
+	margin: 12px 0;
+	display: grid;
+	gap: 8px;
+	font-size: 13px;
+}
+.search-query-results li {
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	padding: 10px 12px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.search-query-results strong {
+	display: block;
+	font-weight: 500;
+	margin-bottom: 6px;
+}
+.search-query-meta,
+.search-source-domain {
+	font-size: 12px;
+	color: var(--muted);
+}
+.search-source-domain {
+	display: block;
+	overflow-wrap: anywhere;
+	margin-top: 4px;
+}
+.verification-detail .heading-actions {
+	margin-block: 12px;
+}

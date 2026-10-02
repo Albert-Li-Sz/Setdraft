@@ -27,6 +27,7 @@ export interface SandboxInput {
 	reference: ManualProgram;
 	interactor?: { language: CppLanguage; code: string };
 	oracle?: ManualProgram;
+	contestants?: Array<{ id: string; program: ManualProgram }>;
 	generator?: string;
 	generatorStandard: CppLanguage;
 	commands?: string[][];
@@ -42,7 +43,7 @@ export interface SandboxInput {
 	samples?: Array<{ input: string; output: string }>;
 }
 
-const runner = String.raw`
+export const sandboxProgramRuntime = String.raw`
 import hashlib, json, math, os, pathlib, re, resource, shutil, signal, subprocess, sys, time
 
 root = pathlib.Path('/work')
@@ -149,7 +150,7 @@ def same_default(left, right):
 
 ${pythonCheckerProtocol}
 
-def checker_score(input_path, contestant, answer, label, case_id):
+def checker_score(input_path, contestant, answer, label, case_id, precise=False):
     directory = root / 'run' / 'checker' / case_id / label
     result = run(commands['checker'] + [str(input_path), str(contestant), str(answer)], None,
                  directory / 'stdout', 10, 512, directory)
@@ -159,7 +160,7 @@ def checker_score(input_path, contestant, answer, label, case_id):
         return None
     verdict = (root / result['logPath']).read_text(encoding='utf-8', errors='replace')
     score = normalized_checker_score(result['code'], verdict) if result['status'] in ('ok', 'runtime_error') else None
-    if score is not None: return score
+    if score is not None: return normalized_checker_ratio(result['code'], verdict) if precise else score
     check('checker-system', False, verdict or result['status'], case_id, verdict='SYSTEM_ERROR',
           duration_ms=result['durationMs'], log_path=result['logPath'])
     return None
@@ -170,6 +171,10 @@ def validate_input(input_path, case_id):
     result = run(commands['validator'], input_path, directory / 'stdout', 10, 512, directory)
     return check('validator', result['status'] == 'ok', result['stderr'] or result['status'], case_id,
                  verdict='AC' if result['status'] == 'ok' else 'WA', duration_ms=result['durationMs'], log_path=result['logPath'])
+
+`;
+
+const runner = String.raw`${sandboxProgramRuntime}
 
 def verify_case(case_id, input_path, supplied_output, output_name):
     if not validate_input(input_path, case_id): return
@@ -283,13 +288,14 @@ export async function removeTaskContainer(taskId: string): Promise<void> {
 	if (failed?.status === "rejected") throw failed.reason;
 }
 
-function runDocker(
+export function runDocker(
 	args: string[],
 	timeoutMs: number,
 	signal?: AbortSignal,
 	taskId?: string,
 	context?: ExecutionContext,
 	stage?: string,
+	onMatrixCell?: (value: unknown) => void,
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -326,6 +332,10 @@ function runDocker(
 						if (++eventCount > 50_000) throw new Error("沙箱进度条目过多。");
 						const item = readSandboxCheck(JSON.parse(line.slice(15)));
 						context?.emit("check", item.message, item);
+					}
+					if (line.startsWith("SETDRAFT_CELL ")) {
+						if (++eventCount > 50_000) throw new Error("沙箱进度条目过多。");
+						onMatrixCell?.(JSON.parse(line.slice(14)));
 					}
 					end = pending.indexOf("\n");
 				}

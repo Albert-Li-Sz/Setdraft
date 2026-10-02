@@ -258,6 +258,7 @@ export class WebSearch {
 		options: SearchOptions = {},
 	): Promise<SearchSnapshot> {
 		const started = performance.now();
+		signal?.throwIfAborted();
 		const diagnostics = (
 			status: SearchHealth,
 			candidateCount = 0,
@@ -279,7 +280,7 @@ export class WebSearch {
 		};
 		const configuration = await this.configuration();
 		const prior = await database.get<SearchSnapshot>("search-cache", `request:${requestId}`);
-		if (prior && !options.bypassCache) return prior;
+		if (prior && !options.bypassCache) return { ...prior, cached: true };
 		if (!configuration.enabled) throw new SearchFailure("管理员已关闭联网搜索。", diagnostics("configuration"), 503);
 		if (configuration.provider === "searxng" ? !process.env.SETDRAFT_SEARCH_URL : !configuration.apiKey)
 			throw new SearchFailure("联网搜索尚未配置；本次回复未使用网络资料。", diagnostics("configuration"), 503);
@@ -291,9 +292,10 @@ export class WebSearch {
 		const cached = await database.get<Cache>("search-cache", key);
 		if (cached && cached.expiresAt > Date.now() && !options.bypassCache) {
 			await database.put("search-cache", `request:${requestId}`, cached.snapshot);
-			return cached.snapshot;
+			return { ...cached.snapshot, cached: true };
 		}
 		const day = new Date().toISOString().slice(0, 10);
+		signal?.throwIfAborted();
 		await this.identity.sql.transaction(async () => {
 			await this.identity.sql.execute("DELETE FROM search_usage WHERE day<$1", [day]);
 			const usage = await this.identity.sql.one<{ count: number }>(

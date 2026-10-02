@@ -1,7 +1,13 @@
-import { interactiveReferenceTemplate, interactorTemplate } from "@setdraft/contracts";
+import {
+	interactiveReferenceTemplate,
+	interactorTemplate,
+	projectSolutions,
+	type Solution,
+	synchronizeSolutions,
+} from "@setdraft/contracts";
 import { useEffect, useRef, useState } from "react";
 import { AuthenticationRequired, authFetch } from "./auth-client.ts";
-import { copyText } from "./browser-capabilities.ts";
+import { copyText, createClientId } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
@@ -21,12 +27,15 @@ import {
 	type SandboxStatus,
 } from "./platform.ts";
 import { parseTags } from "./problem.ts";
+import type { ProjectSession } from "./project-session.ts";
+import { SolutionSettings } from "./SolutionSettings.tsx";
 import { StatementEditor } from "./StatementEditor.tsx";
 import { SourceImports } from "./source-import.ts";
+import { VerificationPanel } from "./VerificationPanel.tsx";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 
 type Tab = "statement" | "data" | "generator" | "programs" | "validation" | "releases";
-type ProgramSection = "reference" | "oracle" | "checker" | "validator" | "interactor";
+type ProgramSection = string;
 type Busy = "upload" | "generate" | "finalize" | "restore" | "copy" | undefined;
 function importedLanguage(file: File, language: ProgramLanguage): ProgramLanguage {
 	return file.name.endsWith(".py")
@@ -68,6 +77,7 @@ function TagsInput({ tags, onChange }: { tags: string[]; onChange(tags: string[]
 	);
 }
 const checkLabels: Record<string, string> = {
+	"solution-expectation": "解法预期",
 	"compile:oracle": "编译第二标准程序",
 	oracle: "运行第二标准程序",
 	"oracle-compare": "第二标准程序核验",
@@ -78,6 +88,7 @@ const checkLabels: Record<string, string> = {
 };
 
 interface Props {
+	session?: ProjectSession;
 	apiOrigin: string;
 	project: ProjectSnapshot;
 	release?: ManualRelease;
@@ -223,6 +234,8 @@ function ProgramEditor(props: {
 	);
 }
 
+import { readWorkspaceLocation, replaceWorkspaceLocation, useLocationHash } from "./workspace-navigation.ts";
+
 export function ManualWorkspace(props: Props) {
 	const { t } = useLocale();
 	const { project } = props;
@@ -231,8 +244,24 @@ export function ManualWorkspace(props: Props) {
 	const [sources] = useState(() => new SourceImports(readSourceFile, () => sourceScope.current));
 	useEffect(() => () => sources.cancel(), [sources]);
 	const importCode = (field: string, file: File, apply: (text: string) => void) => sources.import(field, file, apply);
-	const [selectedTab, setTab] = useState<Tab>("statement");
-	const [selectedProgramSection, setProgramSection] = useState<ProgramSection>("reference");
+	const locationHash = useLocationHash();
+	const [selectedTab, setSelectedTab] = useState<Tab>("statement");
+	const setTab = (value: Tab) => {
+		setSelectedTab(value);
+		replaceWorkspaceLocation(project.id, { tab: value });
+	};
+	useEffect(() => {
+		const location = readWorkspaceLocation(locationHash);
+		if (
+			location.project === project.id &&
+			["statement", "data", "generator", "programs", "validation", "releases"].includes(location.tab ?? "")
+		)
+			setSelectedTab(location.tab as Tab);
+	}, [locationHash, project.id]);
+	const solutions = projectSolutions(project);
+	const [selectedProgramSection, setProgramSection] = useState<ProgramSection>(
+		`solution:${project.referenceSolutionId ?? "reference"}`,
+	);
 	const interactive = project.judgingMode === "interactive";
 	const emptyInput = interactive && project.interactionInputMode === "empty";
 	const tab = emptyInput && selectedTab === "generator" ? "data" : selectedTab;
@@ -240,7 +269,7 @@ export function ManualWorkspace(props: Props) {
 		(interactive && selectedProgramSection === "checker") ||
 		(!interactive && selectedProgramSection === "interactor") ||
 		(emptyInput && selectedProgramSection === "validator")
-			? "reference"
+			? `solution:${project.referenceSolutionId ?? "reference"}`
 			: selectedProgramSection;
 	const missingProgram = !project.reference.code.trim() || (interactive && !project.interactorSource?.trim());
 	const [publishing, setPublishing] = useState(false);
@@ -370,10 +399,59 @@ export function ManualWorkspace(props: Props) {
 		{ id: "releases", label: "发布包" },
 	];
 	const set = <K extends keyof ProjectSnapshot>(field: K, value: ProjectSnapshot[K]) =>
-		props.onEdit((current) => ({ ...current, [field]: value }));
+		props.onEdit((current) => {
+			const next = { ...current, [field]: value };
+			if (field === "reference") {
+				next.solutions = projectSolutions(current).map((item) =>
+					item.id === (current.referenceSolutionId ?? "reference") ? { ...item, ...next.reference } : item,
+				);
+				synchronizeSolutions(next);
+			}
+			return next;
+		});
+	const changeSolutions = (change: (items: Solution[]) => Solution[], primaryId?: string) =>
+		props.onEdit((current) => {
+			const next = {
+				...current,
+				solutions: change(projectSolutions(current)),
+				referenceSolutionId: primaryId ?? current.referenceSolutionId ?? "reference",
+			};
+			synchronizeSolutions(next);
+			return next;
+		});
+	const selectedSolution = solutions.find((item) => `solution:${item.id}` === programSection);
+	const updateSolution = (change: Partial<Solution>) => {
+		if (selectedSolution)
+			changeSolutions((items) =>
+				items.map((item) => (item.id === selectedSolution.id ? { ...item, ...change } : item)),
+			);
+	};
+	const addSolution = (copy?: Solution) => {
+		if (solutions.length >= 32) return;
+		const id = createClientId();
+		changeSolutions((items) => [
+			...items,
+			{
+				id,
+				name: t("新解法"),
+				language: "cpp17",
+				code: "",
+				purpose: "accepted",
+				expectation: { kind: "AC" },
+				...copy,
+				required: false,
+				...(copy ? { id, name: `${copy.name.slice(0, 90)} (${t("副本")})` } : {}),
+			},
+		]);
+		setProgramSection(`solution:${id}`);
+	};
 	const programSections: Array<{ id: ProgramSection; label: string; filled: boolean; required: boolean }> = [
-		{ id: "reference", label: "标准程序", filled: !!project.reference.code.trim(), required: true },
-		{ id: "oracle", label: "第二标准程序", filled: !!project.oracle?.code.trim(), required: false },
+		...solutions.map((item) => ({
+			id: `solution:${item.id}`,
+			label: item.name,
+			filled: !!item.code.trim(),
+			required: item.required,
+		})),
 		interactive
 			? {
 					id: "interactor",
@@ -1127,12 +1205,20 @@ export function ManualWorkspace(props: Props) {
 								{t(
 									interactive
 										? "标准程序和交互器必填；第二标准程序可选，独立执行同一交互协议。发送消息后必须 flush。"
-										: "标准程序和 Checker 必填；第二标准程序可选，用于独立核验输出。默认 Checker 按 Hydro 文本规则比较，也可选择预设或自定义 C++ testlib Checker。",
+										: "主标程生成答案；必检解法影响发布，仅观察解法提供提示。Checker 支持文本比较、预设与自定义代码。",
 								)}
 							</div>
 							<div className="manual-program-layout">
 								<nav className="manual-program-menu" aria-label={t("程序与 SPJ 分区")}>
 									<div className="manual-program-menu-title">{t("程序文件")}</div>
+									<button
+										className="button secondary"
+										type="button"
+										disabled={solutions.length >= 32}
+										onClick={() => addSolution()}
+									>
+										{t("添加解法")}
+									</button>
 									{programSections.map((section) => (
 										<button
 											key={section.id}
@@ -1197,40 +1283,50 @@ export function ManualWorkspace(props: Props) {
 											/>
 										</>
 									)}
-									{programSection === "reference" && (
-										<ProgramEditor
-											label={t("标准程序")}
-											language={project.reference.language}
-											code={project.reference.code}
-											onImport={(file) =>
-												importCode("reference", file, (code) =>
-													set("reference", {
-														language: importedLanguage(file, project.reference.language),
-														code,
-													}),
-												)
-											}
-											onChange={(language, code) => set("reference", { language, code })}
-										/>
-									)}
-									{programSection === "oracle" && (
-										<ProgramEditor
-											label={t("第二标准程序")}
-											optional
-											language={project.oracle?.language ?? "cpp17"}
-											code={project.oracle?.code ?? ""}
-											onImport={(file) =>
-												importCode("oracle", file, (code) =>
-													set("oracle", {
-														language: importedLanguage(file, project.oracle?.language ?? "cpp17"),
-														code,
-													}),
-												)
-											}
-											onChange={(language, code) =>
-												set("oracle", code.trim() ? { language, code } : undefined)
-											}
-										/>
+									{selectedSolution && (
+										<>
+											<SolutionSettings
+												solution={selectedSolution}
+												primary={selectedSolution.id === (project.referenceSolutionId ?? "reference")}
+												canCopy={solutions.length < 32}
+												onChange={updateSolution}
+												onPrimary={() =>
+													changeSolutions(
+														(items) =>
+															items.map((item) =>
+																item.id === selectedSolution.id
+																	? { ...item, required: true, expectation: { kind: "AC" } }
+																	: item,
+															),
+														selectedSolution.id,
+													)
+												}
+												onCopy={() => addSolution(selectedSolution)}
+												onRemove={() => {
+													changeSolutions((items) =>
+														items.filter((item) => item.id !== selectedSolution.id),
+													);
+													setProgramSection(`solution:${project.referenceSolutionId ?? "reference"}`);
+												}}
+											/>
+											<ProgramEditor
+												label={selectedSolution.name}
+												language={selectedSolution.language}
+												code={selectedSolution.code}
+												onImport={(file) =>
+													importCode(`solution:${selectedSolution.id}`, file, (code) =>
+														changeSolutions((items) =>
+															items.map((item) =>
+																item.id === selectedSolution.id
+																	? { ...item, language: importedLanguage(file, item.language), code }
+																	: item,
+															),
+														),
+													)
+												}
+												onChange={(language, code) => updateSolution({ language, code })}
+											/>
+										</>
 									)}
 									{programSection === "checker" && (
 										<>
@@ -1346,7 +1442,7 @@ export function ManualWorkspace(props: Props) {
 										{t(
 											interactive
 												? "标程必须通过全部交互测试点才可发布；公开样例不参与普通输入输出比对。"
-												: "编译、生成复现、输入校验、标准程序、可选第二标准程序与 Checker 判定均通过后才发放包。",
+												: "基础验证与全部必检解法预期满足后才发布；观察项不阻止发布。",
 										)}
 									</p>
 								</div>
@@ -1359,6 +1455,14 @@ export function ManualWorkspace(props: Props) {
 									{props.busy === "finalize" ? t("验证中…") : t("验证并打包")}
 								</button>
 							</div>
+							{props.session && (
+								<VerificationPanel
+									apiOrigin={props.apiOrigin}
+									project={project}
+									session={props.session}
+									disabled={!!props.busy}
+								/>
+							)}
 							{report ? (
 								<>
 									<div className={`manual-report-status ${report.success ? "passed" : "failed"}`}>

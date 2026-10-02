@@ -3,13 +3,13 @@ import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
-import { checkerScore } from "./checker-protocol.ts";
+import { checkerRatio, checkerScore } from "./checker-protocol.ts";
 import type { SandboxCase, SandboxInput } from "./manual-sandbox.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
 import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 const roles = ["reference", "oracle", "interactor", "validator", "generator"] as const;
-type Role = (typeof roles)[number];
+type Role = (typeof roles)[number] | `candidate${number}`;
 const captureLimit = 64 * 1024;
 const readyMarker = "SETDRAFT_INTERACTIVE_READY\n";
 const launcher = String.raw`import math, os, resource, sys
@@ -26,7 +26,9 @@ os.execvpe(sys.argv[4], sys.argv[4:], {'PATH':'/usr/local/bin:/usr/bin:/bin', 'L
 `;
 
 export function interactiveContainerNames(taskId: string): string[] {
-	return roles.map((role) => `setdraft-task-${taskId}-${role}`);
+	return [...roles, ...Array.from({ length: 32 }, (_, index) => `candidate${index}`)].map(
+		(role) => `setdraft-task-${taskId}-${role}`,
+	);
 }
 
 function docker(
@@ -251,7 +253,7 @@ async function dialogue(
 			let started = 0;
 			let settled = false;
 			let timer: NodeJS.Timeout;
-			const finish = (verdict: ManualCheck["verdict"], message: string, score?: number) => {
+			const finish = (verdict: ManualCheck["verdict"], message: string, score?: number, scoreRatio?: number) => {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timer);
@@ -263,6 +265,7 @@ async function dialogue(
 					verdict,
 					message: message.slice(0, 3000),
 					score,
+					scoreRatio,
 					durationMs: started ? Date.now() - started : 0,
 				});
 			};
@@ -277,7 +280,13 @@ async function dialogue(
 					const score = checkerScore(interactor.code, interactor.stderr, adapted);
 					if (score === undefined) finish("SYSTEM_ERROR", `交互器错误（${interactor.code}）：${message}`);
 					else if (team.closed && team.code !== 0) finish("RE", `选手程序异常退出：${team.stderr}`, 0);
-					else if (score !== 100 || team.closed) finish(score === 100 ? "AC" : "WA", message, score);
+					else if (score !== 100 || team.closed)
+						finish(
+							score === 100 ? "AC" : "WA",
+							message,
+							score,
+							checkerRatio(interactor.code, interactor.stderr, adapted),
+						);
 				}
 			};
 			for (const [index, name] of names.entries()) {
@@ -404,13 +413,15 @@ export async function runInteractiveSandbox(
 	await chmod(join(input.stage, "launcher.py"), 0o444);
 	const programs = new Map<Role, Program>();
 	try {
-		for (const [role, source] of [
-			["reference", input.reference],
+		const sources: Array<readonly [Role, ManualProgram | undefined]> = [
+			...(!input.contestants
+				? [["reference", input.reference] as const, ["oracle", input.oracle] as const]
+				: input.contestants.map((item, index) => [`candidate${index}` as Role, item.program] as const)),
 			["interactor", input.interactor],
-			["oracle", input.oracle],
 			["generator", input.generator ? { language: input.generatorStandard, code: input.generator } : undefined],
 			["validator", input.validator ? { language: input.validatorStandard, code: input.validator } : undefined],
-		] as const) {
+		];
+		for (const [role, source] of sources) {
 			if (!source) continue;
 			input.context?.signal.throwIfAborted();
 			input.context?.emit("stage", `编译 ${role}`);
@@ -455,14 +466,19 @@ export async function runInteractiveSandbox(
 			input.context?.signal.throwIfAborted();
 			const result = await docker(["start", "--attach", name], 60_000, input.context?.signal);
 			await remove([name], input.stage);
+			await writeFile(join(input.stage, "logs", `${role}.compile.txt`), result.stdout + result.stderr);
 			input.context?.signal.throwIfAborted();
 			check({
 				stage: `compile:${role}`,
 				passed: result.code === 0,
 				verdict: result.code === 0 ? "AC" : "CE",
 				message: result.stderr || "编译成功。",
+				logPath: `logs/${role}.compile.txt`,
 			});
-			if (result.code !== 0) return report;
+			if (result.code !== 0) {
+				if (input.contestants && role.startsWith("candidate")) continue;
+				return report;
+			}
 			programs.set(role, {
 				role,
 				language: source.language,
@@ -509,7 +525,9 @@ export async function runInteractiveSandbox(
 				});
 				if (validation.code !== 0) continue;
 			}
-			for (const role of ["reference", "oracle"] as const) {
+			for (const role of input.contestants
+				? input.contestants.map((_, index): Role => `candidate${index}`)
+				: (["reference", "oracle"] as const)) {
 				const contestant = programs.get(role);
 				if (!contestant) continue;
 				const result = await dialogue(input, taskId, contestant, jury, test, Boolean(adapter));
