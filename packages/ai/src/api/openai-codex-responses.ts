@@ -775,7 +775,27 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
-	let buffer = "";
+	let line = "";
+	let skipLF = false;
+	let dataLines: string[] = [];
+	const consumeLine = (value: string): Record<string, unknown> | undefined => {
+		if (value !== "") {
+			const colon = value.indexOf(":");
+			const field = colon < 0 ? value : value.slice(0, colon);
+			let data = colon < 0 ? "" : value.slice(colon + 1);
+			if (data.startsWith(" ")) data = data.slice(1);
+			if (field === "data") dataLines.push(data);
+			return;
+		}
+		const data = dataLines.join("\n").trim();
+		dataLines = [];
+		if (!data || data === "[DONE]") return;
+		try {
+			return JSON.parse(data) as Record<string, unknown>;
+		} catch (cause) {
+			throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, { cause, payload: data });
+		}
+	};
 	const onAbort = () => {
 		void reader.cancel().catch(() => {});
 	};
@@ -790,36 +810,26 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
-			buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-			// Treat EOF as terminating the residual SSE frame.
-			if (done && buffer.trim()) buffer += "\n\n";
-
-			let separator = /\r?\n\r?\n/u.exec(buffer);
-			while (separator) {
-				const chunk = buffer.slice(0, separator.index);
-				buffer = buffer.slice(separator.index + separator[0].length);
-
-				const dataLines = chunk
-					.split(/\r?\n/u)
-					.filter((l) => l.startsWith("data:"))
-					.map((l) => l.slice(5).trim());
-				if (dataLines.length > 0) {
-					const data = dataLines.join("\n").trim();
-					if (data && data !== "[DONE]") {
-						try {
-							yield JSON.parse(data) as Record<string, unknown>;
-						} catch (cause) {
-							throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
-								cause,
-								payload: data,
-							});
-						}
-					}
+			const text = done ? decoder.decode() : decoder.decode(value, { stream: true });
+			for (const character of text) {
+				if (skipLF) {
+					skipLF = false;
+					if (character === "\n") continue;
 				}
-				separator = /\r?\n\r?\n/u.exec(buffer);
+				if (character === "\r" || character === "\n") {
+					const event = consumeLine(line);
+					line = "";
+					skipLF = character === "\r";
+					if (event) yield event;
+				} else line += character;
 			}
-
-			if (done) break;
+			if (done) {
+				// Preserve the existing Codex behavior for a final frame without a blank line.
+				if (line) consumeLine(line);
+				const event = consumeLine("");
+				if (event) yield event;
+				break;
+			}
 		}
 	} finally {
 		signal?.removeEventListener("abort", onAbort);

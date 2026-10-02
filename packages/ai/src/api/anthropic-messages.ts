@@ -50,7 +50,12 @@ import {
 
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
-import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
+import {
+	adjustMaxTokensForThinking,
+	buildBaseOptions,
+	clampMaxTokensToContext,
+	fitClaudeThinkingBudget,
+} from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 /**
@@ -900,8 +905,8 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 	return stream(model, context, {
 		...base,
 		maxTokens,
-		thinkingEnabled: maxTokens > 1024,
-		thinkingBudgetTokens: Math.max(1024, Math.min(adjusted.thinkingBudget, maxTokens - 1)),
+		thinkingEnabled: true,
+		thinkingBudgetTokens: adjusted.thinkingBudget,
 	} satisfies AnthropicOptions);
 };
 
@@ -1171,16 +1176,13 @@ function buildParams(
 					params.output_config = { effort: options.effort };
 				}
 			} else {
-				// Budget-based thinking needs a minimum budget smaller than the output cap.
+				const budget = fitClaudeThinkingBudget(options.thinkingBudgetTokens ?? 1024, params.max_tokens);
 				params.thinking =
-					params.max_tokens <= 1024
+					budget === undefined
 						? { type: "disabled" }
 						: {
 								type: "enabled",
-								budget_tokens: Math.max(
-									1024,
-									Math.min(options.thinkingBudgetTokens ?? 1024, params.max_tokens - 1),
-								),
+								budget_tokens: budget,
 								display,
 							};
 			}

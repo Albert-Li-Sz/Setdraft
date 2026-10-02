@@ -11,6 +11,7 @@ import type {
 	ValidationReport,
 } from "./types.ts";
 import {
+	hasHydroTestExtension,
 	isSafeFlatName,
 	isValidHydroLimit,
 	validateDependencyGraph,
@@ -363,6 +364,17 @@ function validateConfig(
 						`${casePath}.${field}`,
 						`Test data file is referenced more than once: ${fileName}`,
 					);
+				}
+				if (!hasHydroTestExtension(fileName, field)) {
+					addIssue(
+						issues,
+						field === "input" ? "INVALID_INPUT_EXTENSION" : "INVALID_OUTPUT_EXTENSION",
+						`${casePath}.${field}`,
+						field === "input"
+							? "Input filenames must end with .in."
+							: "Output filenames must end with .out or .ans.",
+					);
+					completeCase = false;
 				}
 				referencedFiles.add(fileName);
 				if (!testFiles.has(fileName)) {

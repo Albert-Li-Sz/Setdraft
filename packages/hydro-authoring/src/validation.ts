@@ -18,6 +18,10 @@ export function isSafeFlatName(name: string): boolean {
 	return SAFE_NAME.test(name) && name !== "." && name !== "..";
 }
 
+export function hasHydroTestExtension(name: string, kind: "input" | "output"): boolean {
+	return kind === "input" ? name.endsWith(".in") : /\.(?:out|ans)$/u.test(name);
+}
+
 export function extractAttachmentReferences(markdown: string): string[] {
 	const references = new Set<string>();
 	for (const { url } of markdownReferences(markdown)) {
@@ -264,10 +268,10 @@ export function validateHydroProblemSpec(
 				}
 				testFiles.add(fileName);
 			}
-			if (!testCase.inputFile.endsWith(".in")) {
+			if (!hasHydroTestExtension(testCase.inputFile, "input")) {
 				addIssue(issues, "INVALID_INPUT_EXTENSION", `${casePath}.inputFile`, "Input filenames must end with .in.");
 			}
-			if (!/\.(?:out|ans)$/.test(testCase.outputFile)) {
+			if (!hasHydroTestExtension(testCase.outputFile, "output")) {
 				addIssue(
 					issues,
 					"INVALID_OUTPUT_EXTENSION",

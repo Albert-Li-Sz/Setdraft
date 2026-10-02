@@ -1,7 +1,7 @@
 export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-templates.ts";
 
 export type CheckerMode = "text" | "custom";
-export const verificationContractVersion = 3;
+export const verificationContractVersion = 4;
 export const exportContractVersion = 4;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";

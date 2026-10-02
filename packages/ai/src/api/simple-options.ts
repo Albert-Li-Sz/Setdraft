@@ -77,6 +77,13 @@ export function clampThinkingBudgetToAnswerRoom(thinkingBudget: number, ceiling:
 	return Math.min(thinkingBudget, Math.max(0, ceiling - MIN_ANSWER_TOKENS));
 }
 
+/** Disable fixed-budget Claude thinking when its minimum cannot leave room for an answer. */
+export function fitClaudeThinkingBudget(thinkingBudget: number, ceiling: number): number | undefined {
+	const minimum = 1024;
+	if (ceiling < minimum + MIN_ANSWER_TOKENS) return undefined;
+	return clampThinkingBudgetToAnswerRoom(Math.max(minimum, thinkingBudget), ceiling);
+}
+
 export function adjustMaxTokensForThinking(
 	// Undefined means no explicit caller cap. Use the model cap and fit thinking inside it.
 	baseMaxTokens: number | undefined,

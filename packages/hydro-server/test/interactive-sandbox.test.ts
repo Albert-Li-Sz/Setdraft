@@ -22,6 +22,8 @@ const it = test.skipIf(!dockerAvailable);
 
 it.each([
 	['quitp(0.5, "score(100). diagnostic")', "", "WA", 50],
+	['quitp(0.5, "score(100)\u00a0")', "", "WA", 50],
+	['quitp(0.5, "score(100)\ufeff")', "", "WA", 50],
 	['quitf(_ok, "correct answer")', "exit 43", "SYSTEM_ERROR", undefined],
 	['quitp(0.5, "partial")', "exit 42", "SYSTEM_ERROR", undefined],
 ] as const)(
@@ -158,7 +160,14 @@ it("does not accept a partially scored reference as fully verified", async () =>
 	);
 }, 90_000);
 
-it.each(["score(100). diagnostic", "中文score(100)", "score(100)中文", "rescore(100)"])(
+it.each([
+	"score(100). diagnostic",
+	"中文score(100)",
+	"score(100)中文",
+	"rescore(100)",
+	"score(100)\u00a0",
+	"score(100)\ufeff",
+])(
 	"keeps diagnostic %s from turning a real partial interactor into full credit",
 	async (message) => {
 		const report = await runManualSandbox(

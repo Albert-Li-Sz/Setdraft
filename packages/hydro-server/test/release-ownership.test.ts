@@ -80,9 +80,18 @@ it.each(["custom", "interactive"] as const)("requires a new verification for an 
 		checkerMode: "custom" as const,
 		...(mode === "interactive" ? { judgingMode: "interactive" as const } : {}),
 	};
-	release.report = { ...release.report, interactorUsed: mode === "interactive", verificationContractVersion: 1 };
+	release.report = { ...release.report, interactorUsed: mode === "interactive", verificationContractVersion: 3 };
 	expect(requiresReverification(release)).toBe(true);
 	expect(isContestReadyRelease(release)).toBe(false);
+	await projects.database.put("release", release.id, release);
+	await projects.database.storeBuffer(
+		"release-file",
+		release.id,
+		exportFileName("domjudge"),
+		Buffer.from("old export"),
+	);
+	await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 422 });
+	await expect(projects.releases.exportDomjudge(release.id)).rejects.toMatchObject({ statusCode: 422 });
 	release.report.verificationContractVersion = verificationContractVersion;
 	expect(requiresReverification(release)).toBe(false);
 	expect(isContestReadyRelease(release)).toBe(true);

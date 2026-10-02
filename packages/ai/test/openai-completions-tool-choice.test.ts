@@ -7,6 +7,7 @@ import { assertStopped } from "./assert-success.ts";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
+	requests: [] as unknown[],
 	chunks: undefined as
 		| Array<null | {
 				id?: string;
@@ -27,6 +28,7 @@ vi.mock("openai", () => {
 			completions: {
 				create: (params: unknown) => {
 					mockState.lastParams = params;
+					mockState.requests.push(params);
 					const stream = {
 						async *[Symbol.asyncIterator]() {
 							const chunks = mockState.chunks ?? [
@@ -110,6 +112,7 @@ async function captureSimpleParams(
 describe("openai-completions tool_choice", () => {
 	beforeEach(() => {
 		mockState.lastParams = undefined;
+		mockState.requests.length = 0;
 		mockState.chunks = undefined;
 	});
 
@@ -2004,8 +2007,6 @@ describe("openai-completions tool_choice", () => {
 
 	it("omits Ant Ling reasoning for unmapped direct reasoning efforts and non-reasoning models", async () => {
 		const ring = getModel("ant-ling", "Ring-2.6-1T")!;
-		let payload: unknown;
-		mockState.lastParams = undefined;
 
 		await stream(
 			ring,
@@ -2015,15 +2016,14 @@ describe("openai-completions tool_choice", () => {
 			{
 				apiKey: "test",
 				reasoningEffort: "medium",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
 			},
 		)
 			.result()
 			.then(assertStopped);
 
-		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
+		expect(mockState.requests).toHaveLength(1);
+		expect(mockState.requests[0]).toMatchObject({ model: ring.id });
+		expect(mockState.requests[0]).not.toHaveProperty("reasoning");
 
 		const ling = getModel("ant-ling", "Ling-2.6-flash")!;
 		await streamSimple(
@@ -2034,14 +2034,13 @@ describe("openai-completions tool_choice", () => {
 			{
 				apiKey: "test",
 				reasoning: "high",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
 			},
 		)
 			.result()
 			.then(assertStopped);
 
-		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
+		expect(mockState.requests).toHaveLength(2);
+		expect(mockState.requests[1]).toMatchObject({ model: ling.id });
+		expect(mockState.requests[1]).not.toHaveProperty("reasoning");
 	});
 });

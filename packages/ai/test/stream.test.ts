@@ -963,9 +963,14 @@ describe("Generate E2E Tests", () => {
 			await multiTurn(llm, { reasoningEffort: "medium" });
 		});
 
-		it("should handle image input", { retry: 3 }, async () => {
-			await handleImage(llm);
-		});
+		// GLM-5.2 is text-only; retain the strict image assertions for vision-capable models.
+		it.skipIf(!llm.input.includes("image"))(
+			"should handle image input (requires a vision-capable model)",
+			{ retry: 3 },
+			async () => {
+				await handleImage(llm);
+			},
+		);
 	});
 
 	describe.skipIf(!process.env.MISTRAL_API_KEY)("Mistral Provider (devstral-medium-latest)", () => {

@@ -71,6 +71,7 @@ import {
 	buildBaseOptions,
 	clampMaxTokensToContext,
 	clampReasoning,
+	fitClaudeThinkingBudget,
 } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -560,7 +561,7 @@ export const streamSimple: StreamFunction<"bedrock-converse-stream", SimpleStrea
 			reasoning: options.reasoning,
 			thinkingBudgets: {
 				...(options.thinkingBudgets || {}),
-				[clampReasoning(options.reasoning)!]: Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024)),
+				[clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
 			},
 		} satisfies BedrockOptions);
 	}
@@ -1258,17 +1259,19 @@ function buildAdditionalModelRequestFields(
 					// Custom budgets only cover token-based levels through high.
 					const level = options.reasoning === "xhigh" || options.reasoning === "max" ? "high" : options.reasoning;
 					const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
+					const fittedBudget = fitClaudeThinkingBudget(budget, options.maxTokens ?? model.maxTokens);
+					if (fittedBudget === undefined) return { thinking: { type: "disabled" } };
 
 					return {
 						thinking: {
 							type: "enabled",
-							budget_tokens: budget,
+							budget_tokens: fittedBudget,
 							...(display !== undefined ? { display } : {}),
 						},
 					};
 				})();
 
-		if (!supportsAdaptiveThinking(model.id, model.name) && (options.interleavedThinking ?? true)) {
+		if (result.thinking.type === "enabled" && (options.interleavedThinking ?? true)) {
 			result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
 		}
 

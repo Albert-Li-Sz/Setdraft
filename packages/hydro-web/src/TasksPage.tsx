@@ -83,31 +83,42 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	const [events, setEvents] = useState<TaskEvent[]>([]);
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	// A newer pending poll must not discard a healthy response that has already arrived.
 	const refreshRevision = useRef(0);
+	const requestRevision = useRef(0);
+	const viewRevision = useRef(0);
+	const actionPending = useRef(false);
 
 	useEffect(() => {
+		++viewRevision.current;
+		actionPending.current = false;
+		setBusy(false);
 		if (paused) return;
 		let active = true;
 		const controller = new AbortController();
 		const refresh = async () => {
-			const revision = ++refreshRevision.current;
+			const revision = ++requestRevision.current;
 			try {
 				const body = await requestJson<{ tasks: BackgroundTask[] }>(apiUrl(apiOrigin, "/tasks"), {
 					signal: controller.signal,
 				});
-				if (active && revision === refreshRevision.current) {
+				if (active && revision > refreshRevision.current) {
+					refreshRevision.current = revision;
 					setTasks(body.tasks ?? []);
 					setError("");
 				}
 			} catch (cause) {
-				if (active && revision === refreshRevision.current)
+				if (active && revision > refreshRevision.current) {
+					refreshRevision.current = revision;
 					setError(cause instanceof Error ? cause.message : "任务读取失败。");
+				}
 			}
 		};
 		void refresh();
 		const timer = setInterval(() => void refresh(), 2000);
 		return () => {
 			active = false;
+			++viewRevision.current;
 			controller.abort();
 			clearInterval(timer);
 		};
@@ -146,8 +157,10 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	}, [apiOrigin, selected, paused]);
 
 	async function action(kind: "cancel" | "retry"): Promise<void> {
-		if (!selected) return;
-		++refreshRevision.current;
+		if (!selected || paused || actionPending.current) return;
+		const view = viewRevision.current;
+		actionPending.current = true;
+		refreshRevision.current = ++requestRevision.current;
 		setBusy(true);
 		try {
 			const body = await requestJson<BackgroundTask | { task: BackgroundTask }>(
@@ -156,16 +169,21 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 					method: "POST",
 				},
 			);
+			if (view !== viewRevision.current) return;
 			const updated = "task" in body ? body.task : body;
-			++refreshRevision.current;
+			refreshRevision.current = ++requestRevision.current;
 			setTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
 			setSelected(updated.id);
 			setError("");
 		} catch (cause) {
-			++refreshRevision.current;
+			if (view !== viewRevision.current) return;
+			refreshRevision.current = ++requestRevision.current;
 			setError(cause instanceof Error ? cause.message : "操作失败。");
 		} finally {
-			setBusy(false);
+			if (view === viewRevision.current) {
+				actionPending.current = false;
+				setBusy(false);
+			}
 		}
 	}
 

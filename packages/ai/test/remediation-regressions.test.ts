@@ -20,31 +20,39 @@ import { normalizeContext } from "../src/utils/transcript.ts";
 afterEach(() => vi.unstubAllGlobals());
 const context = normalizeContext({ messages: [{ role: "user", content: "hello", timestamp: 1 }] });
 
-it.each([995, 1024, 1536, 2047, 2048])(
+it.each([995, 1024, 1025, 1536, 2047, 2048])(
 	"sends valid Anthropic thinking parameters with a %i token cap",
 	async (maxTokens) => {
 		let payload: Record<string, unknown> | undefined;
 		let calls = 0;
-		const result = await anthropicStream(getModel("anthropic", "claude-sonnet-4-5"), context, {
-			apiKey: "faux",
-			reasoning: "high",
-			maxTokens,
-			fetch: async (_input, init) => {
-				++calls;
-				payload = JSON.parse(String(init?.body));
-				return new Response(
-					'event: message_start\ndata: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
-					{ headers: { "content-type": "text/event-stream" } },
-				);
+		const narrowContext = normalizeContext({
+			messages: [{ role: "user", content: "x".repeat((8192 - 410 - maxTokens) * 4), timestamp: 1 }],
+		});
+		const result = await anthropicStream(
+			{ ...getModel("anthropic", "claude-sonnet-4-5"), contextWindow: 8192 },
+			narrowContext,
+			{
+				apiKey: "faux",
+				reasoning: "high",
+				maxTokens,
+				fetch: async (_input, init) => {
+					++calls;
+					payload = JSON.parse(String(init?.body));
+					return new Response(
+						'event: message_start\ndata: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				},
 			},
-		}).result();
+		).result();
 		expect(result.stopReason, result.errorMessage).toBe("stop");
 		expect(calls).toBe(1);
 		expect(payload).toBeDefined();
+		expect(payload?.max_tokens).toBe(maxTokens);
 		const thinking = payload?.thinking as { type: string; budget_tokens?: number } | undefined;
 		if (thinking?.type === "enabled") {
 			expect(thinking.budget_tokens).toBeGreaterThanOrEqual(1024);
-			expect(thinking.budget_tokens).toBeLessThan(Number(payload?.max_tokens));
+			expect(Number(payload?.max_tokens) - Number(thinking.budget_tokens)).toBeGreaterThanOrEqual(1024);
 		} else expect(thinking?.type).toBe("disabled");
 	},
 );
@@ -64,7 +72,14 @@ it("decodes unpadded base64url UTF-8 JWT payloads", () => {
 	expect(() => decodeJwtPayload("x.W10.y")).toThrow();
 });
 
-it("reads CRLF Codex events fragmented across every byte", async () => {
+it.each([
+	{ name: "LF", endings: ["\n"] },
+	{ name: "CRLF", endings: ["\r\n"] },
+	{ name: "CR", endings: ["\r"] },
+	{ name: "mixed endings", endings: ["\n", "\r\n", "\r"] },
+	{ name: "multiple data lines and comments", endings: ["\r"], multiline: true },
+	{ name: "unterminated final frame", endings: ["\r"], unterminated: true },
+])("reads Codex $name events fragmented across every byte", async ({ endings, multiline, unterminated }) => {
 	const token = `x.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "a" }, name: "用户😀" })).toString("base64url")}.y`;
 	const events = [
 		{
@@ -81,7 +96,17 @@ it("reads CRLF Codex events fragmented across every byte", async () => {
 			},
 		},
 	];
-	const bytes = new TextEncoder().encode(events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""));
+	const wire = events
+		.map((event, index) => {
+			const lineEnding = endings[index % endings.length];
+			const lines = JSON.stringify(event, null, multiline ? 2 : undefined)
+				.split("\n")
+				.map((line) => `data: ${line}`);
+			if (multiline) lines.unshift(": ignored comment", "event: ignored", "id: ignored");
+			return lines.join(lineEnding) + (unterminated && index === events.length - 1 ? "" : lineEnding + lineEnding);
+		})
+		.join("");
+	const bytes = new TextEncoder().encode(wire);
 	const result = await codexStream(getModel("openai-codex", "gpt-5.5"), context, {
 		apiKey: token,
 		transport: "sse",
@@ -98,6 +123,22 @@ it("reads CRLF Codex events fragmented across every byte", async () => {
 	}).result();
 	expect(result.stopReason, result.errorMessage).toBe("stop");
 	expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "你好" }));
+});
+
+it.each(["\n", "\r\n", "\r"])("rejects invalid Codex JSON with %j line endings without retrying", async (ending) => {
+	const token = `x.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "a" } })).toString("base64url")}.y`;
+	const fetcher = vi.fn(
+		async () =>
+			new Response(`data: {invalid json}${ending}${ending}`, { headers: { "content-type": "text/event-stream" } }),
+	);
+	const result = await codexStream(getModel("openai-codex", "gpt-5.5"), context, {
+		apiKey: token,
+		transport: "sse",
+		fetch: fetcher,
+	}).result();
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toContain("Invalid Codex SSE JSON");
+	expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
 it.each([anthropicOAuth, openaiCodexOAuth])("cancels an unanswered browser login prompt for $name", async (oauth) => {
@@ -158,30 +199,33 @@ it("does not refill removed model headers in the actual Responses SDK", async ()
 	expect(headers?.has("x-private-default")).toBe(false);
 });
 
-it("marks unknown pricing and never reports negative cost", () => {
-	const model = getModel("openrouter", "openrouter/auto");
-	const usage: Usage = {
-		input: 100,
-		output: 20,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 120,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-	expect(model.cost.unknown).toBe(true);
-	expect(calculateCost(model, usage)).toMatchObject({ total: 0, unknown: true });
-	expect(calculateCost({ cost: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0 } }, usage)).toMatchObject({
-		total: 0,
-		unknown: true,
-	});
-	expect(normalizeModelCost({ input: -1, output: 0, cacheRead: 0, cacheWrite: 0 })).toMatchObject({
-		input: 0,
-		unknown: true,
-	});
-	expect(
-		calculateCost({ ...model, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }, usage).unknown,
-	).toBeUndefined();
-});
+it.each(["openrouter/auto", "openrouter/auto-beta", "auto", "openrouter/fusion"] as const)(
+	"marks unknown pricing for %s and never reports negative cost",
+	(modelId) => {
+		const model = getModel("openrouter", modelId);
+		const usage: Usage = {
+			input: 100,
+			output: 20,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 120,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		expect(model.cost.unknown).toBe(true);
+		expect(calculateCost(model, usage)).toMatchObject({ total: 0, unknown: true });
+		expect(calculateCost({ cost: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0 } }, usage)).toMatchObject({
+			total: 0,
+			unknown: true,
+		});
+		expect(normalizeModelCost({ input: -1, output: 0, cacheRead: 0, cacheWrite: 0 })).toMatchObject({
+			input: 0,
+			unknown: true,
+		});
+		expect(
+			calculateCost({ ...model, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }, usage).unknown,
+		).toBeUndefined();
+	},
+);
 
 it("writes OAuth credentials privately and preserves corrupt files and symlink targets", () => {
 	const root = mkdtempSync(join(tmpdir(), "oauth-private-"));

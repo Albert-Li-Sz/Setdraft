@@ -2657,7 +2657,7 @@ async function generateModels() {
   for (const provider of Object.keys(structure)) {
    const filename = `${provider}.json`;
    const groups = JSON.parse(readFileSync(join(directory, filename), "utf8")) as Record<string, Record<string, Model<Api>>>;
-   for (const models of Object.values(groups)) for (const model of Object.values(models)) model.cost = normalizeModelCost(model.cost);
+   for (const models of Object.values(groups)) for (const model of Object.values(models)) model.cost = normalizeModelCost(model.cost, model);
    const content = `${JSON.stringify(groups)}\n`;
    contents[filename] = content;
    writeFileSync(join(directory, filename), content);
@@ -2685,7 +2685,7 @@ async function generateModels() {
 			!((model.provider === "opencode" || model.provider === "opencode-go") && model.id === "gpt-5.3-codex-spark"),
 	);
 
-	for (const model of allModels) model.cost = normalizeModelCost(model.cost);
+	for (const model of allModels) model.cost = normalizeModelCost(model.cost, model);
 
 	// Temporary overrides until upstream model metadata is corrected.
 	for (const candidate of allModels) {
@@ -3084,6 +3084,7 @@ async function generateModels() {
 			cost: {
 				// we dont know about the costs because OpenRouter auto routes to different models
 				// and then charges you for the underlying used model
+				unknown: true,
 				input:0,
 				output:0,
 				cacheRead:0,
@@ -3110,6 +3111,7 @@ async function generateModels() {
 			cost: {
 				// we dont know about the costs because Fusion routes to multiple models
 				// and then charges you for the underlying used models
+				unknown: true,
 				input: 0,
 				output: 0,
 				cacheRead: 0,

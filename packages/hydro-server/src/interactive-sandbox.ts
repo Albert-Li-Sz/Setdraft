@@ -274,7 +274,7 @@ async function dialogue(
 				if (!team || !interactor) return;
 				if (interactor.closed) {
 					const message = interactor.stderr.trim();
-					const score = checkerScore(interactor.code, message, adapted);
+					const score = checkerScore(interactor.code, interactor.stderr, adapted);
 					if (score === undefined) finish("SYSTEM_ERROR", `交互器错误（${interactor.code}）：${message}`);
 					else if (team.closed && team.code !== 0) finish("RE", `选手程序异常退出：${team.stderr}`, 0);
 					else if (score !== 100 || team.closed) finish(score === 100 ? "AC" : "WA", message, score);
