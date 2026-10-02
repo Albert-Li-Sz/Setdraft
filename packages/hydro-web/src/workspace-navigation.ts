@@ -40,8 +40,9 @@ function subscribe(listener: () => void) {
 	return () => window.removeEventListener("hashchange", listener);
 }
 const snapshot = () => window.location.hash;
+const serverSnapshot = () => "";
 export function useLocationHash(): string {
-	return useSyncExternalStore(subscribe, snapshot);
+	return useSyncExternalStore(subscribe, snapshot, serverSnapshot);
 }
 export function replaceWorkspaceLocation(project: string, patch: Partial<WorkspaceLocation>): void {
 	const current = readWorkspaceLocation(window.location.hash);

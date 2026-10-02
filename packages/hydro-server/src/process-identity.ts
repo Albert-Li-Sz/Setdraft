@@ -8,6 +8,27 @@ export interface ProcessIdentity {
 	group: number;
 }
 
+/** Zombies have exited but still answer kill(pid, 0) until their parent reaps them. */
+export function processHasExited(pid: number): boolean {
+	if (!Number.isSafeInteger(pid) || pid < 1) return false;
+	if (process.platform === "linux") {
+		try {
+			const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+			const state = stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/u)[0];
+			if (state === "Z" || state === "X" || state === "x") return true;
+		} catch {
+			// Missing or unreadable procfs alone does not prove that a process exited.
+		}
+	}
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ESRCH") return true;
+		throw error;
+	}
+}
+
 /** Creation time plus command and process group distinguish a reused PID from our process. */
 export function processIdentity(pid: number): ProcessIdentity | undefined {
 	if (!Number.isSafeInteger(pid) || pid < 1) return undefined;

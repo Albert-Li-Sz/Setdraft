@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
-import { processIdentity, sameProcess } from "../packages/hydro-server/src/process-identity.ts";
+import { processHasExited, processIdentity, sameProcess } from "../packages/hydro-server/src/process-identity.ts";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
 
 
@@ -133,12 +133,12 @@ async function readManagedPid(name) {
 	}
 	if (!Number.isSafeInteger(value?.pid) || value.pid < 1) return undefined;
 	if (!value.identity) {
-		try { process.kill(value.pid,0); } catch(error) {if(error.code==="ESRCH")return undefined;throw error;}
+		if (processHasExited(value.pid)) return undefined;
 		throw new Error(`旧 ${name} PID 记录缺少进程身份，拒绝自动停止。请确认并停止旧服务后移除 ${pidPath(name)}。`);
 	}
 	const current = processIdentity(value.pid);
 	if (!current) {
-		try { process.kill(value.pid, 0); } catch (error) { if (error.code === "ESRCH") return undefined; throw error; }
+		if (processHasExited(value.pid)) return undefined;
 		throw new Error(`无法确认 ${name} 进程身份，拒绝停止或覆盖 PID 记录。`);
 	}
 	if (!sameProcess(value.identity, current)) return undefined;
@@ -562,8 +562,7 @@ async function assertOffline() {
 	if (current && !sameProcess(record.identity, current)) return;
 	const pid=record.pid;
 	if (!Number.isSafeInteger(pid) || pid < 1) return;
-	try { process.kill(pid, 0); }
-	catch (error) { if (error.code === "ESRCH") return; throw error; }
+	if (processHasExited(pid)) return;
 	throw new Error("数据目录仍有直接启动的服务，请先停止该服务后再执行维护。");
 }
 

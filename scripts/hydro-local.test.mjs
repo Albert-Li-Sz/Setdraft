@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment } from "./deployment-config.mjs";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { fileURLToPath } from "node:url";
-import { processIdentity } from "../packages/hydro-server/src/process-identity.ts";
+import { processHasExited, processIdentity } from "../packages/hydro-server/src/process-identity.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -288,6 +288,42 @@ async function freePort() {
 	await new Promise((accept) => server.close(accept));
 	return port;
 }
+
+test("native stop clears an exited Linux process even before its parent reaps it", { skip: process.platform !== "linux" }, async () => {
+	const fixture = mkdtempSync(join(tmpdir(), "setdraft-native-zombie-"));
+	copyInstaller(fixture);
+	const child = spawn(process.execPath, ["-e", "process.stdin.once('data', () => process.exit(0))"], {
+		detached: true, stdio: ["pipe", "ignore", "ignore"],
+	});
+	await new Promise((accept, reject) => { child.once("spawn", accept); child.once("error", reject); });
+	const closed = new Promise((accept) => child.once("close", accept));
+	try {
+		const identity = processIdentity(child.pid);
+		assert.ok(identity);
+		assert.equal(processHasExited(child.pid), false);
+		child.stdin.write("exit");
+		// Keep this parent's event loop blocked so libuv cannot reap the exited child.
+		const wait = new Int32Array(new SharedArrayBuffer(4));
+		const deadline = Date.now() + 5000;
+		while (!processHasExited(child.pid) && Date.now() < deadline) Atomics.wait(wait, 0, 0, 10);
+		assert.equal(processHasExited(child.pid), true);
+		process.kill(child.pid, 0);
+		assert.equal(processIdentity(child.pid), undefined);
+		const runtime = join(fixture, ".setdraft/runtime");
+		mkdirSync(runtime, { recursive: true });
+		const record = join(runtime, "api.pid.json");
+		for (const value of [{ pid: child.pid, identity }, { pid: child.pid }]) {
+			writeFileSync(record, JSON.stringify(value));
+			const stopped = command(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "stop"]);
+			assert.equal(stopped.status, 0, stopped.stderr);
+			assert.equal(existsSync(record), false);
+		}
+	} finally {
+		child.kill("SIGKILL");
+		await closed;
+		rmSync(fixture, { recursive: true, force: true });
+	}
+});
 
 test("install, restart, upgrade and uninstall preserve .env and apply mirror settings to subprocesses", { skip: process.platform === "win32" }, async () => {
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-lifecycle-"));
