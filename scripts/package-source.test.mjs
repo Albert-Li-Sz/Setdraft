@@ -14,7 +14,7 @@ const exec = promisify(execFile);
 test("corresponding source includes application, notices, tests and installation inputs", async () => {
  const files = await collectSourceFiles(root);
  for (const required of [
-  "Dockerfile", "compose.yaml", ".env.example", "package-lock.json", "scripts/package-source.mjs", ".husky/pre-commit",
+  "Dockerfile", "compose.yaml", ".env.example", "package-lock.json", "scripts/package-source.mjs", ".husky/pre-commit", "backup.sh",
   "LICENSE", "COPYING.md", "LICENSES/AGPL-3.0.txt", "docs/authoring-guide.md", "fixtures/hydro/a-plus-b/README.md",
   "fixtures/hydro/a-plus-b/authoring/reference.cc", "packages/ai/scripts/check-model-data.ts",
   "deploy/Caddyfile.example", "packages/ai/bedrock-provider.d.ts", "packages/ai/bedrock-provider.js",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -47,6 +47,13 @@ await closeDatabasePools();`]);
 	const blob = join(root, JSON.parse(initialized.stdout).path.slice("/scenario/".length));
 	await sql(`INSERT INTO identity.users(id,username,password_hash,role,created_at) VALUES('${account}','maintenance-test','test-only','admin',0)`);
 	await sql(`INSERT INTO identity.sessions VALUES('test-session','${account}','test-csrf',0,0,9999999999999)`);
+	await mkdir(join(root,"configuration"));
+	await writeFile(join(root,"configuration/.env"),'SETDRAFT_PUBLIC_ORIGIN="https://example.org"\n');
+	await writeFile(join(root,"configuration/.env.compose"),"SETDRAFT_DB_APP_PASSWORD='test-only-private'\n");
+	await inImage(["scripts/compose-maintenance.mjs","backup","/scenario/with-config"],{SETDRAFT_BACKUP_CONFIG_ROOT:"/scenario/configuration"});
+	assert.equal(await readFile(join(root,"with-config/config/.env"),"utf8"),await readFile(join(root,"configuration/.env"),"utf8"));
+	assert.equal((await stat(join(root,"with-config/config/.env.compose"))).mode & 0o777,0o600);
+	assert.ok(JSON.parse(await readFile(join(root,"with-config/manifest.json"),"utf8")).files["config/.env.compose"]);
 	await native("backup", "healthy");
 	if (process.platform === "linux") {
 		const archive = await stat(join(root, "healthy"));
@@ -81,8 +88,26 @@ await closeDatabasePools();`]);
 		for (let attempt = 0; attempt < 30; attempt++) { if (await sql("SELECT pg_try_advisory_lock(hashtextextended('setdraft-server',0))") === "f") { held = true; break; } await setTimeout(100); }
 		assert.ok(held, "Active-service database lease not acquired");
 		await assert.rejects(native("backup", "while-active"));
+		await assert.rejects(inImage(["scripts/compose-maintenance.mjs","reset"]));
+		assert.equal(await readFile(blob,"utf8"),"healthy answer\n");
 	} finally { await sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='maintenance-lock-test'"); await lease; }
-	console.log("Native backup/restore passed: damaged scene recovery, custom DB role, session revocation, invalid archive/database preflight and active-service exclusion.");
+	await sql("CREATE TABLE public.unrelated(value text); INSERT INTO public.unrelated VALUES('keep')");
+	await native("backup","before-reset");
+	await inImage(["scripts/compose-maintenance.mjs","reset","--preflight"]);
+	assert.equal(await sql("SELECT count(*) FROM identity.users"),"1");
+	await assert.rejects(inImage(["scripts/compose-maintenance.mjs","reset"],{SETDRAFT_WORKSPACE_ROOT:"/app"}));
+	assert.equal(await sql("SELECT count(*) FROM identity.users"),"1");
+	await inImage(["scripts/compose-maintenance.mjs","reset"]);
+	assert.equal(await sql("SELECT to_regnamespace('identity') IS NULL AND to_regnamespace('workspace') IS NULL"),"t");
+	await assert.rejects(readFile(blob));
+	assert.equal(await sql("SELECT value FROM public.unrelated"),"keep");
+	// Fresh deployment migrations followed by a restore recover both accounts and blobs.
+	await inImage(["--input-type=module","-e","import {migrateDatabase} from './packages/hydro-server/dist/database-schema.js'; await migrateDatabase(process.env.SETDRAFT_DATABASE_ADMIN_URL,'native_test');"]);
+	await native("restore","before-reset");
+	assert.equal(await sql("SELECT username FROM identity.users"),"maintenance-test");
+	assert.equal(await readFile(blob,"utf8"),"healthy answer\n");
+	assert.equal(await sql("SELECT value FROM public.unrelated"),"keep");
+	console.log("Maintenance passed: config backup, damaged scene recovery, custom DB role, session revocation, preflight, active-service exclusion, scoped data reset and restore after reinstall.");
 } finally {
 	await docker(["rm", "-f", name]).catch(() => {});
 	await docker(["network", "rm", name]).catch(() => {});

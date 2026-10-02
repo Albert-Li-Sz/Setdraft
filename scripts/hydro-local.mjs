@@ -6,6 +6,7 @@ import { cp, mkdir, readFile, rename, rm, stat, writeFile, readdir } from "node:
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { processIdentity, sameProcess } from "../packages/hydro-server/src/process-identity.ts";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
@@ -47,11 +48,11 @@ function activeServices() {
 function usage() {
 	console.log(`Setdraft · 题序 本地管理
 
-  ./install.sh --native [--mode production|dev] [--dry-run]
-                                          安装依赖、构建网页并启动；默认生产模式
+  ./install.sh --native [--keep-data] [--mode production|dev] [--dry-run]
+                                          默认清空数据库与用户文件后安装；--keep-data 保留
   ./upgrade.sh --native [--mode production|dev] [--dry-run]
                                           从 origin/main 快进升级；默认沿用上次模式
-  ./uninstall.sh --native [--purge-data] [--remove-deps] [--dry-run]
+  ./uninstall.sh --native [--keep-data|--purge-data] [--remove-deps] [--dry-run]
                                           停止服务并移除沙箱镜像
   部署参数（install / upgrade / start）：
     --host 0.0.0.0|127.0.0.1              生产模式监听地址；默认 0.0.0.0
@@ -61,13 +62,16 @@ function usage() {
     --docker-registry <镜像仓库>            Docker Hub 镜像，不含协议
     --download-proxy <HTTP(S) 代理>         npm、Git 下载代理
   node scripts/hydro-local.mjs start [--mode production|dev]|stop|status|doctor
-  node scripts/hydro-local.mjs backup <目录>|restore <目录>
+  ./backup.sh --native [目录]             备份数据库、用户文件和部署配置
+  node scripts/hydro-local.mjs restore <目录>
   node scripts/hydro-local.mjs prune --older-than-days <天数> [--dry-run]
   node scripts/hydro-local.mjs account setup-code|reset-password <用户名>
 
 部署参数保存到仓库 .env；升级和启动自动加载，命令行 > 环境变量 > .env。
-卸载默认保留 .env 以及 .setdraft 中的题目、发布包、对话和 API 配置。
---purge-data 会永久删除这些数据；--remove-deps 额外删除根目录 node_modules。`);
+卸载时交互选择是否保留数据，回车默认保留；非交互执行必须指定数据选项。
+--purge-data 清空 Setdraft 的数据库结构和数据目录；部署 .env 保留。
+原生清空和备份需要同一数据库的 SETDRAFT_DATABASE_ADMIN_URL，以及备份所需的 PostgreSQL 18 客户端。
+--remove-deps 额外删除根目录 node_modules。`);
 }
 
 function requireRuntime() {
@@ -342,10 +346,12 @@ function printDryRun(command, options) {
 	}
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
+		console.log(command === "install" && options.has("--fresh-install") && !options.has("--keep-data") ? "将清空 Setdraft 数据库记录及用户文件；--keep-data 可保留。" : "保留数据库、用户文件及部署配置。");
 		console.log(`将使用 npm 镜像 ${npmRegistry} 执行 npm ci --ignore-scripts --no-audit --no-fund；模型数据缺失时先补齐，再依次构建 telemetry、pi-ai（离线）、其余工作区、docker build -t ${image} packages/hydro-server/sandbox，然后以 ${currentMode} 模式启动。Docker 故障只告警。`);
 	} else if (command === "uninstall") {
 		console.log(`将停止托管服务、删除 ${image} 镜像及 ${runtimeRoot}。`);
-		if (options.has("--purge-data")) console.log(`还将永久删除 ${dataRoot}。`);
+		if (options.has("--purge-data")) console.log(`还将永久删除 Setdraft 数据库记录及 ${dataRoot}。`);
+		else console.log("保留数据；未指定选项时交互选择，非交互执行需 --keep-data 或 --purge-data。");
 		if (options.has("--remove-deps")) console.log(`还将删除 ${join(root, "node_modules")}。`);
 	} else console.log(`将${command === "start" ? "启动" : "停止"} API 和网页。`);
 }
@@ -393,7 +399,16 @@ async function main() {
 	if (command === "account") { await account(argumentsList); return; }
 	if (command === "doctor") { await doctor(); return; }
 	if (command === "backup" || command === "restore") {
+		if (command === "backup" && argumentsList.length === 1 && argumentsList[0] === "--dry-run") {
+			console.log("备份数据库、全部用户文件和部署配置到仓库旁的 setdraft-backups；完成后恢复原有服务运行状态。"); return;
+		}
+		if (command === "backup" && !argumentsList.length) {
+			const parent = join(dirname(root), "setdraft-backups");
+			await mkdir(parent, { recursive: true, mode: 0o700 });
+			argumentsList.push(join(parent, `setdraft-${new Date().toISOString().replaceAll(/[-:.]/gu, "")}-${process.pid}`));
+		}
 		if (argumentsList.length !== 1) throw new Error(`${command} 需要一个目录参数。`);
+		currentMode = await readMode();
 		if (command === "backup") await backup(resolve(argumentsList[0]));
 		else await restore(resolve(argumentsList[0]));
 		return;
@@ -412,7 +427,11 @@ async function main() {
 	const options = new Set(argumentsList);
 	const allowed =
 		command === "uninstall"
-			? ["--dry-run", "--purge-data", "--remove-deps"]
+			? ["--dry-run", "--keep-data", "--purge-data", "--remove-deps"]
+			: command === "install"
+				? ["--dry-run", "--keep-data", "--fresh-install"]
+			: command === "upgrade"
+				? ["--dry-run", "--keep-data"]
 			: command === "status"
 				? []
 				: ["--dry-run"];
@@ -420,6 +439,7 @@ async function main() {
 		throw new Error("参数无效或重复，请运行 node scripts/hydro-local.mjs help 查看用法。");
 	}
 	if (options.has("--dry-run")) {
+		if (options.has("--keep-data") && options.has("--purge-data")) throw new Error("数据选项不能同时使用。");
 		printDryRun(command, options);
 		return;
 	}
@@ -453,7 +473,19 @@ async function main() {
 		return;
 	}
 	if (command === "uninstall") {
-		await stopAll();
+		if (options.has("--keep-data") && options.has("--purge-data")) throw new Error("数据选项不能同时使用。");
+		if (!options.has("--keep-data") && !options.has("--purge-data")) {
+			if (!process.stdin.isTTY) throw new Error("非交互卸载需要指定 --keep-data 或 --purge-data。");
+			const input = createInterface({ input: process.stdin, output: process.stdout });
+			try {
+				const answer = (await input.question("卸载后保留数据库和用户文件？[Y/n] ")).trim().toLowerCase();
+				if (["", "y", "yes"].includes(answer)) options.add("--keep-data");
+				else if (["n", "no"].includes(answer)) options.add("--purge-data");
+				else throw new Error("未识别选择，未执行卸载。");
+			} finally { input.close(); }
+		}
+		if (options.has("--purge-data")) await maintenance("reset");
+		else await stopAll();
 		const inspected = spawnSync("docker", ["image", "inspect", image], { cwd: root, encoding: "utf8" });
 		if (inspected.status === 0) {
 			try {
@@ -487,13 +519,15 @@ async function main() {
 		run("git", ["merge", "--ff-only", "FETCH_HEAD"]);
 		await saveDeployment(deployment);
 		// Use the upgraded installer/manifest, including its updated build order.
-		run(process.execPath, [scriptPath, "install", "--mode", currentMode], { ...process.env, ...deployment.values });
+		run(process.execPath, [scriptPath, "install", "--keep-data", "--mode", currentMode], { ...process.env, ...deployment.values });
 		return;
 	}
 	selectRegistry();
 	await stopAll();
 	await saveDeployment(deployment);
 	installDependencies();
+	// Older upgrade scripts call this entry point directly without the destructive marker.
+	if (options.has("--fresh-install") && !options.has("--keep-data")) await maintenance("reset");
 	await startAll();
 	await saveMode(currentMode);
 }
@@ -539,9 +573,17 @@ async function maintenance(command,directory) {
  if(!process.env.SETDRAFT_DATABASE_URL || !process.env.SETDRAFT_DATABASE_ADMIN_URL)throw new Error("原生维护需要 SETDRAFT_DATABASE_URL 和同一数据库的 SETDRAFT_DATABASE_ADMIN_URL。");
  if(app.hostname!==admin.hostname || (app.port||"5432")!==(admin.port||"5432") || app.pathname!==admin.pathname)throw new Error("原生维护管理连接必须指向当前服务的同一 PostgreSQL 数据库。");
  const script=join(root,"scripts/compose-maintenance.mjs");
- run(process.execPath,[script,command,directory,"--preflight"]);
- await stopAll();await assertOffline();
- run(process.execPath,[script,command,directory]);
+ const args=[script,command,...(directory ? [directory] : [])];
+ const env={...process.env,SETDRAFT_REPOSITORY_ROOT:root,SETDRAFT_BACKUP_CONFIG_ROOT:root};
+ run(process.execPath,[...args,"--preflight"],env);
+ const running=[];
+ if(command==="backup")for(const name of Object.keys(services))if(await readManagedPid(name))running.push(name);
+ try {
+  await stopAll();await assertOffline();
+  run(process.execPath,args,env);
+ } finally {
+  for(const name of running)await startService(name);
+ }
 }
 async function backup(directory){await maintenance("backup",directory);}
 async function restore(directory){await maintenance("restore",directory);}

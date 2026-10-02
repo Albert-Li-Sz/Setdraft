@@ -20,6 +20,18 @@ test("regeneration replaces broad Compose credential permissions without changin
  } finally {await rm(root,{recursive:true,force:true});}
 });
 
+test("reinstallation cannot silently switch existing storage or database secrets",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"setdraft-keep-data-"));
+ try{
+  await composeConfiguration(root,[],{});
+  const before=await readFile(join(root,".env.compose"),"utf8");
+  for(const environment of [{SETDRAFT_WORKSPACE_ROOT:"different-data"},{SETDRAFT_DB_ADMIN_PASSWORD:"x".repeat(32)},{SETDRAFT_DB_APP_PASSWORD:"y".repeat(32)}]) {
+   await assert.rejects(composeConfiguration(root,["--keep-data"],environment),/不能|不一致/u);
+   assert.equal(await readFile(join(root,".env.compose"),"utf8"),before);
+  }
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test("data roots cannot overlap a source distribution directory", async () => {
  const root=await mkdtemp(join(tmpdir(),"setdraft-data-isolation-"));
  try {

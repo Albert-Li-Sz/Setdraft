@@ -11,7 +11,7 @@ COPY docs ./docs
 COPY scripts ./scripts
 COPY LICENSE COPYING.md README.md UPSTREAM.md CONTRIBUTING.md SECURITY.md AGENTS.md ./
 COPY LICENSES ./LICENSES
-COPY Dockerfile .dockerignore .gitignore .gitattributes .npmrc .env.example compose.yaml compose.build.yaml biome.json vitest.base.ts install.sh upgrade.sh uninstall.sh ./
+COPY Dockerfile .dockerignore .gitignore .gitattributes .npmrc .env.example compose.yaml compose.build.yaml biome.json vitest.base.ts install.sh upgrade.sh uninstall.sh backup.sh ./
 COPY deploy ./deploy
 COPY fixtures ./fixtures
 COPY e2e ./e2e

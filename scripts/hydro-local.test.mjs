@@ -95,7 +95,7 @@ test("invalid and duplicate options do not run maintenance commands", () => {
 	assert.match(invalidService.stderr, /无效服务名/);
 });
 
-test("uninstall preserves project data unless purge is requested", () => {
+test("uninstall keeps project data and refuses incomplete PostgreSQL purge configuration", () => {
 	const fixture = mkdtempSync(join(tmpdir(), "hydro-local-uninstall-"));
 	try {
 		mkdirSync(join(fixture, "scripts"));
@@ -110,7 +110,7 @@ test("uninstall preserves project data unless purge is requested", () => {
 			mode: 0o755,
 		});
 		const env = { ...process.env, PATH: `${join(fixture, "bin")}:${process.env.PATH ?? ""}` };
-		const uninstall = spawnSync(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "uninstall"], {
+		const uninstall = spawnSync(process.execPath, [join(fixture, "scripts/hydro-local.mjs"), "uninstall", "--keep-data"], {
 			cwd: fixture,
 			encoding: "utf8",
 			env,
@@ -124,8 +124,9 @@ test("uninstall preserves project data unless purge is requested", () => {
 			[join(fixture, "scripts/hydro-local.mjs"), "uninstall", "--purge-data"],
 			{ cwd: fixture, encoding: "utf8", env },
 		);
-		assert.equal(purge.status, 0, purge.stderr);
-		assert.equal(existsSync(join(fixture, ".setdraft")), false);
+		assert.equal(purge.status, 1, purge.stderr);
+		assert.match(purge.stderr,/SETDRAFT_DATABASE_ADMIN_URL/u);
+		assert.equal(existsSync(join(fixture, ".setdraft", "project.txt")), true);
 	} finally {
 		rmSync(fixture, { recursive: true, force: true });
 	}
@@ -305,9 +306,10 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 	const env = { ...process.env, PATH: `${join(fixture, "bin")}:${process.env.PATH ?? ""}` };
 	for (const key of Object.keys(env)) if (key.startsWith("HYDRO_") || key.startsWith("SETDRAFT_") || key === "PORT") delete env[key];
 	env.SETDRAFT_DATABASE_URL="postgresql://test:test@localhost:5432/test";
+	env.SETDRAFT_DATABASE_ADMIN_URL=env.SETDRAFT_DATABASE_URL;
  const invoke = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: fixture, encoding: "utf8", env, timeout: 65_000 });
 	try {
-		const installed = invoke("install", "--network", "cn", "--docker-registry", "mirror.example.com");
+		const installed = invoke("install", "--keep-data", "--network", "cn", "--docker-registry", "mirror.example.com");
 		assert.equal(installed.status, 0, installed.stderr);
 		assert.match(installed.stderr, /回退到 npm 官方源/);
 		const logged = readFileSync(join(fixture, "commands.log"), "utf8");
@@ -323,11 +325,24 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 		assert.equal(response.origin, `http://127.0.0.1:${port}`);
 		assert.equal(response.listenHost, "0.0.0.0");
 		const before = readFileSync(join(fixture, ".env"), "utf8");
+		const marker=join(fixture,".setdraft/project.txt");writeFileSync(marker,"preserve");
+		// A pre-Rev1.3 upgrader calls the new native installer without a keep-data flag.
+		const legacy=invoke("install");assert.equal(legacy.status,0,legacy.stderr);
+		assert.equal(readFileSync(marker,"utf8"),"preserve");
 		const upgraded = invoke("upgrade");
 		assert.equal(upgraded.status, 0, upgraded.stderr);
 		assert.equal(readFileSync(join(fixture, ".env"), "utf8"), before);
 		assert.match(readFileSync(join(fixture, "commands.log"), "utf8"), /git fetch origin main/);
-		const uninstalled = invoke("uninstall");
+		assert.equal(readFileSync(marker,"utf8"),"preserve");
+		// Stub only PostgreSQL here; real reset/restore is exercised in test-maintenance.mjs.
+		writeFileSync(join(fixture,"scripts/compose-maintenance.mjs"),`import {rmSync} from 'node:fs';
+if(process.argv[2]==='reset' && !process.argv.includes('--preflight'))rmSync(process.env.SETDRAFT_WORKSPACE_ROOT+'/project.txt');
+if(process.argv[2]==='backup' && !process.argv.includes('--preflight'))process.exit(41);`);
+		const backup=invoke("backup",join(fixture,"archive"));assert.equal(backup.status,1);
+		assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).ok,true);
+		const reset=invoke("install","--fresh-install");assert.equal(reset.status,0,reset.stderr);
+		assert.equal(existsSync(marker),false);
+		const uninstalled = invoke("uninstall", "--keep-data");
 		assert.equal(uninstalled.status, 0, uninstalled.stderr);
 		assert.equal(readFileSync(join(fixture, ".env"), "utf8"), before);
 		assert.equal(existsSync(join(fixture, ".setdraft/runtime")), false);

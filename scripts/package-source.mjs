@@ -11,7 +11,7 @@ const rootFiles = [
  "package.json", "package-lock.json", "tsconfig.json", "tsconfig.base.json", "vitest.base.ts", "playwright.config.mjs", "biome.json",
  "Dockerfile", ".dockerignore", ".gitignore", ".gitattributes", ".npmrc", ".env.example", "compose.yaml", "compose.build.yaml",
  "LICENSE", "COPYING.md", "README.md", "UPSTREAM.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md",
- "install.sh", "upgrade.sh", "uninstall.sh",
+ "install.sh", "upgrade.sh", "uninstall.sh", "backup.sh",
 ];
 const packageNames = ["ai", "telemetry", "hydro-contracts", "hydro-authoring", "hydro-server", "hydro-web"];
 const omitted = new Set(["node_modules", "dist", "coverage", ".git", ".setdraft", ".hydro-problem-make", ".artifacts", "playwright-report", "test-results", ".e2e", ".private-reports", ".DS_Store"]);

@@ -8,6 +8,9 @@ import { loadDeployment, saveDeployment, takeDeploymentOptions } from "./deploym
 
 export async function composeConfiguration(root, args, environment = process.env) {
 	const remaining = [...args];
+	const keepData = remaining.includes("--keep-data");
+	if (keepData) remaining.splice(remaining.indexOf("--keep-data"), 1);
+	if (remaining.includes("--fresh-install")) remaining.splice(remaining.indexOf("--fresh-install"), 1);
 	const overrides = takeDeploymentOptions(remaining, "install");
 	for (let i = 0; i < remaining.length;) {
 		if (!["--build", "--prebuilt"].includes(remaining[i])) { i++; continue; }
@@ -24,6 +27,12 @@ export async function composeConfiguration(root, args, environment = process.env
 	config.values.SETDRAFT_WORKSPACE_ROOT = config.dataRoot;
 	config.values.SETDRAFT_PORT = port;
 	const previous=parseEnv(await readFile(join(root,".env.compose"),"utf8").catch(error => { if (error.code !== "ENOENT") throw error; return ""; }));
+ // Changing storage or database credentials is a migration, not a preserving reinstall.
+ if (previous.SETDRAFT_DATA_PATH && previous.SETDRAFT_DATA_PATH !== config.dataRoot)
+  throw new Error("已有部署的数据目录不能通过安装或升级切换；请先备份并按恢复流程迁移。");
+ for (const key of ["SETDRAFT_DB_ADMIN_PASSWORD", "SETDRAFT_DB_APP_PASSWORD", "SETDRAFT_SEARCH_SECRET"])
+  if (previous[key] && environment[key] && previous[key] !== environment[key])
+   throw new Error(`${key} 与现有部署不一致；安装和升级不会更换已有密钥。`);
  const secret=key=>environment[key] || previous[key] || randomBytes(32).toString("hex");
  const namespace = config.values.SETDRAFT_IMAGE_NAMESPACE || "ghcr.io/albert-li-sz";
 	const tag = config.values.SETDRAFT_IMAGE_TAG || "latest";

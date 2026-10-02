@@ -50,6 +50,6 @@
 	"devDependencies": {
 		"@types/mdast": "4.0.4",
 		"shx": "0.4.0",
-		"vitest": "4.1.9"
+		"vitest": "4.1.11"
 	}
 }
