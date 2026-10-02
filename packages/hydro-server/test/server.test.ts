@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { verificationContractVersion } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatService } from "../src/chat.ts";
 import { IdentityStore } from "../src/identity.ts";
@@ -102,6 +103,7 @@ async function seedRelease(projectId: string, overrides: Partial<ManualRelease> 
 		report: {
 			mode: "finalize",
 			success: true,
+			verificationContractVersion,
 			checks: [],
 			caseCount: 1,
 			generatedCount: 0,

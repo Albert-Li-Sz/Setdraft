@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ManualRelease } from "@setdraft/contracts";
+import { type ManualRelease, verificationContractVersion } from "@setdraft/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ManualProjectStore } from "../src/manual-projects.ts";
@@ -33,6 +33,7 @@ async function releaseFixture(): Promise<ManualRelease> {
 		report: {
 			mode: "finalize",
 			success: true,
+			verificationContractVersion,
 			checks: [{ stage: "reference", passed: true, message: "ok" }],
 			caseCount: 1,
 			generatedCount: 0,
