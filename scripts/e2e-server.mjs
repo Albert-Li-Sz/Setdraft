@@ -47,6 +47,7 @@ const chat = new ChatService({
 	root,
 	configPath: join(root, "ai-config.json"),
 	client: async ({ context, signal, onDelta }) => {
+		if (context.systemPrompt?.includes("关键词规划器")) return '["faux public search"]';
 		const last = context.messages.at(-1)?.content;
 		const text = typeof last === "string" ? last : "";
 		if (text.includes("FAUX_FINAL")) { onDelta("临时增量"); return { text: "完整最终正文", finishReason: "length", complete: false }; }
