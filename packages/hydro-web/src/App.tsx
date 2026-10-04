@@ -5,8 +5,12 @@ import { RevisionConflict, requestJson } from "./api-client.ts";
 import { authClient, authFetch } from "./auth-client.ts";
 import { CopyProblemDialog } from "./CopyProblemDialog.tsx";
 import { Dialog } from "./Dialog.tsx";
+import { DraftCompareDialog } from "./DraftDialogs.tsx";
+import "./authoring-insights.css";
+import type { DraftRecovery } from "./draft-recovery.ts";
 import { readFileWithProgress, transferFiles, transfers } from "./file-transfer.ts";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
+import { LoadingState } from "./LoadingState.tsx";
 import { ProblemTypeSelect } from "./ProblemTypeSelect.tsx";
 import {
 	apiUrl,
@@ -55,6 +59,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	}, [page]);
 	const apiOrigin = "";
 	const selection = useRef<AbortController | undefined>(undefined);
+	const recordsRequest = useRef<AbortController | undefined>(undefined);
 	const [sandbox, setSandbox] = useState<SandboxStatus>();
 	const [aiConfigured, setAiConfigured] = useState(false);
 	const [choosingScoringMode, setChoosingScoringMode] = useState(false);
@@ -75,6 +80,8 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const [recordsTone, setRecordsTone] = useState<"passed" | "failed">("passed");
 	const [notice, setNotice] = useState<UiMessage>("题目自动保存在本地服务端。请添加标准程序与测试数据。");
 	const [noticeTone, setNoticeTone] = useState<"pending" | "passed" | "failed">("pending");
+	const [recoveryPrompt, setRecoveryPrompt] = useState<DraftRecovery>();
+	const [deferredRecoveries, setDeferredRecoveries] = useState<string[]>([]);
 
 	const showNotice = useCallback((message: UiMessage, tone: "pending" | "passed" | "failed" = "pending"): void => {
 		setNotice(message);
@@ -86,9 +93,24 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		project,
 		status: sessionStatus,
 		conflict: conflictSnapshot,
-	} = useProjectSession(apiOrigin, (error) =>
-		showNotice(error instanceof Error ? error.message : "题目保存失败。", "failed"),
+		recoveries,
+		discardRecovery,
+		recoveryError,
+	} = useProjectSession(
+		apiOrigin,
+		(error) => showNotice(error instanceof Error ? error.message : "题目保存失败。", "failed"),
+		user.id,
 	);
+	useEffect(() => {
+		if (recoveryPrompt && !recoveries.some((entry) => entry.id === recoveryPrompt.id)) setRecoveryPrompt(undefined);
+	}, [recoveries, recoveryPrompt]);
+	useEffect(() => {
+		if (!project || sessionStatus !== "saved" || busy || conflictSnapshot || recoveryPrompt) return;
+		const candidate = recoveries.find(
+			(entry) => entry.project.id === project.id && !deferredRecoveries.includes(entry.id),
+		);
+		if (candidate) setRecoveryPrompt(candidate);
+	}, [project, sessionStatus, busy, conflictSnapshot, recoveryPrompt, recoveries, deferredRecoveries]);
 	const saveStatus = { saved: "已保存", dirty: "待保存", saving: "正在保存", conflict: "版本冲突", error: "保存失败" }[
 		sessionStatus
 	];
@@ -117,7 +139,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 						signal: controller.signal,
 					});
 					if (!controller.signal.aborted && !signal.aborted) {
-						session.accept(latest);
+						session.receive(latest);
 						setReport(session.getSnapshot().status === "saved" ? latest.lastReport : undefined);
 					}
 				}
@@ -136,7 +158,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	};
 	const setConflictSnapshot = (snapshot?: ProjectSnapshot) =>
 		snapshot ? session.conflict(snapshot) : session.dismissConflict();
-	const setCurrentProject = (snapshot: ProjectSnapshot) => session.accept(snapshot);
+	const setCurrentProject = (snapshot: ProjectSnapshot) => session.receive(snapshot);
 	const openSession = (snapshot: ProjectSnapshot) => {
 		const previous = projectRef.current;
 		setProjects((current) => [
@@ -153,6 +175,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	useEffect(
 		() => () => {
 			selection.current?.abort();
+			recordsRequest.current?.abort();
 			transfers.clear();
 		},
 		[],
@@ -178,21 +201,27 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		}
 	}, []);
 
-	const refreshRecords = useCallback(async (): Promise<void> => {
+	const refreshRecords = useCallback(async (externalSignal?: AbortSignal): Promise<void> => {
+		recordsRequest.current?.abort();
+		const controller = new AbortController();
+		recordsRequest.current = controller;
+		const signal = externalSignal ? AbortSignal.any([externalSignal, controller.signal]) : controller.signal;
 		setRecordsLoading(true);
 		try {
 			const [projectList, releaseList] = await Promise.all([
-				requestJson<{ projects: ProjectSnapshot[] }>(apiUrl(apiOrigin, "/projects")),
-				requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, "/releases")),
+				requestJson<{ projects: ProjectSnapshot[] }>(apiUrl(apiOrigin, "/projects"), { signal }),
+				requestJson<{ releases: ManualRelease[] }>(apiUrl(apiOrigin, "/releases"), { signal }),
 			]);
+			if (signal.aborted) return;
 			setProjects(projectList.projects);
 			setReleases(releaseList.releases);
 			setRecordsMessage("");
 		} catch (error) {
+			if (signal.aborted) return;
 			setRecordsMessage(error instanceof Error ? error.message : "记录读取失败。");
 			setRecordsTone("failed");
 		} finally {
-			setRecordsLoading(false);
+			if (recordsRequest.current === controller) setRecordsLoading(false);
 		}
 	}, []);
 
@@ -205,23 +234,16 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	}, []);
 
 	useEffect(() => {
-		if (paused) return;
+		if (paused) {
+			recordsRequest.current?.abort();
+			setRecordsLoading(false);
+			return;
+		}
 		const controller = new AbortController();
 		void checkApiConnection(controller.signal);
-		void (async () => {
-			try {
-				const list = await requestJson<{ projects: ProjectSnapshot[] }>(apiUrl(apiOrigin, "/projects"), {
-					signal: controller.signal,
-				});
-				if (controller.signal.aborted) return;
-				setProjects(list.projects);
-			} catch (error) {
-				if (!controller.signal.aborted)
-					showNotice(error instanceof Error ? error.message : "题目读取失败。", "failed");
-			}
-		})();
+		void refreshRecords(controller.signal);
 		return () => controller.abort();
-	}, [checkApiConnection, showNotice, paused]);
+	}, [checkApiConnection, refreshRecords, paused]);
 
 	useEffect(() => {
 		if (!paused && page === "records") void refreshRecords();
@@ -247,6 +269,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ scoringMode, problemType }),
 			});
+			recordsRequest.current?.abort();
 			setProjects((items) => [created, ...items.filter((item) => item.id !== created.id)]);
 			controller.signal.throwIfAborted();
 			await saveNow();
@@ -307,6 +330,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 
 	async function deleteProject(id: string): Promise<void> {
 		setDeletingProjectId(id);
+		recordsRequest.current?.abort();
 		try {
 			if (projectRef.current?.id === id) await saveNow();
 			const response = await authFetch(apiUrl(apiOrigin, `/projects/${id}`), { method: "DELETE" });
@@ -354,6 +378,35 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			signal.throwIfAborted();
 			openSession(restored);
 			showNotice(uiMessage("已回退到“{0}”。发布前请重新验证。", selected.name || `v${selected.revision}`), "passed");
+		} finally {
+			contentOperation.current = false;
+			setBusy(undefined);
+		}
+	}
+	async function restoreDraft(revision: number): Promise<void> {
+		const current = projectRef.current,
+			signal = session.signal;
+		if (!current || contentOperation.current) throw new Error("请重新打开题目后重试。");
+		contentOperation.current = true;
+		setBusy("restore");
+		try {
+			await saveNow();
+			signal.throwIfAborted();
+			const restored = await requestJson<ProjectSnapshot>(
+				apiUrl(apiOrigin, `/projects/${current.id}/drafts/${revision}/restore`),
+				{
+					method: "POST",
+					signal,
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ expectedRevision: projectRef.current?.revision }),
+				},
+			);
+			signal.throwIfAborted();
+			openSession(restored);
+			showNotice("草稿已恢复到新版本，请重新验证。", "passed");
+		} catch (error) {
+			if (error instanceof RevisionConflict) session.conflict(error.current);
+			throw error;
 		} finally {
 			contentOperation.current = false;
 			setBusy(undefined);
@@ -667,7 +720,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				page={page}
 				projects={project ? [project, ...projects.filter((item) => item.id !== project.id)] : projects}
 				currentProjectId={project?.id}
-				busy={!!busy || !!deletingProjectId}
+				busy={creating || !!busy || !!deletingProjectId}
 				taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)}
 				onNew={() => {
 					selection.current?.abort();
@@ -679,7 +732,13 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			>
 				{/* Keep the user-scoped chat and its stream alive across route changes. */}
 				<Suspense
-					fallback={page === "chat" ? <main className="page page-loading">{t("正在打开页面…")}</main> : null}
+					fallback={
+						page === "chat" ? (
+							<main className="page page-loading">
+								<LoadingState label={t("正在打开页面…")} />
+							</main>
+						) : null
+					}
 				>
 					{(page === "chat" || chatVisited) && (
 						<AiChatPage
@@ -692,7 +751,13 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 						/>
 					)}
 				</Suspense>
-				<Suspense fallback={<main className="page page-loading">{t("正在打开页面…")}</main>}>
+				<Suspense
+					fallback={
+						<main className="page page-loading">
+							<LoadingState label={t("正在打开页面…")} />
+						</main>
+					}
+				>
 					{page === "workspace" &&
 						(project ? (
 							<ManualWorkspace
@@ -724,6 +789,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								onGenerate={generate}
 								onFinalize={finalize}
 								onRestore={restoreRelease}
+								onRestoreDraft={restoreDraft}
 								onReleasesChanged={() => void releaseChanged()}
 								onCopy={() => setCopyingProject(project)}
 								onDelete={deleteProject}
@@ -732,6 +798,8 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 							<WorkspaceHome
 								administrator={user.role === "admin"}
 								projects={projects}
+								loading={recordsLoading}
+								busy={creating || !!busy || !!deletingProjectId}
 								sandbox={sandbox}
 								message={recordsMessage || undefined}
 								messageTone={recordsTone}
@@ -835,41 +903,76 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 					onCopy={copyToUser}
 				/>
 			)}
-			{conflictSnapshot && (
-				<div className="confirmation-backdrop" role="presentation">
-					<div
-						className="card confirmation-dialog"
-						role="dialog"
-						aria-modal="true"
-						aria-labelledby="conflict-title"
-					>
-						<div className="confirmation-heading">
-							<span>{t("版本冲突")}</span>
-							<h2 id="conflict-title">{t("题目已在其他窗口更新")}</h2>
-						</div>
-						<p>
-							{t(
-								"服务器版本为 {0}。加载前可复制当前编辑内容；加载会替换当前窗口未保存的修改。",
-								conflictSnapshot.revision,
-							)}
-						</p>
-						<div className="confirmation-actions">
-							<button className="button secondary" type="button" onClick={() => setConflictSnapshot(undefined)}>
-								{t("保留当前内容")}
-							</button>
-							<button
-								className="button primary"
-								type="button"
-								onClick={() => {
-									openSession(conflictSnapshot);
-									setConflictSnapshot(undefined);
-								}}
-							>
-								{t("加载服务器版本")}
-							</button>
-						</div>
-					</div>
-				</div>
+			{recoveryError && (
+				<output className="notice failed" role="alert">
+					{t(recoveryError)}
+				</output>
+			)}
+			{project && sessionStatus === "conflict" && !conflictSnapshot && (
+				<button
+					type="button"
+					className="button secondary draft-recovery-banner"
+					onClick={() => {
+						const remote = session.getConflict();
+						if (remote) session.conflict(remote);
+					}}
+				>
+					{t("比较版本冲突")}
+				</button>
+			)}
+			{project && !recoveryPrompt && recoveries.some((entry) => entry.project.id === project.id) && (
+				<button
+					type="button"
+					className="button secondary draft-recovery-banner"
+					onClick={() => setRecoveryPrompt(recoveries.find((entry) => entry.project.id === project.id))}
+				>
+					{t("恢复未保存内容")}
+				</button>
+			)}
+			{conflictSnapshot && project && session.getBaseline() && (
+				<DraftCompareDialog
+					key={`conflict:${project.id}:${conflictSnapshot.revision}`}
+					base={session.getBaseline()!}
+					local={project}
+					server={conflictSnapshot}
+					onClose={() => setConflictSnapshot(undefined)}
+					onServer={() => {
+						openSession(conflictSnapshot);
+						setConflictSnapshot(undefined);
+					}}
+					onApply={async (choices) => {
+						session.resolveConflict(choices);
+						await session.flush();
+						setReport(undefined);
+						showNotice("冲突已合并并保存，请重新验证。", "passed");
+					}}
+				/>
+			)}
+			{recoveryPrompt && project?.id === recoveryPrompt.project.id && !conflictSnapshot && (
+				<DraftCompareDialog
+					key={recoveryPrompt.id}
+					base={recoveryPrompt.base}
+					local={recoveryPrompt.project}
+					server={project}
+					recovery={recoveryPrompt}
+					onClose={() => {
+						setDeferredRecoveries((entries) => [...entries, recoveryPrompt.id]);
+						setRecoveryPrompt(undefined);
+					}}
+					onServer={() => {
+						discardRecovery(recoveryPrompt.id);
+						setRecoveryPrompt(undefined);
+					}}
+					onApply={async (choices) => {
+						const entry = recoveryPrompt;
+						session.recover(entry.base, entry.project, project, choices);
+						await session.flush();
+						discardRecovery(entry.id);
+						setRecoveryPrompt(undefined);
+						setReport(undefined);
+						showNotice("未保存内容已恢复并保存。", "passed");
+					}}
+				/>
 			)}
 		</>
 	);

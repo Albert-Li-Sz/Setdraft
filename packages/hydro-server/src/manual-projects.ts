@@ -7,6 +7,7 @@ import {
 	type AddedManualCase,
 	type CppLanguage,
 	cppLanguages,
+	isBoundaryConditions,
 	legacyOracleSolution,
 	type ManualCaseSummary,
 	type ManualProgram,
@@ -20,6 +21,7 @@ import {
 	synchronizeSolutions,
 } from "@setdraft/contracts";
 import { assertReleasesUnreferenced } from "./contest-references.ts";
+import { DraftHistory } from "./draft-history.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import { updateGenerators } from "./generator-model.ts";
 import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
@@ -109,6 +111,7 @@ export class ManualProjectStore {
 	readonly pipeline: ProjectPipeline;
 	readonly runs: VerificationRuns;
 	readonly releases: ReleaseStore;
+	readonly history: DraftHistory;
 	readonly root: string;
 	readonly database: WorkspaceDatabase;
 	readonly image: string;
@@ -136,6 +139,7 @@ export class ManualProjectStore {
 		this.pipeline = new ProjectPipeline(this);
 		this.runs = new VerificationRuns(this);
 		this.releases = new ReleaseStore(this);
+		this.history = new DraftHistory(this);
 	}
 
 	projectDirectory(id: string): string {
@@ -232,7 +236,10 @@ export class ManualProjectStore {
 			await this.database.transaction(async () => {
 				context?.signal.throwIfAborted();
 				await this.assertTaskAccess(project.id, context);
+				const stored = await this.database.get<ManualProject>("project", project.id);
+				const previous = stored && stored.revision < project.revision ? await this.load(project.id) : undefined;
 				await this.database.put("project", project.id, project, expectedVersion);
+				if (previous) await this.history.capture(previous);
 			});
 		} catch (error) {
 			if (String(error).includes("VERSION_CONFLICT")) {
@@ -270,6 +277,7 @@ export class ManualProjectStore {
 		for (const origin of ["manual", "generated"] as const) {
 			const files = await this.database.fileEntries(origin, project.id);
 			const byName = new Map(files.map((item) => [item.name, item.size]));
+			const byHash = new Map(files.map((item) => [item.name, item.hash]));
 			for (const file of files) {
 				const { stem, extension } = dataStem(file.name);
 				if (extension !== "in") {
@@ -292,7 +300,9 @@ export class ManualProjectStore {
 					inputFile: file.name,
 					outputFile,
 					inputBytes: file.size,
+					inputHash: file.hash,
 					outputBytes: outputFile ? byName.get(outputFile) : undefined,
+					outputHash: outputFile ? byHash.get(outputFile) : undefined,
 					subtaskId: project.caseSubtasks[`${origin}:${stem}`] ?? 1,
 				});
 			}
@@ -333,6 +343,11 @@ export class ManualProjectStore {
 			throw new ManualProjectError("题目赛制在创建后不可更改；请新建题目。", 422);
 		}
 		updateProblemType(project, input);
+		if (input.boundaryConditions !== undefined) {
+			if (!isBoundaryConditions(input.boundaryConditions))
+				throw new ManualProjectError("边界条件名称、测试点或整数范围无效。", 422);
+			project.boundaryConditions = input.boundaryConditions;
+		}
 		const fields = [
 			"slug",
 			"title",
@@ -883,6 +898,7 @@ export class ManualProjectStore {
 				await this.database.removeOwnerFiles("release-file", release.id);
 			}
 			for (const kind of ["manual", "generated", "pdf"]) await this.database.removeOwnerFiles(kind, id);
+			await this.history.delete(id);
 			for (const run of await this.database.list<{ id: string; projectId: string }>("verification-run")) {
 				if (run.projectId !== id) continue;
 				await this.database.removeOwnerFiles("verification-file", run.id);

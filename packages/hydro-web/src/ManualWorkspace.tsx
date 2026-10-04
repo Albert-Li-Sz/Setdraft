@@ -1,4 +1,5 @@
 import {
+	type AuthoringTarget,
 	interactiveReferenceTemplate,
 	interactorTemplate,
 	projectSolutions,
@@ -7,13 +8,15 @@ import {
 	synchronizeSolutions,
 	verificationContractVersion,
 } from "@setdraft/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { DataQualityPanel, PublicationReadinessPanel } from "./AuthoringInsights.tsx";
 import { AuthenticationRequired, authFetch } from "./auth-client.ts";
 import { copyText, createClientId } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
 import { CommunicationSettings } from "./CommunicationSettings.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
+import { DraftHistoryDialog } from "./DraftDialogs.tsx";
 import { readSourceFile } from "./file-transfer.ts";
 import { GeneratorLibrary } from "./GeneratorLibrary.tsx";
 import { Icon } from "./Icon.tsx";
@@ -36,7 +39,9 @@ import { parseTags } from "./problem.ts";
 import type { ProjectSession } from "./project-session.ts";
 import { SolutionSettings } from "./SolutionSettings.tsx";
 import { StatementEditor } from "./StatementEditor.tsx";
+import { changeProjectSolutions } from "./solution-library.ts";
 import { SourceImports } from "./source-import.ts";
+import { useAuthoringInsights } from "./use-authoring-insights.ts";
 import { VerificationPanel } from "./VerificationPanel.tsx";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 
@@ -119,6 +124,7 @@ interface Props {
 	onGenerate(): Promise<void>;
 	onFinalize(name: string): Promise<void>;
 	onRestore(release: ManualRelease): Promise<void>;
+	onRestoreDraft?(revision: number): Promise<void>;
 	onReleasesChanged(): void;
 	onCopy(): void;
 	onDelete(id: string): Promise<void>;
@@ -197,7 +203,12 @@ export function ManualWorkspace(props: Props) {
 	const [selectedTab, setSelectedTab] = useState<Tab>("statement");
 	const setTab = (value: Tab) => {
 		setSelectedTab(value);
-		replaceWorkspaceLocation(project.id, { tab: value });
+		replaceWorkspaceLocation(project.id, {
+			tab: value,
+			section: undefined,
+			case: undefined,
+			field: undefined,
+		});
 	};
 	useEffect(() => {
 		const location = readWorkspaceLocation(locationHash);
@@ -218,6 +229,8 @@ export function ManualWorkspace(props: Props) {
 	const emptyInput = interactive && project.interactionInputMode === "empty";
 	const tab = emptyInput && selectedTab === "generator" ? "data" : selectedTab;
 	const programSection =
+		(selectedProgramSection.startsWith("solution:") &&
+			!solutions.some((item) => `solution:${item.id}` === selectedProgramSection)) ||
 		(!showChecker && selectedProgramSection === "checker") ||
 		(problemType !== "interactive" && selectedProgramSection === "interactor") ||
 		(!communication && selectedProgramSection === "communication") ||
@@ -231,10 +244,84 @@ export function ManualWorkspace(props: Props) {
 			(!project.communication?.judgeSource.trim() ||
 				(project.communication.secondRound === "custom" && !project.checkerSource.trim())));
 	const [publishing, setPublishing] = useState(false);
+	const [draftHistoryOpen, setDraftHistoryOpen] = useState(false);
+	const [qualityOpen, setQualityOpen] = useState(false);
+	const [readinessOpen, setReadinessOpen] = useState(false);
+	const insightNavigation = useRef(false);
+	const insights = useAuthoringInsights(
+		props.apiOrigin,
+		project,
+		props.session,
+		publishing || qualityOpen || readinessOpen,
+	);
 	const layoutRef = useRef<HTMLDivElement>(null);
 	const [compact, setCompact] = useState(false);
 	const [naturalFlow, setNaturalFlow] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const navigateInsight = (target: AuthoringTarget) => {
+		insightNavigation.current = qualityOpen || readinessOpen || publishing;
+		setPublishing(false);
+		setReadinessOpen(false);
+		setQualityOpen(target.section === "quality" && !target.caseId);
+		replaceWorkspaceLocation(project.id, {
+			tab: target.tab,
+			program: target.solutionId
+				? `solution:${target.solutionId}`
+				: target.tab === "programs"
+					? target.section
+					: undefined,
+			section: target.section,
+			case: target.caseId,
+			field: target.field,
+		});
+	};
+	const focusInsightAfterClose = () => {
+		if (!insightNavigation.current) return;
+		insightNavigation.current = false;
+		const location = readWorkspaceLocation(window.location.hash);
+		const target = document.getElementById(
+			location.case
+				? "case-preview"
+				: location.field
+					? `workspace-${location.field}`
+					: location.program
+						? `program-section-${location.program}`
+						: location.section === "quality"
+							? "data-quality"
+							: `authoring-tab-${location.tab ?? "statement"}`,
+		);
+		if (target?.closest("dialog")?.open === false) return;
+		target?.scrollIntoView({ block: "nearest" });
+		target?.focus({ preventScroll: true });
+	};
+	const applyInsightLocation = useEffectEvent((location: ReturnType<typeof readWorkspaceLocation>) => {
+		if (location.program) setProgramSection(location.program);
+		if (location.section === "quality" && !location.case) setQualityOpen(true);
+		if (location.field) setSettingsOpen(true);
+		if (location.case && !emptyInput) {
+			const item = project.cases.find((test) => `${test.origin}:${test.id}` === location.case);
+			if (item) void previewCase(item.origin, item.id);
+		}
+	});
+	useEffect(() => {
+		const location = readWorkspaceLocation(locationHash);
+		if (location.project !== project.id) return;
+		applyInsightLocation(location);
+		const frame = requestAnimationFrame(() => {
+			const target = document.getElementById(
+				location.field
+					? `workspace-${location.field}`
+					: location.program
+						? `program-section-${location.program}`
+						: location.section === "quality"
+							? "data-quality"
+							: `authoring-tab-${location.tab ?? "statement"}`,
+			);
+			target?.scrollIntoView({ block: "nearest" });
+			target?.focus({ preventScroll: true });
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [locationHash, project.id]);
 	useEffect(() => {
 		const layout = layoutRef.current;
 		if (!layout) return;
@@ -265,13 +352,20 @@ export function ManualWorkspace(props: Props) {
 	const [caseError, setCaseError] = useState<UiMessage>("");
 	const [caseSubmitting, setCaseSubmitting] = useState(false);
 	const [selectedCases, setSelectedCases] = useState<string[]>([]);
-	const [casePreview, setCasePreview] = useState<{
+	const [casePreviewValue, setCasePreview] = useState<{
+		projectId: string;
+		revision: number;
 		name: string;
 		input: string;
 		output?: string;
 		verified?: string;
 		truncated: boolean;
 	}>();
+	const casePreview =
+		casePreviewValue?.projectId === project.id && casePreviewValue.revision === project.revision
+			? casePreviewValue
+			: undefined;
+	const previewController = useRef<AbortController | undefined>(undefined);
 	const [caseAction, setCaseAction] = useState<UiMessage>("");
 	const caseSubmissionRef = useRef(false);
 	const mountedRef = useRef(true);
@@ -279,13 +373,18 @@ export function ManualWorkspace(props: Props) {
 		mountedRef.current = true;
 		return () => {
 			mountedRef.current = false;
+			previewController.current?.abort();
 		};
 	}, []);
 	const isAcm = project.scoringMode === "acm";
 	async function previewCase(origin: "manual" | "generated", stem: string): Promise<void> {
+		previewController.current?.abort();
+		const controller = new AbortController();
+		previewController.current = controller;
 		try {
 			const response = await authFetch(
 				apiUrl(props.apiOrigin, `/projects/${project.id}/cases/${origin}/${encodeURIComponent(stem)}/preview`),
+				{ signal: controller.signal },
 			);
 			const value = (await response.json()) as {
 				input: string;
@@ -294,13 +393,24 @@ export function ManualWorkspace(props: Props) {
 				truncated: boolean;
 				message?: string;
 			};
+			if (controller.signal.aborted || !mountedRef.current) return;
 			if (!response.ok) throw new Error(value.message ?? "预览失败。");
-			setCasePreview({ ...value, name: `${stem}.in` });
+			setCasePreview({ ...value, name: `${stem}.in`, projectId: project.id, revision: project.revision });
 			setCaseAction("");
 		} catch (error) {
-			setCaseAction(error instanceof Error ? error.message : "预览失败。");
+			if (!controller.signal.aborted && mountedRef.current)
+				setCaseAction(error instanceof Error ? error.message : "预览失败。");
 		}
 	}
+	useEffect(() => {
+		if (!casePreview) return;
+		const frame = requestAnimationFrame(() => {
+			const preview = document.getElementById("case-preview");
+			preview?.scrollIntoView({ block: "nearest" });
+			preview?.focus({ preventScroll: true });
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [casePreview]);
 
 	async function renumber(): Promise<void> {
 		try {
@@ -369,15 +479,11 @@ export function ManualWorkspace(props: Props) {
 			return next;
 		});
 	const changeSolutions = (change: (items: Solution[]) => Solution[], primaryId?: string) =>
-		props.onEdit((current) => {
-			const next = {
-				...current,
-				solutions: change(projectSolutions(current)),
-				referenceSolutionId: primaryId ?? current.referenceSolutionId ?? "reference",
-			};
-			synchronizeSolutions(next);
-			return next;
-		});
+		props.onEdit((current) => changeProjectSolutions(current, change, primaryId));
+	const selectProgram = (section: ProgramSection) => {
+		setProgramSection(section);
+		replaceWorkspaceLocation(project.id, { program: section });
+	};
 	const selectedSolution = solutions.find((item) => `solution:${item.id}` === programSection);
 	const updateSolution = (change: Partial<Solution>) => {
 		if (selectedSolution)
@@ -385,24 +491,24 @@ export function ManualWorkspace(props: Props) {
 				items.map((item) => (item.id === selectedSolution.id ? { ...item, ...change } : item)),
 			);
 	};
-	const addSolution = (copy?: Solution) => {
+	const addSolution = (copy?: Solution, incorrect = false) => {
 		if (solutions.length >= 32) return;
 		const id = createClientId();
 		changeSolutions((items) => [
 			...items,
 			{
 				id,
-				name: t("新标程"),
+				name: t(incorrect ? "新错误解" : "新标程"),
 				language: "cpp17",
 				code: "",
-				purpose: "accepted",
-				expectation: { kind: "AC" },
+				purpose: incorrect ? "wrong" : "accepted",
+				expectation: { kind: incorrect ? "WA" : "AC" },
 				...copy,
 				required: false,
 				...(copy ? { id, name: `${copy.name.slice(0, 90)} (${t("副本")})` } : {}),
 			},
 		]);
-		setProgramSection(`solution:${id}`);
+		selectProgram(`solution:${id}`);
 	};
 	const programSections: Array<{ id: ProgramSection; label: string; filled: boolean; required: boolean }> = [
 		...solutions.map((item) => ({
@@ -473,6 +579,16 @@ export function ManualWorkspace(props: Props) {
 					<p>{t("上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。")}</p>
 				</div>
 				<div className="heading-actions">
+					{props.onRestoreDraft && (
+						<button
+							type="button"
+							className="button secondary"
+							disabled={!!props.busy || props.deleting}
+							onClick={() => setDraftHistoryOpen(true)}
+						>
+							{t("草稿历史")}
+						</button>
+					)}
 					{compact && (
 						<button className="button secondary" type="button" onClick={() => setSettingsOpen(true)}>
 							{t("题目配置")}
@@ -616,6 +732,7 @@ export function ManualWorkspace(props: Props) {
 								project={project}
 								disabled={!!props.busy}
 								onEdit={props.onEdit}
+								section={readWorkspaceLocation(locationHash).section}
 							/>
 						</div>
 					)}
@@ -625,7 +742,19 @@ export function ManualWorkspace(props: Props) {
 							role="tabpanel"
 							id="authoring-panel-data"
 							aria-labelledby="authoring-tab-data"
+							tabIndex={-1}
 						>
+							<div className="authoring-report-entry">
+								<div>
+									<p>{t("重复、配分、错误解检出与边界覆盖；质量提示不新增发布门槛。")}</p>
+									{insights.quality && (
+										<span className="tag">{t("提示 {0}", insights.quality.issues.length)}</span>
+									)}
+								</div>
+								<button type="button" className="button secondary" onClick={() => setQualityOpen(true)}>
+									{t("数据质量报告")}
+								</button>
+							</div>
 							{interactive && (
 								<fieldset className="interaction-data-options" disabled={!!props.busy}>
 									<legend>{t("测试输入来源")}</legend>
@@ -989,7 +1118,7 @@ export function ManualWorkspace(props: Props) {
 										</div>
 									)}
 									{casePreview && (
-										<section className="case-preview card">
+										<section className="case-preview card" id="case-preview" tabIndex={-1}>
 											<div className="manual-section-heading">
 												<div>
 													<h3>
@@ -1196,13 +1325,22 @@ export function ManualWorkspace(props: Props) {
 									>
 										{t("添加标程")}
 									</button>
+									<button
+										className="button secondary"
+										type="button"
+										disabled={solutions.length >= 32}
+										onClick={() => addSolution(undefined, true)}
+									>
+										{t("添加错误解")}
+									</button>
 									{programSections.map((section) => (
 										<button
 											key={section.id}
+											id={`program-section-${section.id}`}
 											className={programSection === section.id ? "active" : ""}
 											type="button"
 											aria-current={programSection === section.id ? "true" : undefined}
-											onClick={() => setProgramSection(section.id)}
+											onClick={() => selectProgram(section.id)}
 										>
 											<span>{t(section.label)}</span>
 											<small>
@@ -1303,7 +1441,7 @@ export function ManualWorkspace(props: Props) {
 													changeSolutions((items) =>
 														items.filter((item) => item.id !== selectedSolution.id),
 													);
-													setProgramSection(`solution:${project.referenceSolutionId ?? "reference"}`);
+													selectProgram(`solution:${project.referenceSolutionId ?? "reference"}`);
 												}}
 											/>
 											<ProgramEditor
@@ -1456,11 +1594,20 @@ export function ManualWorkspace(props: Props) {
 								</button>
 							</div>
 							{props.session && (
+								<div className="authoring-report-entry">
+									<p>{t("集中检查发布所需内容；观察项提供提示，发布仍执行原有完整验证。")}</p>
+									<button type="button" className="button secondary" onClick={() => setReadinessOpen(true)}>
+										{t("发布准备")}
+									</button>
+								</div>
+							)}
+							{props.session && (
 								<VerificationPanel
 									apiOrigin={props.apiOrigin}
 									project={project}
 									session={props.session}
 									disabled={!!props.busy}
+									onRunCompleted={insights.refresh}
 								/>
 							)}
 							{report ? (
@@ -1596,6 +1743,7 @@ export function ManualWorkspace(props: Props) {
 							<label className="field">
 								<span>{t("题目标题")}</span>
 								<input
+									id="workspace-title"
 									value={project.title}
 									onChange={(event) => set("title", event.target.value)}
 									placeholder={t("例如 A + B")}
@@ -1604,6 +1752,7 @@ export function ManualWorkspace(props: Props) {
 							<label className="field">
 								<span>{t("目录标识 slug")}</span>
 								<input
+									id="workspace-slug"
 									value={project.slug}
 									onChange={(event) => set("slug", event.target.value)}
 									placeholder={t("例如 a-plus-b")}
@@ -1618,6 +1767,7 @@ export function ManualWorkspace(props: Props) {
 								<label className="field">
 									<span>{t("时间限制")} · ms</span>
 									<input
+										id="workspace-timeLimit"
 										type="number"
 										min="1"
 										step="1"
@@ -1632,6 +1782,7 @@ export function ManualWorkspace(props: Props) {
 								<label className="field">
 									<span>{t("内存限制")} · m</span>
 									<input
+										id="workspace-memoryLimit"
 										type="number"
 										min="1"
 										step="1"
@@ -1726,7 +1877,54 @@ export function ManualWorkspace(props: Props) {
 					</section>
 				</WorkspaceSidebar>
 			</div>
-			<Dialog open={publishing} onClose={() => setPublishing(false)} labelledBy="publish-title">
+			<Dialog
+				open={qualityOpen}
+				onClose={() => setQualityOpen(false)}
+				onClosed={focusInsightAfterClose}
+				labelledBy="data-quality-title"
+				className="authoring-report-dialog"
+			>
+				<DataQualityPanel
+					titleId="data-quality-title"
+					report={insights.quality}
+					project={project}
+					disabled={!!props.busy || props.deleting}
+					onChange={(value) => set("boundaryConditions", value)}
+					onNavigate={navigateInsight}
+					{...insights}
+				/>
+				<div className="confirmation-actions">
+					<button type="button" className="button secondary" onClick={() => setQualityOpen(false)}>
+						{t("关闭")}
+					</button>
+				</div>
+			</Dialog>
+			<Dialog
+				open={readinessOpen}
+				onClose={() => setReadinessOpen(false)}
+				onClosed={focusInsightAfterClose}
+				labelledBy="publication-readiness-title"
+				className="authoring-report-dialog"
+			>
+				<PublicationReadinessPanel
+					titleId="publication-readiness-title"
+					report={insights.readiness}
+					onNavigate={navigateInsight}
+					{...insights}
+				/>
+				<div className="confirmation-actions">
+					<button type="button" className="button secondary" onClick={() => setReadinessOpen(false)}>
+						{t("关闭")}
+					</button>
+				</div>
+			</Dialog>
+			<Dialog
+				open={publishing}
+				onClose={() => setPublishing(false)}
+				onClosed={focusInsightAfterClose}
+				labelledBy="publish-title"
+				className="publication-dialog"
+			>
 				<form
 					className="account-form"
 					onSubmit={(event) => {
@@ -1740,6 +1938,7 @@ export function ManualWorkspace(props: Props) {
 						<h2 id="publish-title">{t("验证并发布")}</h2>
 					</div>
 					<p>{t("完整验证通过后保存发布包，之后可下载或回退到此版本。")}</p>
+					<PublicationReadinessPanel report={insights.readiness} onNavigate={navigateInsight} {...insights} />
 					<label>
 						{t("发布包名称")}
 						<input
@@ -1760,6 +1959,16 @@ export function ManualWorkspace(props: Props) {
 					</div>
 				</form>
 			</Dialog>
+			{props.onRestoreDraft && (
+				<DraftHistoryDialog
+					apiOrigin={props.apiOrigin}
+					project={project}
+					open={draftHistoryOpen}
+					busy={!!props.busy}
+					onClose={() => setDraftHistoryOpen(false)}
+					onRestore={props.onRestoreDraft}
+				/>
+			)}
 			<Dialog open={pendingDelete} onClose={() => setPendingDelete(false)} labelledBy="delete-current-project-title">
 				<div className="confirmation-heading">
 					<span>{t("删除确认")}</span>

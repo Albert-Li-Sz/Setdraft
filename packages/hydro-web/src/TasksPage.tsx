@@ -6,7 +6,11 @@ import { Dialog } from "./Dialog.tsx";
 import { EmptyState } from "./EmptyState.tsx";
 import { Icon } from "./Icon.tsx";
 import { useLocale } from "./i18n.tsx";
+import { LoadingState } from "./LoadingState.tsx";
+import { matchesSearch } from "./list-search.ts";
+import { type PageRefresh, startPageRefresh } from "./page-refresh.ts";
 import { apiUrl, type BackgroundTask, type TaskEvent } from "./platform.ts";
+import { groupTasks, matchesTaskFilter, type TaskFilter, taskNeedsAttention } from "./task-list.ts";
 
 import { workspaceHash } from "./workspace-navigation.ts";
 
@@ -42,11 +46,14 @@ const stateNames: Record<BackgroundTask["state"], string> = {
 function TaskState({ state, cleanupPending }: { state: BackgroundTask["state"]; cleanupPending?: boolean }) {
 	const { t } = useLocale();
 	const active = state === "running" || state === "queued";
+	const issue = taskNeedsAttention({ state, cleanupPending });
 	return (
-		<span className={`status-badge ${active ? "is-active" : state === "succeeded" ? "online" : "offline"}`}>
+		<span
+			className={`status-badge ${issue ? "offline" : active ? "is-active" : state === "succeeded" ? "online" : "is-neutral"}`}
+		>
 			<Icon
-				name={active ? "loader" : state === "succeeded" ? "check" : "close"}
-				className={active ? "loading-icon" : undefined}
+				name={issue ? "close" : active ? "loader" : state === "succeeded" ? "check" : "stop"}
+				className={active && !issue ? "loading-icon" : undefined}
 			/>
 			{t(cleanupPending ? "停止未确认" : stateNames[state])}
 		</span>
@@ -89,11 +96,16 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	const [events, setEvents] = useState<TaskEvent[]>([]);
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [loading, setLoading] = useState(false);
+	const [query, setQuery] = useState("");
+	const [filter, setFilter] = useState<TaskFilter>("all");
+	const [kind, setKind] = useState<BackgroundTask["kind"] | "all">("all");
 	// A newer pending poll must not discard a healthy response that has already arrived.
 	const refreshRevision = useRef(0);
 	const requestRevision = useRef(0);
 	const viewRevision = useRef(0);
 	const actionPending = useRef(false);
+	const pollingRef = useRef<PageRefresh | undefined>(undefined);
 
 	useEffect(() => {
 		++viewRevision.current;
@@ -101,48 +113,61 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 		setBusy(false);
 		if (paused) return;
 		let active = true;
-		const controller = new AbortController();
-		const refresh = async () => {
+		const polling = startPageRefresh(async (signal) => {
 			const revision = ++requestRevision.current;
+			setLoading(true);
 			try {
 				const body = await requestJson<{ tasks: BackgroundTask[] }>(apiUrl(apiOrigin, "/tasks"), {
-					signal: controller.signal,
+					signal,
 				});
 				if (active && revision > refreshRevision.current) {
 					refreshRevision.current = revision;
 					setTasks(body.tasks ?? []);
 					setError("");
 				}
+				return (body.tasks ?? []).some((item) => matchesTaskFilter(item, "active") || item.cleanupPending)
+					? 2000
+					: 15000;
 			} catch (cause) {
 				if (active && revision > refreshRevision.current) {
 					refreshRevision.current = revision;
 					setError(cause instanceof Error ? cause.message : "任务读取失败。");
 				}
+				throw cause;
+			} finally {
+				if (active) setLoading(false);
 			}
-		};
-		void refresh();
-		const timer = setInterval(() => void refresh(), 2000);
+		}, 2000);
+		pollingRef.current = polling;
 		return () => {
 			active = false;
 			++viewRevision.current;
-			controller.abort();
-			clearInterval(timer);
+			polling.stop();
+			pollingRef.current = undefined;
 		};
 	}, [apiOrigin, paused]);
 
 	useEffect(() => {
 		if (!selected || paused) return;
 		setEvents([]);
+		const seen = new Set<number>();
 		const source = new EventSource(apiUrl(apiOrigin, `/tasks/${selected}/events`));
 		source.onerror = () => {
 			void authClient.refresh();
 		};
 		const receive = (event: MessageEvent<string>) => {
-			const item = JSON.parse(event.data) as TaskEvent;
-			setEvents((current) =>
-				current.some((entry) => entry.sequence === item.sequence) ? current : [...current, item],
-			);
-			if (["succeeded", "failed", "cancelled", "stale", "interrupted"].includes(item.type)) source.close();
+			try {
+				const item = JSON.parse(event.data) as TaskEvent;
+				if (seen.has(item.sequence)) return;
+				seen.add(item.sequence);
+				setEvents((current) => [...current, item]);
+				if (["succeeded", "failed", "cancelled", "stale", "interrupted"].includes(item.type)) {
+					source.close();
+					pollingRef.current?.refresh();
+				}
+			} catch {
+				setError("任务日志读取失败，请重新打开任务。");
+			}
 		};
 		for (const type of [
 			"queued",
@@ -181,6 +206,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 			setTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
 			setSelected(updated.id);
 			setError("");
+			pollingRef.current?.refresh();
 		} catch (cause) {
 			if (view !== viewRevision.current) return;
 			refreshRevision.current = ++requestRevision.current;
@@ -194,8 +220,19 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	}
 
 	const task = tasks.find((item) => item.id === selected);
-	const groups = new Map<string, BackgroundTask[]>();
-	for (const item of tasks) groups.set(item.resource, [...(groups.get(item.resource) ?? []), item]);
+	const filters = [
+		{ value: "all", label: "全部任务" },
+		{ value: "active", label: "进行中" },
+		{ value: "issues", label: "需处理" },
+		{ value: "ended", label: "已结束" },
+	] as const;
+	const filtered = tasks.filter(
+		(item) =>
+			matchesTaskFilter(item, filter) &&
+			(kind === "all" || item.kind === kind) &&
+			matchesSearch(query, [item.resourceTitle ?? "", item.releaseName ?? "", item.id, t(taskNames[item.kind])]),
+	);
+	const groups = groupTasks(filtered);
 	return (
 		<main className="page tasks-page" id="tasks">
 			<section className="page-heading">
@@ -203,19 +240,91 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 					<h1>{t("任务状态")}</h1>
 					<p>{t("离开制题页面后，生成、验证和导出仍会继续。")}</p>
 				</div>
+				<button
+					className="button secondary"
+					type="button"
+					disabled={loading || paused}
+					onClick={() => pollingRef.current?.refresh()}
+				>
+					<Icon name={loading ? "loader" : "resume"} className={loading ? "loading-icon" : undefined} />
+					{t(loading ? "刷新中…" : "刷新")}
+				</button>
 			</section>
+			<div className="list-toolbar task-toolbar">
+				<fieldset className="list-filter-buttons" aria-label={t("筛选任务状态")}>
+					{filters.map((item) => (
+						<button
+							type="button"
+							key={item.value}
+							aria-pressed={filter === item.value}
+							onClick={() => setFilter(item.value)}
+						>
+							{t(item.label)} <span>{tasks.filter((entry) => matchesTaskFilter(entry, item.value)).length}</span>
+						</button>
+					))}
+				</fieldset>
+				<select
+					aria-label={t("筛选任务类型")}
+					value={kind}
+					onChange={(event) => setKind(event.target.value as BackgroundTask["kind"] | "all")}
+				>
+					<option value="all">{t("全部类型")}</option>
+					{Object.entries(taskNames).map(([value, label]) => (
+						<option key={value} value={value}>
+							{t(label)}
+						</option>
+					))}
+				</select>
+				<label className="problem-search">
+					<Icon name="search" />
+					<input
+						type="search"
+						value={query}
+						aria-label={t("搜索任务")}
+						placeholder={t("搜索题目、任务或标识")}
+						onChange={(event) => setQuery(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Escape") setQuery("");
+						}}
+					/>
+					{query && (
+						<button type="button" className="icon-button" aria-label={t("清空搜索")} onClick={() => setQuery("")}>
+							<Icon name="close" />
+						</button>
+					)}
+				</label>
+			</div>
 			{error && (
 				<output className="notice failed" role="alert">
 					{t(error)}
 				</output>
 			)}
-			<section className="task-groups" aria-label={t("任务列表")}>
-				{!tasks.length && (
-					<EmptyState
-						icon="activity"
-						title={t("任务状态")}
-						description={t("暂无任务。运行 Gen 或验证打包后会显示在这里。")}
-					/>
+			<section className="task-groups" aria-label={t("任务列表")} aria-busy={loading}>
+				{!tasks.length && loading ? (
+					<LoadingState label={t("正在读取任务…")} />
+				) : (
+					!filtered.length && (
+						<EmptyState
+							icon="activity"
+							title={t(tasks.length ? "没有匹配的任务" : "任务状态")}
+							description={t(
+								tasks.length ? "调整筛选条件或清空搜索。" : "暂无任务。运行 Gen 或验证打包后会显示在这里。",
+							)}
+						/>
+					)
+				)}
+				{!filtered.length && (query || filter !== "all" || kind !== "all") && (
+					<button
+						type="button"
+						className="button secondary list-reset"
+						onClick={() => {
+							setQuery("");
+							setFilter("all");
+							setKind("all");
+						}}
+					>
+						{t("重置筛选")}
+					</button>
 				)}
 				{[...groups].map(([resource, items]) => (
 					<section className="card task-group" key={resource}>

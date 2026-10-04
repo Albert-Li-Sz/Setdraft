@@ -8,6 +8,7 @@ import {
 	buildHydroProblemFiles,
 	type HydroProblemSpec,
 	parseHydroTimeLimitMs,
+	type ValidationIssue,
 	validateHydroDirectory,
 	validateHydroProblemSpec,
 	writeHydroDirectoryArchive,
@@ -70,6 +71,50 @@ export class ProjectPipeline {
 			throw new ManualProjectError("本地沙箱要求时间 50–10000 ms、内存 32–512 MiB。", 422);
 		}
 		return { timeLimitMs, memoryLimitMb };
+	}
+
+	/** Informational preflight uses the publisher's spec and limits; finalize remains authoritative. */
+	async publicationIssues(project: ManualProjectSnapshot): Promise<ValidationIssue[]> {
+		const empty = project.judgingMode === "interactive" && project.interactionInputMode === "empty";
+		const cases: ManualCaseSummary[] = empty
+			? [
+					{
+						id: "interactive-empty",
+						origin: "manual",
+						inputFile: "interactive-empty.in",
+						inputBytes: 0,
+						subtaskId: 1,
+					},
+				]
+			: project.cases;
+		const normalized = {
+			...project,
+			subtasks:
+				project.scoringMode === "acm" || empty ? [{ id: 1, type: "min" as const, score: 100 }] : project.subtasks,
+		};
+		const issues = validateHydroProblemSpec(this.spec(normalized, cases), this.projects.judgeLimits).issues;
+		try {
+			this.limits(project);
+		} catch (error) {
+			issues.push({
+				code: "SANDBOX_LIMIT",
+				severity: "error",
+				path: "timeLimit",
+				message: error instanceof Error ? error.message : String(error),
+			});
+		}
+		if (!project.reference.code.trim())
+			issues.push({ code: "MISSING_REFERENCE", severity: "error", path: "reference", message: "请填写主标程。" });
+		if (project.checkerMode === "custom" && !project.checkerSource.trim())
+			issues.push({ code: "MISSING_CHECKER", severity: "error", path: "checker", message: "请填写 Checker。" });
+		if (resolveProblemType(project) === "communication" && !project.communication?.judgeSource.trim())
+			issues.push({
+				code: "MISSING_COMMUNICATION_JUDGE",
+				severity: "error",
+				path: "interactor",
+				message: "请填写通信裁判。",
+			});
+		return issues;
 	}
 
 	async generate(

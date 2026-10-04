@@ -6,6 +6,7 @@ import { extname } from "node:path";
 import { promisify } from "node:util";
 import { isProblemType } from "@setdraft/contracts";
 import { AuthHttp } from "./auth-http.ts";
+import { inspectAuthoring } from "./authoring-insights.ts";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
 import { streamEvents } from "./event-stream.ts";
 import { QueueAdmissionError } from "./execution-scheduler.ts";
@@ -473,6 +474,42 @@ export async function createHydroServer(
 					const problemType = (value as Record<string, unknown>).problemType ?? "standard";
 					if (!isProblemType(problemType)) throw new ManualProjectError("题型无效。", 422);
 					sendJson(response, 201, await projects.create(scoringMode, problemType));
+				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const insightRoute = /^\/api\/projects\/([^/]+)\/authoring-insights$/u.exec(url.pathname);
+			if (insightRoute) {
+				if (request.method === "GET") sendJson(response, 200, await inspectAuthoring(projects, insightRoute[1]));
+				else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
+				return;
+			}
+			const draftRoute = /^\/api\/projects\/([^/]+)\/drafts(?:\/(\d+)(?:\/(restore))?)?$/u.exec(url.pathname);
+			if (draftRoute) {
+				const [, id, revision, action] = draftRoute;
+				if (request.method === "GET" && !action)
+					sendJson(
+						response,
+						200,
+						revision
+							? await projects.history.get(id, Number(revision))
+							: { drafts: await projects.history.list(id) },
+					);
+				else if (request.method === "POST" && revision && action === "restore") {
+					const input = await readJson(request, 4096);
+					if (!input || typeof input !== "object" || Array.isArray(input))
+						throw new ManualProjectError("请求格式无效。", 422);
+					sendJson(
+						response,
+						200,
+						await projects.history.restore(
+							id,
+							Number(revision),
+							(input as Record<string, unknown>).expectedRevision,
+							async () => {
+								await auth.require(request);
+							},
+						),
+					);
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}

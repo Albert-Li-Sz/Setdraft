@@ -1,11 +1,11 @@
 import type { Solution } from "@setdraft/contracts";
 import { useLocale } from "./i18n.tsx";
+import { solutionPurposeChange } from "./solution-library.ts";
 
 export function SolutionSettings({
 	solution,
 	primary,
 	canCopy,
-	wrongOnly = false,
 	onChange,
 	onPrimary,
 	onCopy,
@@ -14,18 +14,18 @@ export function SolutionSettings({
 	solution: Solution;
 	primary: boolean;
 	canCopy: boolean;
-	wrongOnly?: boolean;
 	onChange(change: Partial<Solution>): void;
 	onPrimary(): void;
 	onCopy(): void;
 	onRemove(): void;
 }) {
 	const { t } = useLocale();
+	const incorrect = solution.expectation.kind !== "AC";
 	return (
 		<div className="solution-settings">
 			<div className="verification-fields">
 				<label className="field">
-					<span>{t(wrongOnly ? "错误解名称" : "标程名称")}</span>
+					<span>{t(incorrect ? "错误解名称" : "标程名称")}</span>
 					<input
 						value={solution.name}
 						maxLength={100}
@@ -37,7 +37,9 @@ export function SolutionSettings({
 					<select
 						aria-label={t("用途")}
 						value={solution.purpose}
-						onChange={(event) => onChange({ purpose: event.target.value as Solution["purpose"] })}
+						onChange={(event) =>
+							onChange(solutionPurposeChange(solution, event.target.value as Solution["purpose"], primary))
+						}
 					>
 						{Object.entries({
 							accepted: "正确解法",
@@ -67,13 +69,11 @@ export function SolutionSettings({
 							})
 						}
 					>
-						{(wrongOnly ? ["WA", "TLE", "MLE", "RE", "score"] : ["AC", "WA", "TLE", "MLE", "RE", "score"]).map(
-							(value) => (
-								<option key={value} value={value}>
-									{value === "score" ? t("总分区间") : value}
-								</option>
-							),
-						)}
+						{["AC", "WA", "TLE", "MLE", "RE", "score"].map((value) => (
+							<option key={value} value={value}>
+								{value === "score" ? t("总分区间") : value}
+							</option>
+						))}
 					</select>
 				</label>
 				<label className="field">
@@ -109,16 +109,14 @@ export function SolutionSettings({
 					))}
 			</div>
 			<div className="heading-actions">
-				{!wrongOnly && (
-					<button className="button secondary" type="button" disabled={primary} onClick={onPrimary}>
-						{t(primary ? "主标程" : "设为主标程")}
-					</button>
-				)}
+				<button className="button secondary" type="button" disabled={primary} onClick={onPrimary}>
+					{t(primary ? "主标程" : "设为主标程")}
+				</button>
 				<button className="button secondary" type="button" disabled={!canCopy} onClick={onCopy}>
-					{t(wrongOnly ? "复制错误解" : "复制标程")}
+					{t(incorrect ? "复制错误解" : "复制标程")}
 				</button>
 				<button className="button secondary" type="button" disabled={primary} onClick={onRemove}>
-					{t(wrongOnly ? "删除错误解" : "删除标程")}
+					{t(incorrect ? "删除错误解" : "删除标程")}
 				</button>
 			</div>
 			<p className="manual-muted">

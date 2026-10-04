@@ -1,8 +1,10 @@
 import { problemTypeNames, resolveProblemType } from "@setdraft/contracts";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { EmptyState } from "./EmptyState.tsx";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
+import { LoadingState } from "./LoadingState.tsx";
+import { matchesSearch } from "./list-search.ts";
 import type { ProjectSnapshot, SandboxStatus } from "./platform.ts";
 
 export function WorkspaceHome({
@@ -11,6 +13,8 @@ export function WorkspaceHome({
 	sandbox,
 	message,
 	messageTone,
+	loading = false,
+	busy = false,
 	onNew,
 	onOpen,
 }: {
@@ -19,18 +23,31 @@ export function WorkspaceHome({
 	sandbox?: SandboxStatus;
 	message?: UiMessage;
 	messageTone: "passed" | "failed";
+	loading?: boolean;
+	busy?: boolean;
 	onNew(): void;
 	onOpen(id: string): Promise<void>;
 }) {
 	const { t, locale } = useLocale();
 	const [opening, setOpening] = useState<string>();
 	const [query, setQuery] = useState("");
-	const recent = [...projects]
-		.filter((project) =>
-			(project.title || t("未命名题目")).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
-		)
-		.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-		.slice(0, 8);
+	const matches = useMemo(
+		() =>
+			projects
+				.filter((project) =>
+					matchesSearch(query, [
+						project.title || t("未命名题目"),
+						project.slug,
+						project.scoringMode,
+						resolveProblemType(project),
+						t(problemTypeNames[resolveProblemType(project)]),
+						...project.tags,
+					]),
+				)
+				.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+		[projects, query, t],
+	);
+	const recent = matches.slice(0, 8);
 	async function open(id: string) {
 		setOpening(id);
 		try {
@@ -45,7 +62,7 @@ export function WorkspaceHome({
 				<h1>{t("工作台")}</h1>
 				<span>{t("个人工作区")}</span>
 			</div>
-			<button className="home-create" type="button" onClick={onNew}>
+			<button className="home-create" type="button" onClick={onNew} disabled={busy || !!opening}>
 				<Icon name="compose" />
 				<span>
 					<strong>{t("新建题目")}</strong>
@@ -67,20 +84,34 @@ export function WorkspaceHome({
 					{t("竞赛")}
 				</a>
 			</div>
-			<section className="home-projects">
+			<section className="home-projects" aria-busy={loading}>
 				<div className="home-section-heading">
 					<h2>
-						{t("最近题目")}
-						<span>{projects.length}</span>
+						{t(query.trim() ? "搜索结果" : "最近题目")}
+						<span>{matches.length}</span>
 					</h2>
 					<label className="home-search">
 						<Icon name="search" />
 						<input
+							type="search"
 							value={query}
 							onChange={(event) => setQuery(event.target.value)}
 							aria-label={t("搜索题目")}
-							placeholder={t("搜索题目")}
+							placeholder={t("搜索标题、标识或标签")}
+							onKeyDown={(event) => {
+								if (event.key === "Escape") setQuery("");
+							}}
 						/>
+						{query && (
+							<button
+								type="button"
+								className="icon-button"
+								aria-label={t("清空搜索")}
+								onClick={() => setQuery("")}
+							>
+								<Icon name="close" />
+							</button>
+						)}
 					</label>
 				</div>
 				{message && (
@@ -94,8 +125,9 @@ export function WorkspaceHome({
 							<button
 								type="button"
 								className="home-project-row"
+								title={project.title || t("未命名题目")}
 								key={project.id}
-								disabled={!!opening}
+								disabled={busy || !!opening}
 								aria-busy={opening === project.id}
 								onClick={() => void open(project.id)}
 							>
@@ -120,6 +152,8 @@ export function WorkspaceHome({
 							</button>
 						))}
 					</div>
+				) : loading ? (
+					<LoadingState label={t("正在读取题目…")} />
 				) : (
 					<EmptyState
 						icon={query.trim() ? "search" : "files"}
@@ -127,8 +161,16 @@ export function WorkspaceHome({
 						description={query.trim() ? t("试试其他关键词。") : t("新建题目后，题目将显示在这里。")}
 					/>
 				)}
-				{projects.length > 8 && (
-					<a className="home-all" href="#records">
+				{query && !recent.length && !loading && (
+					<button type="button" className="button secondary list-reset" onClick={() => setQuery("")}>
+						{t("清空搜索")}
+					</button>
+				)}
+				{matches.length > 8 && (
+					<a
+						className="home-all"
+						href={query.trim() ? `#records?${new URLSearchParams({ q: query.trim() })}` : "#records"}
+					>
 						{t("查看全部")}
 						<Icon name="arrow" />
 					</a>

@@ -1,10 +1,12 @@
-import { type ReactNode, useContext, useEffect, useRef } from "react";
+import { type ReactNode, useContext, useEffect, useEffectEvent, useRef } from "react";
+import { containDialogTab } from "./dialog-focus.ts";
 
 import { WorkspacePausedContext } from "./workspace-paused.ts";
 
 export function Dialog({
 	open: requestedOpen,
 	onClose,
+	onClosed,
 	labelledBy,
 	children,
 	className = "",
@@ -12,6 +14,7 @@ export function Dialog({
 }: {
 	open: boolean;
 	onClose(): void;
+	onClosed?(): void;
 	labelledBy: string;
 	children: ReactNode;
 	className?: string;
@@ -20,6 +23,7 @@ export function Dialog({
 	const paused = useContext(WorkspacePausedContext);
 	const open = requestedOpen && !paused;
 	const ref = useRef<HTMLDialogElement>(null);
+	const notifyClosed = useEffectEvent(() => onClosed?.());
 	useEffect(() => {
 		const dialog = ref.current;
 		if (!dialog) return;
@@ -30,7 +34,10 @@ export function Dialog({
 		if (open && !dialog.open) dialog.showModal();
 		if (!dialog.open) return;
 		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-			if (!open) dialog.close();
+			if (!open) {
+				dialog.close();
+				notifyClosed();
+			}
 			return;
 		}
 		const animation = dialog.animate(
@@ -47,7 +54,10 @@ export function Dialog({
 		);
 		void animation.finished
 			.then(() => {
-				if (!open) dialog.close();
+				if (!open) {
+					dialog.close();
+					notifyClosed();
+				}
 			})
 			.catch(() => {
 				/* A rapid reopen cancels the previous transition. */
@@ -67,22 +77,7 @@ export function Dialog({
 				onClose();
 			}}
 			onKeyDown={(event) => {
-				if (event.key === "Tab") {
-					const focusable = [
-						...event.currentTarget.querySelectorAll<HTMLElement>(
-							"button, a[href], input, select, textarea, summary, [tabindex], [contenteditable=true]",
-						),
-					].filter(
-						(element) =>
-							element.tabIndex >= 0 && !element.matches(":disabled") && element.getClientRects().length > 0,
-					);
-					const first = focusable[0],
-						last = focusable.at(-1);
-					if (!first || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
-						event.preventDefault();
-						(event.shiftKey ? last : first)?.focus();
-					}
-				}
+				containDialogTab(event);
 				if (event.key === "Escape") {
 					event.preventDefault();
 					onClose();

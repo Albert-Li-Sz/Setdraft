@@ -1,0 +1,331 @@
+.authoring-insight,
+.authoring-report-entry {
+	min-width: 0;
+	margin-block-end: 24px;
+}
+.authoring-insight {
+	--report-problem: #b42318;
+	font-size: 13px;
+	line-height: 1.7;
+}
+:root[data-theme="dark"] .authoring-insight {
+	--report-problem: #ffb4af;
+}
+.authoring-report-entry {
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	padding: 16px 20px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+}
+.authoring-report-entry p {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+}
+.authoring-report-entry button {
+	flex-shrink: 0;
+}
+.authoring-report-entry .tag {
+	margin-top: 8px;
+}
+dialog.authoring-report-dialog {
+	width: min(760px, calc(100vw - 32px));
+	max-height: calc(100dvh - 32px);
+	overflow-y: auto;
+}
+.authoring-report-dialog .authoring-insight {
+	border: 0;
+	padding: 0;
+	margin-bottom: 16px;
+}
+.authoring-insight .manual-section-heading h2 {
+	font-size: 17px;
+}
+.authoring-insight h3 {
+	font-size: 14px;
+	margin-block: 18px 6px;
+}
+.confirmation-dialog .authoring-insight p {
+	margin-block: 6px;
+}
+.authoring-insight .manual-section-heading p {
+	margin-block: 5px 0;
+}
+.authoring-insight .text-button {
+	min-height: 24px;
+	padding: 0;
+	border-radius: 0;
+	font-size: inherit;
+}
+.authoring-insight .text-button:hover:not(:disabled) {
+	background: transparent;
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.insight-version {
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+}
+.insight-status {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	color: var(--muted);
+	font-size: 12px;
+	margin-block: 8px 12px;
+}
+.authoring-insight .insight-status p {
+	margin: 0;
+}
+.insight-status button {
+	flex-shrink: 0;
+}
+.insight-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 0;
+	margin-block: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.insight-summary > span + span::before {
+	content: "·";
+	margin-inline: 10px;
+	color: var(--muted);
+}
+.insight-issues {
+	list-style: none;
+	padding: 0;
+	margin: 8px 0;
+}
+.insight-issues li {
+	padding: 4px 0;
+	overflow-wrap: anywhere;
+}
+.insight-issues .text-button {
+	margin-inline-start: 10px;
+}
+.insight-state {
+	display: inline-block;
+	white-space: nowrap;
+	color: var(--muted);
+}
+.fault-detection-list {
+	display: grid;
+	gap: 12px;
+}
+.fault-detection {
+	min-width: 0;
+}
+.fault-detection > div:first-child {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 8px;
+}
+.fault-detection strong {
+	overflow-wrap: anywhere;
+}
+.authoring-insight .fault-detection p {
+	margin-block: 2px;
+	color: var(--muted);
+}
+.insight-case-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 14px;
+}
+.insight-case-links button {
+	overflow-wrap: anywhere;
+	max-width: 100%;
+	text-align: start;
+}
+.authoring-insight details > summary,
+.draft-dialog details > summary {
+	cursor: pointer;
+	padding-block: 10px;
+	overflow-wrap: anywhere;
+}
+.insight-boundaries {
+	margin-top: 16px;
+}
+.boundary-list {
+	display: grid;
+	gap: 8px;
+}
+.boundary-item {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: baseline;
+	padding: 8px 0;
+}
+.boundary-item strong {
+	overflow-wrap: anywhere;
+}
+.boundary-item > span {
+	color: var(--muted);
+	font-size: 12px;
+	flex: 1;
+}
+.boundary-form {
+	border: 0;
+	padding: 0;
+	margin-top: 14px;
+	display: grid;
+	gap: 12px;
+}
+.boundary-form label {
+	display: grid;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.boundary-form input,
+.boundary-form select {
+	width: 100%;
+	min-width: 0;
+}
+.boundary-range {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 12px;
+}
+.boundary-cases {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+	max-height: 160px;
+	overflow-y: auto;
+}
+.boundary-cases label {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	overflow-wrap: anywhere;
+}
+.boundary-cases input {
+	width: auto;
+}
+.readiness-list {
+	display: grid;
+	gap: 8px;
+	margin-block: 12px;
+}
+.readiness-item {
+	display: flex;
+	text-align: start;
+	align-items: baseline;
+	gap: 12px;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
+	color: var(--ink);
+	background: transparent;
+}
+.readiness-item > .insight-state {
+	flex-shrink: 0;
+}
+.readiness-item > span:nth-child(2) {
+	min-width: 0;
+	flex: 1;
+	overflow-wrap: anywhere;
+}
+.readiness-item:hover {
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.authoring-insight .insight-problem,
+.authoring-insight .insight-problem :is(.insight-state, .text-button, p) {
+	color: var(--report-problem);
+}
+dialog.draft-dialog {
+	width: min(940px, calc(100vw - 32px));
+	max-height: calc(100dvh - 32px);
+	overflow-y: auto;
+}
+dialog.publication-dialog {
+	width: min(720px, calc(100vw - 32px));
+}
+.draft-dialog .confirmation-actions {
+	flex-wrap: wrap;
+}
+.draft-diff details {
+	border-top: 1px solid var(--line);
+}
+.draft-diff summary small {
+	margin-left: 8px;
+	color: var(--muted);
+}
+.draft-diff-columns {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+}
+.draft-diff-columns > div,
+.draft-diff-columns > label {
+	min-width: 0;
+}
+.draft-dialog pre {
+	margin-block: 10px;
+	padding: 12px;
+	background: var(--surface-subtle);
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	overflow: auto;
+	max-height: 300px;
+	font-size: 12px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	text-align: start;
+}
+.draft-choice-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-block: 16px;
+}
+.draft-conflicts fieldset {
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	margin-bottom: 16px;
+	min-width: 0;
+}
+.draft-conflicts legend {
+	overflow-wrap: anywhere;
+	max-width: 100%;
+}
+.draft-conflicts input {
+	margin-right: 8px;
+}
+.draft-recovery-banner {
+	align-self: flex-start;
+	margin: 12px var(--content-gutter);
+}
+@media (max-width: 620px) {
+	.authoring-report-entry {
+		align-items: flex-start;
+		flex-direction: column;
+		padding: 14px;
+	}
+	.insight-status {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.boundary-range,
+	.draft-diff-columns {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.readiness-item {
+		gap: 8px;
+	}
+	dialog.draft-dialog,
+	dialog.authoring-report-dialog {
+		padding: 20px 16px;
+	}
+}

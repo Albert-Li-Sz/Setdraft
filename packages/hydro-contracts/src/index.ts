@@ -1,5 +1,6 @@
 export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-templates.ts";
 
+import { type BoundaryCondition, isBoundaryConditions } from "./authoring-insights.ts";
 import { type Generator, type GeneratorLanguage, isGenerator } from "./generators.ts";
 import {
 	type CommunicationConfig,
@@ -16,6 +17,7 @@ import {
 import type { Solution, VerificationOptions } from "./verification.ts";
 import { isSolution } from "./verification.ts";
 
+export * from "./authoring-insights.ts";
 export * from "./communication-templates.ts";
 export * from "./generators.ts";
 export * from "./problem-types.ts";
@@ -121,6 +123,7 @@ export interface ManualProject {
 	validatorStandard: CppLanguage;
 	subtasks: ManualSubtask[];
 	caseSubtasks: Record<string, number>;
+	boundaryConditions?: BoundaryCondition[];
 	attachments: Array<{ name: string; contentBase64: string }>;
 	domjudgePdf?: { size: number; sha256: string };
 	generatedFromHash?: string;
@@ -134,7 +137,9 @@ export interface ManualCaseSummary {
 	inputFile: string;
 	outputFile?: string;
 	inputBytes: number;
+	inputHash?: string;
 	outputBytes?: number;
+	outputHash?: string;
 	subtaskId: number;
 }
 
@@ -562,6 +567,7 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 		Number(value.revision) < 0
 	)
 		return false;
+	if (value.boundaryConditions !== undefined && !isBoundaryConditions(value.boundaryConditions)) return false;
 	if (
 		value.solutions !== undefined &&
 		(!Array.isArray(value.solutions) ||

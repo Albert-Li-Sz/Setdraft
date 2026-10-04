@@ -42,6 +42,7 @@ export function editableProject(project: ProjectSnapshot) {
 		validatorStandard: project.validatorStandard,
 		subtasks: project.subtasks,
 		caseSubtasks: project.caseSubtasks,
+		boundaryConditions: project.boundaryConditions ?? [],
 		attachments: project.attachments,
 	};
 }

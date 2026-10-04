@@ -6,10 +6,11 @@ import {
 	synchronizeSolutions,
 } from "@setdraft/contracts";
 import { RevisionConflict } from "./api-client.ts";
+import { type DraftChoices, draftValueEqual, mergeDraft } from "./draft-merge.ts";
 import { editableProject } from "./problem.ts";
 
 function rebaseValue(base: unknown, local: unknown, remote: unknown): unknown {
-	if (JSON.stringify(base) === JSON.stringify(local)) return remote;
+	if (draftValueEqual(base, local)) return remote;
 	if (
 		base &&
 		local &&
@@ -25,7 +26,7 @@ function rebaseValue(base: unknown, local: unknown, remote: unknown): unknown {
 		const draft = local as Record<string, unknown>;
 		const result = { ...(remote as Record<string, unknown>) };
 		for (const key of new Set([...Object.keys(before), ...Object.keys(draft)])) {
-			if (JSON.stringify(before[key]) === JSON.stringify(draft[key])) continue;
+			if (draftValueEqual(before[key], draft[key])) continue;
 			if (!(key in draft)) delete result[key];
 			else result[key] = rebaseValue(before[key], draft[key], result[key]);
 		}
@@ -74,6 +75,27 @@ export class ProjectSession {
 	get signal(): AbortSignal {
 		return this.controller.signal;
 	}
+	getBaseline(): ProjectSnapshot | undefined {
+		return this.baseline;
+	}
+	getConflict(): ProjectSnapshot | undefined {
+		return this.remote;
+	}
+	resolveConflict(choices: DraftChoices): void {
+		if (!this.remote || !this.baseline || !this.state.project) throw new Error("请刷新最新版本后比较。");
+		this.recover(this.baseline, this.state.project, this.remote, choices);
+	}
+	recover(base: ProjectSnapshot, local: ProjectSnapshot, server: ProjectSnapshot, choices: DraftChoices): void {
+		if (base.id !== local.id || local.id !== server.id) throw new Error("草稿不属于当前题目。");
+		const merged = mergeDraft(base, local, server, choices);
+		if (merged.conflicts.some((conflict) => !choices[conflict.path])) throw new Error("请选择每处冲突要保留的内容。");
+		synchronizeProblemType(merged.project);
+		if (merged.project.solutions) synchronizeSolutions(merged.project);
+		if (merged.project.generators) synchronizeGenerators(merged.project);
+		readProjectSnapshot(merged.project);
+		this.open(server);
+		this.edit(() => merged.project);
+	}
 
 	private publish(state: ProjectSessionState): void {
 		this.state = state;
@@ -117,6 +139,27 @@ export class ProjectSession {
 			project: next,
 			status: dirty ? "dirty" : "saved",
 		});
+	}
+	/** An external refresh must expose competing edits instead of silently preferring local source. */
+	receive(project: ProjectSnapshot): void {
+		if (this.state.project?.id !== project.id || this.blocked) return;
+		readProjectSnapshot(project);
+		if (project.revision < this.state.project.revision) return;
+		if (this.baseline && this.version > this.savedVersion) {
+			const merged = mergeDraft(this.baseline, this.state.project, project);
+			if (merged.conflicts.length) {
+				this.conflict(project);
+				return;
+			}
+			synchronizeProblemType(merged.project);
+			if (merged.project.solutions) synchronizeSolutions(merged.project);
+			if (merged.project.generators) synchronizeGenerators(merged.project);
+			readProjectSnapshot(merged.project);
+			this.baseline = project;
+			this.publish({ project: merged.project, status: "dirty" });
+			return;
+		}
+		this.accept(project);
 	}
 
 	conflict(project: ProjectSnapshot): void {

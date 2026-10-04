@@ -1,6 +1,7 @@
 import type { AuthUser } from "@setdraft/contracts";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AccountControls } from "./AccountControls.tsx";
+import { containDialogTab } from "./dialog-focus.ts";
 import { Icon } from "./Icon.tsx";
 import { LocaleSwitcher, useLocale } from "./i18n.tsx";
 import { Navigation, pageLabels } from "./Navigation.tsx";
@@ -48,6 +49,7 @@ export function AppShell({
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const [target, setTarget] = useState<HTMLDivElement | null>(null);
 	const drawer = useRef<HTMLDialogElement>(null);
+	const main = useRef<HTMLDivElement>(null);
 	const close = useCallback(() => setMobileOpen(false), []);
 	const recent = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8);
 	useEffect(() => {
@@ -160,6 +162,21 @@ export function AppShell({
 	return (
 		<SidebarContext.Provider value={{ target, close }}>
 			<div className="app-shell" data-collapsed={collapsed && !compact}>
+				<button
+					className="skip-link"
+					type="button"
+					onClick={() => {
+						const content = [...(main.current?.querySelectorAll<HTMLElement>("main.page") ?? [])].find(
+							(element) => element.getClientRects().length > 0,
+						);
+						if (content) {
+							content.tabIndex = -1;
+							content.focus();
+						}
+					}}
+				>
+					{t("跳到主要内容")}
+				</button>
 				{compact ? (
 					<dialog
 						ref={drawer}
@@ -171,6 +188,7 @@ export function AppShell({
 							close();
 						}}
 						onKeyDown={(event) => {
+							containDialogTab(event);
 							if (event.key === "Escape") {
 								event.preventDefault();
 								close();
@@ -199,7 +217,7 @@ export function AppShell({
 						{sidebar}
 					</aside>
 				)}
-				<div className="shell-main">
+				<div className="shell-main" id="main-content" ref={main}>
 					<header className="shell-toolbar">
 						<button
 							className="icon-button sidebar-toggle"

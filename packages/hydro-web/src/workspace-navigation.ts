@@ -9,6 +9,10 @@ export interface WorkspaceLocation {
 	solution?: string;
 	subtask?: string;
 	abnormal?: boolean;
+	program?: string;
+	section?: string;
+	case?: string;
+	field?: string;
 }
 export function readWorkspaceLocation(hash: string): WorkspaceLocation {
 	if (hash.split("?")[0] !== "#workspace") return {};
@@ -16,6 +20,10 @@ export function readWorkspaceLocation(hash: string): WorkspaceLocation {
 	const id = (key: string) => {
 		const value = params.get(key) ?? "";
 		return /^[A-Za-z0-9-]{1,64}$/u.test(value) ? value : undefined;
+	};
+	const target = (key: string) => {
+		const value = params.get(key) ?? "";
+		return /^[A-Za-z0-9_.:-]{1,200}$/u.test(value) ? value : undefined;
 	};
 	return {
 		project: id("project"),
@@ -26,6 +34,10 @@ export function readWorkspaceLocation(hash: string): WorkspaceLocation {
 		solution: id("solution"),
 		subtask: id("subtask"),
 		abnormal: params.get("abnormal") === "1",
+		program: target("program"),
+		section: target("section"),
+		case: target("case"),
+		field: id("field"),
 	};
 }
 export function workspaceHash(value: WorkspaceLocation): string {

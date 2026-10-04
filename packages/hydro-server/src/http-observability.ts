@@ -8,6 +8,7 @@ const paths = [
 	/^\/api\/(system\/status|sandbox\/build|ai\/search|ai\/config(?:\/default|\/[^/]+(?:\/test)?)?|people)$/u,
 	/^\/api\/tasks(?:\/[^/]+(?:\/(events|cancel|retry))?)?$/u,
 	/^\/api\/projects(?:\/[^/]+(?:\/(generate|finalize|generated|domjudge-pdf|copy|files\/[^/]+|cases(?:\/(batch-delete|renumber|(manual|generated)\/[^/]+\/preview))?|releases(?:\/[^/]+\/restore)?))?)?$/u,
+	/^\/api\/projects\/[^/]+\/(authoring-insights|drafts(?:\/\d+(?:\/restore)?)?)$/u,
 	/^\/api\/releases(?:\/[^/]+(?:\/(hydro|source|domjudge|fps|qduoj|report|exports\/(domjudge|fps|qduoj)))?)?$/u,
 	/^\/api\/contests(?:\/[^/]+(?:\/(export|pdf-preview))?)?$/u,
 	/^\/api\/contest-releases(?:\/[^/]+\/(download|pdf))?$/u,
@@ -17,7 +18,7 @@ const paths = [
 export function httpRoute(path: string): string {
 	if (!paths.some((pattern) => pattern.test(path))) return "/api/{unknown}";
 	return path.replace(
-		/(\/(?:users|tasks|projects|releases|contests|contest-releases|chats|requests|images|files|config|manual|generated))\/([^/]+)/gu,
+		/(\/(?:users|tasks|projects|releases|contests|contest-releases|chats|requests|images|files|config|manual|generated|drafts))\/([^/]+)/gu,
 		(match, prefix: string, value: string) => {
 			if (prefix === "/config" && value === "default") return match;
 			return `${prefix}/:id`;

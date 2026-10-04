@@ -12,9 +12,9 @@ import { apiUrl, requestJson, waitForTask } from "./api-client.ts";
 import { copyText } from "./browser-capabilities.ts";
 import { useLocale } from "./i18n.tsx";
 import type { ProjectSession } from "./project-session.ts";
+import { incorrectSolutions } from "./solution-library.ts";
 import { useVerificationHistory } from "./use-verification-history.ts";
 import { VerificationDetail } from "./VerificationDetail.tsx";
-import { WrongSolutionLibrary } from "./WrongSolutionLibrary.tsx";
 import { replaceWorkspaceLocation } from "./workspace-navigation.ts";
 
 export function VerificationPanel({
@@ -22,11 +22,13 @@ export function VerificationPanel({
 	project,
 	session,
 	disabled,
+	onRunCompleted,
 }: {
 	apiOrigin: string;
 	project: ProjectSnapshot;
 	session: ProjectSession;
 	disabled: boolean;
+	onRunCompleted?(): void;
 }) {
 	const { t, locale } = useLocale();
 	const history = useVerificationHistory(apiOrigin, project.id);
@@ -46,7 +48,8 @@ export function VerificationPanel({
 	const [limit, setLimit] = useState(100);
 	const solutions = projectSolutions(project);
 	const [excluded, setExcluded] = useState<string[]>([]);
-	const wrong = solutions.filter((item) => item.expectation.kind !== "AC");
+	const wrong = incorrectSolutions(project);
+	const runnableSolutions = mode === "pressure" ? wrong : solutions;
 	const lifecycle = useRef<AbortController | undefined>(undefined);
 	const pending = useRef(false);
 	useEffect(() => {
@@ -76,11 +79,17 @@ export function VerificationPanel({
 				(mode === "pressure"
 					? {
 							kind: "pressure",
-							solutionIds: projectSolutions(current)
-								.filter((item) => item.expectation.kind !== "AC" && !excluded.includes(item.id))
+							solutionIds: incorrectSolutions(current)
+								.filter((item) => !excluded.includes(item.id))
 								.map((item) => item.id),
 						}
 					: { kind: "matrix" });
+			if (
+				options.kind === "pressure" &&
+				(!options.solutionIds?.length ||
+					options.solutionIds.some((id) => !incorrectSolutions(current).some((item) => item.id === id)))
+			)
+				throw new Error("请选择设置了 WA、TLE、MLE、RE 或分数区间预期的错误解。");
 			const accepted = await requestJson<{ task: BackgroundTask }>(apiUrl(apiOrigin, route), {
 				method: "POST",
 				signal,
@@ -92,6 +101,7 @@ export function VerificationPanel({
 			const result = await waitForTask<{ runId: string }>(apiOrigin, accepted.task.id, setTask, signal);
 			signal.throwIfAborted();
 			await select(result.runId);
+			onRunCompleted?.();
 		} catch (cause) {
 			if (!signal.aborted) setError(cause instanceof Error ? cause.message : "运行失败。");
 		} finally {
@@ -218,7 +228,28 @@ export function VerificationPanel({
 			)}
 			{mode === "pressure" && (
 				<>
-					<WrongSolutionLibrary project={project} session={session} disabled={busy || disabled} />
+					<div className="verification-heading">
+						<p className="manual-muted">{t("错误解统一在“程序与判题”中管理，此处仅选择并运行。")}</p>
+						<button
+							className="button secondary"
+							type="button"
+							onClick={() =>
+								replaceWorkspaceLocation(project.id, {
+									tab: "programs",
+									program: `solution:${
+										wrong.find((item) => `solution:${item.id}` === history.location.program)?.id ??
+										wrong[0]?.id ??
+										project.referenceSolutionId ??
+										"reference"
+									}`,
+									section: undefined,
+									field: undefined,
+								})
+							}
+						>
+							{t("管理错误解")}
+						</button>
+					</div>
 					{wrong.length > 0 && (
 						<fieldset className="verification-targets" disabled={busy || disabled}>
 							<legend>{t("选择待测错误解")}</legend>
@@ -236,12 +267,16 @@ export function VerificationPanel({
 										}
 									/>
 									<span>
-										{item.name} · {item.expectation.kind}
+										{item.name} ·{" "}
+										{item.expectation.kind === "score"
+											? `${t("总分区间")} ${item.expectation.min}–${item.expectation.max}`
+											: item.expectation.kind}
 									</span>
 								</label>
 							))}
 						</fieldset>
 					)}
+					{!wrong.length && <p className="manual-muted">{t("尚无错误解，请在“程序与判题”中添加。")}</p>}
 				</>
 			)}
 			{mode === "stress" && <p className="info-strip">{t("随机对拍已停用；历史记录只读，可下载原复现包。")}</p>}
@@ -431,7 +466,7 @@ export function VerificationPanel({
 										busy ||
 										disabled ||
 										!solutionFilter ||
-										!solutions.some((item) => item.id === solutionFilter)
+										!runnableSolutions.some((item) => item.id === solutionFilter)
 									}
 									onClick={() =>
 										void start(
@@ -449,7 +484,12 @@ export function VerificationPanel({
 									disabled={
 										busy ||
 										disabled ||
-										!matrix.cells.some((item) => item.verdict !== "AC" || item.score !== 100)
+										!matrix.cells.some(
+											(item) =>
+												(item.verdict !== "AC" || item.score !== 100) &&
+												(!solutionFilter || item.solutionId === solutionFilter) &&
+												runnableSolutions.some((solution) => solution.id === item.solutionId),
+										)
 									}
 									onClick={() => {
 										const failed = matrix.cells.filter(
@@ -458,7 +498,7 @@ export function VerificationPanel({
 												(!solutionFilter || item.solutionId === solutionFilter),
 										);
 										const solutionIds = [...new Set(failed.map((item) => item.solutionId))].filter((id) =>
-											solutions.some((item) => item.id === id),
+											runnableSolutions.some((item) => item.id === id),
 										);
 										const caseIds = [...new Set(failed.map((item) => item.caseId))].filter(
 											(id) =>

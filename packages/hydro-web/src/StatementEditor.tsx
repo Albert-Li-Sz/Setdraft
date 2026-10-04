@@ -1,6 +1,6 @@
 import { editableStatementSections, formatHydroStatement, statementSectionList } from "@setdraft/authoring/statement";
 import { type ProjectSnapshot, resolveProblemType, type StatementSections, usesProtocol } from "@setdraft/contracts";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createClientId } from "./browser-capabilities.ts";
 import { EditorSplit } from "./EditorSplit.tsx";
 import { useLocale } from "./i18n.tsx";
@@ -13,10 +13,12 @@ export function StatementEditor({
 	project,
 	disabled,
 	onEdit,
+	section,
 }: {
 	project: ProjectSnapshot;
 	disabled: boolean;
 	onEdit(change: (current: ProjectSnapshot) => ProjectSnapshot): void;
+	section?: string;
 }) {
 	const { t } = useLocale();
 	const prefix = useId();
@@ -27,6 +29,13 @@ export function StatementEditor({
 		{ id: "samples", label: "样例" },
 	];
 	const active = tabs.find((item) => item.id === selected) ?? tabs[0];
+	useEffect(() => {
+		if (section === "samples") {
+			setSelected("samples");
+			const frame = requestAnimationFrame(() => document.getElementById(`${prefix}-tab-samples`)?.focus());
+			return () => cancelAnimationFrame(frame);
+		}
+	}, [section, prefix]);
 	const sections = editableStatementSections(project);
 	const keys = useRef<string[]>([]);
 	while (keys.current.length < project.samples.length) keys.current.push(createClientId());

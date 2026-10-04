@@ -207,6 +207,45 @@ describe("authenticated personal workspaces", () => {
 		expect(await (await b.request(`/projects/${project.id}/files/secret.in`)).text()).toBe("private test");
 		expect((await b.request(`/projects/${project.id}`)).status).toBe(200);
 	});
+	it("isolates draft history, insight reports, and revision-checked restores", async () => {
+		const admin = new BrowserClient();
+		await admin.authenticate("setup");
+		const { client: owner } = await admin.createMember("author");
+		const { client: other } = await admin.createMember("other");
+		const project = (await (await owner.request("/projects", "POST", { scoringMode: "acm" })).json()) as {
+			id: string;
+		};
+		expect(
+			(await owner.request(`/projects/${project.id}`, "PUT", { title: "Saved title", expectedRevision: 0 })).status,
+		).toBe(200);
+		for (const client of [admin, other]) {
+			for (const path of ["authoring-insights", "drafts", "drafts/0"])
+				expect((await client.request(`/projects/${project.id}/${path}`)).status).toBe(404);
+			expect(
+				(await client.request(`/projects/${project.id}/drafts/0/restore`, "POST", { expectedRevision: 1 })).status,
+			).toBe(404);
+		}
+		expect((await owner.request(`/projects/${project.id}/authoring-insights`)).status).toBe(200);
+		expect((await owner.request(`/projects/${project.id}/drafts/0`)).status).toBe(200);
+		const drafts = (await (await owner.request(`/projects/${project.id}/drafts`)).json()) as {
+			drafts: { revision: number }[];
+		};
+		expect(drafts.drafts.map((draft) => draft.revision)).toEqual([1, 0]);
+		const csrf = owner.csrf;
+		owner.csrf = "wrong";
+		expect(
+			(await owner.request(`/projects/${project.id}/drafts/0/restore`, "POST", { expectedRevision: 1 })).status,
+		).toBe(403);
+		owner.csrf = csrf;
+		expect(
+			(await owner.request(`/projects/${project.id}/drafts/0/restore`, "POST", { expectedRevision: 0 })).status,
+		).toBe(409);
+		const restored = await owner.request(`/projects/${project.id}/drafts/0/restore`, "POST", {
+			expectedRevision: 1,
+		});
+		expect(restored.status).toBe(200);
+		expect(await restored.json()).toMatchObject({ id: project.id, revision: 2, title: "" });
+	});
 	it("shares administrator models, hides keys, and denies member management and sandbox access", async () => {
 		const admin = new BrowserClient();
 		await admin.authenticate("setup");

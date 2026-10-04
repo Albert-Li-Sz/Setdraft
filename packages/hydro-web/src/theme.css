@@ -101,23 +101,6 @@
 #workspace .generator-library .cm-editor {
 	min-height: 240px;
 }
-.wrong-solution-library {
-	min-width: 0;
-	padding: 16px;
-	border: 1px solid var(--line);
-	border-radius: var(--radius);
-}
-.wrong-solution-library h3 {
-	margin: 0;
-}
-.wrong-solution-library .source-fields {
-	padding: 0;
-}
-#workspace .wrong-solution-library .code-editor-surface {
-	min-height: 280px;
-	height: 36dvh;
-	flex: auto;
-}
 .solution-summaries .notice {
 	margin: 6px 0;
 	border-radius: var(--radius-control);

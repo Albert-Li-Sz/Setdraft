@@ -25,18 +25,18 @@ export const improvementsMessages: Record<string, string> = {
 	删除标程: "Delete reference solution",
 	已知错误: "Known incorrect solution",
 	压力测试: "Pressure test",
-	压力测试错误解: "Pressure-test solutions",
 	运行压力测试: "Run pressure test",
 	错误解: "Incorrect solutions",
 	新错误解: "New incorrect solution",
 	添加错误解: "Add incorrect solution",
-	编辑错误解: "Edit incorrect solution",
+	管理错误解: "Manage incorrect solutions",
+	"错误解统一在“程序与判题”中管理，此处仅选择并运行。":
+		"Manage incorrect solutions in Programs and judging. Select and run them here.",
 	错误解名称: "Incorrect solution name",
 	复制错误解: "Duplicate incorrect solution",
 	删除错误解: "Delete incorrect solution",
 	选择待测错误解: "Select incorrect solutions to judge",
-	"尚无错误解，添加后设置 WA、TLE、MLE、RE 或总分区间。":
-		"Add an incorrect solution and set WA, TLE, MLE, RE or a total score range.",
+	"尚无错误解，请在“程序与判题”中添加。": "No incorrect solutions yet. Add them in Programs and judging.",
 	"在完整测试数据上评测错误解，核对预设错误；全部 AC 或出现其他错误时提醒出题人。":
 		"Judge incorrect solutions on the complete dataset. Warn the author if all cases pass or the verdict differs from the expectation.",
 	"WA / TLE / MLE / RE 须至少命中一次，其余测试点为 AC 或同类错误；部分分按完整数据集判断。":

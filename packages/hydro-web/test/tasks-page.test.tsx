@@ -72,48 +72,39 @@ async function flush() {
 	await Promise.resolve();
 }
 
-it("keeps applying healthy polls that take longer than the polling interval", async () => {
+it("keeps slow healthy polls serial and updates from every completed response", async () => {
 	vi.mocked(requestJson).mockImplementation(
-		() => new Promise((resolve) => setTimeout(() => resolve({ tasks: [task("succeeded")] }), 2500)),
+		() => new Promise((resolve) => setTimeout(() => resolve({ tasks: [task("running")] }), 2500)),
 	);
 	TasksPage({ apiOrigin: "", paused: false });
 	cleanup = hooks.effects[0]();
 	await vi.advanceTimersByTimeAsync(10_000);
-	expect(requestJson).toHaveBeenCalledTimes(6);
-	expect(hooks.setters[0]).toHaveBeenCalledTimes(4);
-	expect(hooks.setters[0]).toHaveBeenLastCalledWith([task("succeeded")]);
+	expect(requestJson).toHaveBeenCalledTimes(3);
+	expect(hooks.setters[0]).toHaveBeenCalledTimes(2);
+	expect(hooks.setters[0]).toHaveBeenLastCalledWith([task("running")]);
 });
 
-it("rejects an older running response after a newer terminal poll", async () => {
-	const older = deferred<{ tasks: BackgroundTask[] }>(),
-		newer = deferred<{ tasks: BackgroundTask[] }>();
-	vi.mocked(requestJson).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+it("reduces polling frequency when the task list has no active work", async () => {
+	vi.mocked(requestJson).mockResolvedValue({ tasks: [task("succeeded")] });
 	TasksPage({ apiOrigin: "", paused: false });
 	cleanup = hooks.effects[0]();
-	await vi.advanceTimersByTimeAsync(2000);
-	newer.resolve({ tasks: [task("succeeded")] });
-	await flush();
-	older.resolve({ tasks: [task("running")] });
-	await flush();
-	expect(hooks.setters[0]).toHaveBeenLastCalledWith([task("succeeded")]);
+	await vi.advanceTimersByTimeAsync(14999);
+	expect(requestJson).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(1);
+	expect(requestJson).toHaveBeenCalledTimes(2);
 });
 
-it("clears a stale polling error on recovery and ignores errors from older responses", async () => {
-	const older = deferred<{ tasks: BackgroundTask[] }>(),
-		newer = deferred<{ tasks: BackgroundTask[] }>();
+it("backs off a polling failure and clears its message after recovery", async () => {
 	vi.mocked(requestJson)
 		.mockRejectedValueOnce(new Error("temporary failure"))
-		.mockReturnValueOnce(older.promise)
-		.mockReturnValueOnce(newer.promise);
+		.mockResolvedValueOnce({ tasks: [task("succeeded")] });
 	TasksPage({ apiOrigin: "", paused: false });
 	cleanup = hooks.effects[0]();
 	await flush();
 	expect(hooks.setters[3]).toHaveBeenLastCalledWith("temporary failure");
-	await vi.advanceTimersByTimeAsync(4000);
-	newer.resolve({ tasks: [task("succeeded")] });
-	await flush();
-	older.reject(new Error("old failure"));
-	await flush();
+	await vi.advanceTimersByTimeAsync(3999);
+	expect(requestJson).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(1);
 	expect(hooks.setters[3]).toHaveBeenLastCalledWith("");
 });
 
@@ -134,7 +125,10 @@ function findAction(node: ReactNode, label = "取消任务"): (() => void) | und
 it("keeps a successful cancellation from being overwritten by a pre-action poll", async () => {
 	const older = deferred<{ tasks: BackgroundTask[] }>();
 	hooks.initial = [[task("running")], "task-1"];
-	vi.mocked(requestJson).mockReturnValueOnce(older.promise).mockResolvedValueOnce(task("cancelled"));
+	vi.mocked(requestJson)
+		.mockReturnValueOnce(older.promise)
+		.mockResolvedValueOnce(task("cancelled"))
+		.mockResolvedValueOnce({ tasks: [task("cancelled")] });
 	const page = TasksPage({ apiOrigin: "", paused: false });
 	cleanup = hooks.effects[0]();
 	const cancel = findAction(page);
@@ -143,7 +137,8 @@ it("keeps a successful cancellation from being overwritten by a pre-action poll"
 	await flush();
 	older.resolve({ tasks: [task("running")] });
 	await flush();
-	expect(hooks.setters[0].mock.calls.at(-1)?.[0]).toBeTypeOf("function");
+	expect(hooks.setters[0]).toHaveBeenLastCalledWith([task("cancelled")]);
+	expect(requestJson).toHaveBeenCalledTimes(3);
 });
 
 it.each(["取消任务", "重试"])(
@@ -151,11 +146,13 @@ it.each(["取消任务", "重试"])(
 	async (label) => {
 		const action = deferred<BackgroundTask>(),
 			poll = deferred<{ tasks: BackgroundTask[] }>();
+		const updated = label === "重试" ? { ...task("queued"), id: "task-2" } : task("cancelled");
 		hooks.initial = [[task(label === "重试" ? "failed" : "running")], "task-1"];
 		vi.mocked(requestJson)
-			.mockResolvedValueOnce({ tasks: [] })
+			.mockResolvedValueOnce({ tasks: [task("running")] })
 			.mockReturnValueOnce(action.promise)
-			.mockReturnValueOnce(poll.promise);
+			.mockReturnValueOnce(poll.promise)
+			.mockResolvedValueOnce({ tasks: [updated] });
 		const page = TasksPage({ apiOrigin: "", paused: false });
 		cleanup = hooks.effects[0]();
 		await flush();
@@ -164,14 +161,16 @@ it.each(["取消任务", "重试"])(
 		click?.();
 		click?.();
 		await vi.advanceTimersByTimeAsync(2000);
-		const updated = label === "重试" ? { ...task("queued"), id: "task-2" } : task("cancelled");
 		action.resolve(updated);
 		await flush();
 		poll.resolve({ tasks: [task("running")] });
 		await flush();
-		expect(requestJson).toHaveBeenCalledTimes(3);
-		const apply = hooks.setters[0].mock.calls.at(-1)?.[0] as (tasks: BackgroundTask[]) => BackgroundTask[];
+		expect(requestJson).toHaveBeenCalledTimes(4);
+		const apply = hooks.setters[0].mock.calls
+			.map(([value]) => value)
+			.find((value) => typeof value === "function") as (tasks: BackgroundTask[]) => BackgroundTask[];
 		expect(apply([])).toEqual([updated]);
+		expect(hooks.setters[0]).toHaveBeenLastCalledWith([updated]);
 	},
 );
 
@@ -222,17 +221,17 @@ it("ignores an action response after changing the API view", async () => {
 });
 
 it("does not apply polling responses or errors after unmount", async () => {
-	const older = deferred<{ tasks: BackgroundTask[] }>(),
-		newer = deferred<{ tasks: BackgroundTask[] }>();
-	vi.mocked(requestJson).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+	const older = deferred<{ tasks: BackgroundTask[] }>();
+	vi.mocked(requestJson).mockReturnValueOnce(older.promise);
 	TasksPage({ apiOrigin: "", paused: false });
 	cleanup = hooks.effects[0]();
 	await vi.advanceTimersByTimeAsync(2000);
 	cleanup?.();
 	cleanup = undefined;
-	older.resolve({ tasks: [task("running")] });
-	newer.reject(new Error("late failure"));
+	older.reject(new Error("late failure"));
 	await flush();
+	await vi.advanceTimersByTimeAsync(30000);
+	expect(requestJson).toHaveBeenCalledTimes(1);
 	expect(hooks.setters[0]).not.toHaveBeenCalled();
 	expect(hooks.setters[3]).not.toHaveBeenCalled();
 });

@@ -13,6 +13,7 @@ import "./problem-types.css";
 import "./responsive-workspace.css";
 import "./verification.css";
 import "./theme.css";
+import "./system-refinements.css";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("Missing #root element.");

@@ -1,7 +1,9 @@
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { authoringInsightMessages } from "./locales/authoring-insights-en.ts";
 import { englishMessages } from "./locales/en.ts";
 import { improvementsMessages } from "./locales/improvements-en.ts";
 import { problemTypeMessages } from "./locales/problem-types-en.ts";
+import { systemMessages } from "./locales/system-en.ts";
 import { verificationMessages } from "./locales/verification-en.ts";
 
 export type Locale = "zh-CN" | "en";
@@ -18,6 +20,8 @@ export function translate(locale: Locale, value: UiMessage, ...parameters: Messa
 	const values = typeof value === "string" ? parameters : value.values;
 	const normalized = key.replace(/\s+/gu, " ").trim();
 	const translated =
+		systemMessages[normalized] ??
+		authoringInsightMessages[normalized] ??
 		problemTypeMessages[normalized] ??
 		improvementsMessages[normalized] ??
 		verificationMessages[normalized] ??
@@ -43,13 +47,38 @@ export function readLocale(storage?: Pick<Storage, "getItem">): Locale {
 	}
 }
 
+export function userLocaleStorageKey(userId: string): string {
+	return `${localeStorageKey}.user:${userId}`;
+}
+
+export function readUserLocale(userId: string, accountLocale: Locale, storage?: Pick<Storage, "getItem">): Locale {
+	try {
+		const stored: unknown = JSON.parse(storage?.getItem(userLocaleStorageKey(userId)) ?? "null");
+		if (
+			stored &&
+			typeof stored === "object" &&
+			"accountLocale" in stored &&
+			stored.accountLocale === accountLocale &&
+			"locale" in stored &&
+			(stored.locale === "en" || stored.locale === "zh-CN")
+		) {
+			return stored.locale;
+		}
+	} catch {
+		// Fall back to the account preference when storage is unavailable or corrupt.
+	}
+	return accountLocale;
+}
+
 const LocaleContext = createContext({
 	locale: "zh-CN" as Locale,
 	setLocale: (_locale: Locale): void => {},
+	applyAccountLocale: (_userId: string | undefined, _locale: Locale): void => {},
 	t: (value: UiMessage, ...parameters: MessageValue[]) => translate("zh-CN", value, ...parameters),
 });
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
+	const account = useRef<{ userId: string; locale: Locale } | undefined>(undefined);
 	const [locale, updateLocale] = useState<Locale>(() => {
 		try {
 			return readLocale(window.localStorage);
@@ -60,9 +89,24 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 	const setLocale = useCallback((next: Locale) => {
 		updateLocale(next);
 		try {
+			if (account.current) {
+				localStorage.setItem(
+					userLocaleStorageKey(account.current.userId),
+					JSON.stringify({ locale: next, accountLocale: account.current.locale }),
+				);
+			}
 			localStorage.setItem(localeStorageKey, next);
 		} catch {
 			// The current session still works when browser storage is unavailable.
+		}
+	}, []);
+	const applyAccountLocale = useCallback((userId: string | undefined, next: Locale) => {
+		account.current = userId ? { userId, locale: next } : undefined;
+		if (!userId) return;
+		try {
+			updateLocale(readUserLocale(userId, next, window.localStorage));
+		} catch {
+			updateLocale(next);
 		}
 	}, []);
 	useEffect(() => {
@@ -71,7 +115,18 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 	}, [locale]);
 	useEffect(() => {
 		const sync = (event: StorageEvent) => {
-			if (event.key === localeStorageKey) updateLocale(event.newValue === "en" ? "en" : "zh-CN");
+			const current = account.current;
+			if (current) {
+				if (event.key === null || event.key === userLocaleStorageKey(current.userId)) {
+					try {
+						updateLocale(readUserLocale(current.userId, current.locale, window.localStorage));
+					} catch {
+						updateLocale(current.locale);
+					}
+				}
+			} else if (event.key === localeStorageKey) {
+				updateLocale(event.newValue === "en" ? "en" : "zh-CN");
+			}
 		};
 		window.addEventListener("storage", sync);
 		return () => window.removeEventListener("storage", sync);
@@ -80,9 +135,10 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 		() => ({
 			locale,
 			setLocale,
+			applyAccountLocale,
 			t: (text: UiMessage, ...parameters: MessageValue[]) => translate(locale, text, ...parameters),
 		}),
-		[locale, setLocale],
+		[locale, setLocale, applyAccountLocale],
 	);
 	return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }

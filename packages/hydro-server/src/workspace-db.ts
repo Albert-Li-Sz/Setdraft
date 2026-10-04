@@ -6,6 +6,7 @@ import { PostgresScope } from "./postgres.ts";
 
 export type DocumentKind =
 	| "project"
+	| "draft-history"
 	| "release"
 	| "contest"
 	| "contest-release"

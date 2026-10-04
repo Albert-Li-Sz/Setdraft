@@ -37,8 +37,33 @@ export async function requestJson<T>(
 	init?: ProgressRequestInit,
 	decode?: (body: unknown) => T,
 ): Promise<T> {
-	const response = await authFetch(url, init);
-	const body: unknown = response.status === 204 ? undefined : await response.json();
+	// Reads can be retried safely. Writes keep their existing lifetime and cancellation semantics.
+	const deadline = ["GET", "HEAD"].includes(init?.method?.toUpperCase() ?? "GET") ? new AbortController() : undefined;
+	const timer = deadline
+		? setTimeout(() => deadline.abort(new DOMException("Read timeout", "TimeoutError")), 30000)
+		: undefined;
+	const signal = deadline
+		? init?.signal
+			? AbortSignal.any([init.signal, deadline.signal])
+			: deadline.signal
+		: init?.signal;
+	let response: Response;
+	let body: unknown;
+	try {
+		response = await authFetch(url, { ...init, signal });
+		try {
+			body = response.status === 204 || init?.method?.toUpperCase() === "HEAD" ? undefined : await response.json();
+		} catch (cause) {
+			if (!(cause instanceof SyntaxError)) throw cause;
+			if (response.ok) throw new Error("服务响应格式错误，请刷新后重试。");
+			body = { message: "服务暂时不可用，请稍后重试。" };
+		}
+	} catch (cause) {
+		if (deadline?.signal.aborted && !init?.signal?.aborted) throw new Error("请求超时，请检查连接后重试。");
+		throw cause;
+	} finally {
+		clearTimeout(timer);
+	}
 	if (!response.ok) {
 		if (
 			response.status === 409 &&
