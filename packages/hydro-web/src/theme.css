@@ -283,11 +283,17 @@
 }
 
 @media (max-width: 540px) {
+	.shell-toolbar {
+		padding-block: 8px;
+	}
 	.shell-page-title {
 		display: none;
 	}
 	.shell-toolbar-tools {
 		gap: 8px;
+		min-width: 0;
+		flex-wrap: wrap;
+		justify-content: flex-end;
 	}
 	.toolbar-brand {
 		font-size: 13px;

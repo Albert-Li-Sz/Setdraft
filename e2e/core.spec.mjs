@@ -26,7 +26,7 @@ test("autosaves draft content and restores the session after refresh and server 
 	await expect(page.getByLabel("标签", { exact: true })).toHaveValue("dp, graphs, simulation");
 	await saved(page, app, project.id, { tags: ["dp", "graphs", "simulation"] });
 	await page.getByLabel("描述 · Markdown", { exact: true }).fill("求 $a+b$，保存 **原文**。");
-	await saved(page, app, project.id, { title: "Saved A + B", statementSections: { description: "求 $a+b$，保存 **原文**。", input: "", output: "", interaction: "", notes: "" } });
+	await saved(page, app, project.id, { title: "Saved A + B", statementSections: { description: "求 $a+b$，保存 **原文**。", input: "", output: "", interaction: "", notes: "", communication: "", firstRound: "", secondRound: "" } });
 	await page.reload();
 	await page.locator(".sidebar-recents").getByRole("button", { name: "Saved A + B", exact: true }).click();
 	await expect(page.getByLabel("题目标题", { exact: true })).toHaveValue("Saved A + B");
@@ -61,7 +61,7 @@ test("reloads server revisions, cases and contest catalogs when the same account
 	await expect(page.getByLabel("题目标题", { exact: true })).toHaveValue("Fresh server project");
 	await expect(page.locator("#authoring-tab-data")).toContainText("1");
 	await page.getByLabel("描述 · Markdown", { exact: true }).fill("Saved after reauthentication");
-	await saved(page, app, project.id, { title: "Fresh server project", statementSections: { description: "Saved after reauthentication", input: "", output: "", interaction: "", notes: "" } });
+	await saved(page, app, project.id, { title: "Fresh server project", statementSections: { description: "Saved after reauthentication", input: "", output: "", interaction: "", notes: "", communication: "", firstRound: "", secondRound: "" } });
 	await page.goto(`${app.url}/#contests`);
 	await expect(page.getByRole("button", { name: /Fresh server contest/ })).toBeVisible();
 });
