@@ -3,7 +3,7 @@
 .manual-attachment,
 .manual-file-list,
 .manual-case-form {
-	border-radius: 0;
+	border-radius: var(--radius-control);
 }
 .info-strip::before {
 	border-radius: 0;
@@ -13,14 +13,14 @@
 	box-shadow: none;
 }
 .manual-code-editor .cm-cursor {
-	border-left: 1.5px solid #202020;
+	border-left: 1.5px solid var(--ink);
 }
 .chat-code-block {
 	border-radius: 8px;
-	background: #fafafa;
+	background: var(--surface-subtle);
 }
 .chat-code-toolbar {
-	background: #f4f4f4;
+	background: var(--stone);
 }
 .manual-chat-markdown pre code {
 	display: block;
@@ -81,7 +81,7 @@
 	overflow: auto;
 	padding: 16px;
 	border: 1px solid var(--line);
-	background: #f4f4f4;
+	background: var(--surface-subtle);
 	text-align: center;
 }
 .pdf-preview-viewport canvas {
@@ -211,7 +211,7 @@
 	width: 100%;
 	height: 8px;
 	margin: 24px 0 12px;
-	accent-color: #171717;
+	accent-color: var(--accent);
 }
 .upload-progress-dialog output {
 	font-size: 13px;
@@ -234,14 +234,14 @@
 }
 
 .chat-search-sources {
-	border-top: 1px solid #e6e6e6;
+	border-top: 1px solid var(--line);
 	margin-top: 18px;
 	padding-top: 12px;
 	font-size: 13px;
 }
 .chat-search-sources summary {
 	cursor: pointer;
-	color: #555;
+	color: var(--muted);
 }
 .chat-search-sources ol {
 	padding-left: 20px;
@@ -250,14 +250,14 @@
 	padding: 8px 0;
 }
 .chat-search-sources li p {
-	color: #777;
+	color: var(--muted);
 	font-size: 12px;
 	line-height: 1.6;
 }
 .chat-search-warning {
 	display: block;
 	padding: 10px 0;
-	color: #777;
+	color: var(--warning);
 }
 
 .search-settings-form {
@@ -330,7 +330,7 @@
 	min-height: 36px;
 	padding: 6px 12px;
 	border: 0;
-	border-radius: var(--radius-control);
+	border-radius: var(--radius-pill);
 	background: transparent;
 	color: var(--muted);
 	font-size: 13px;
@@ -342,7 +342,7 @@
 }
 .statement-tabs button[aria-selected="true"] {
 	background: var(--accent-soft);
-	color: var(--ink);
+	color: var(--accent);
 	font-weight: 600;
 }
 .statement-tabs button:focus-visible {

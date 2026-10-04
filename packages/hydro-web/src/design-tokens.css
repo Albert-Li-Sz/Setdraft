@@ -1,0 +1,104 @@
+/* Setdraft's Cohere-inspired palette. Component styles use semantic roles. */
+:root {
+	color-scheme: light;
+	--font-display: "Space Grotesk", "Avenir Next", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+	--font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+	--font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+	--canvas: #ffffff;
+	--panel: #ffffff;
+	--stone: #eeece7;
+	--surface-subtle: #f4f3ef;
+	--surface-hover: #eeece7;
+	--ink: #212121;
+	--muted: #616161;
+	--faint: #686873;
+	--line: #d9d9dd;
+	--line-strong: #a7aaa7;
+	--accent: #003c33;
+	--accent-soft: #e9f1ea;
+	--primary: #17171c;
+	--primary-hover: #303037;
+	--on-primary: #ffffff;
+	--link: #1863dc;
+	--coral: #ff7759;
+	--taxonomy: #9a3927;
+	--taxonomy-soft: #fff0eb;
+	--taxonomy-line: #f3b8a9;
+	--success: #006b50;
+	--success-soft: #e5f2e8;
+	--danger: #b03032;
+	--danger-soft: #fff0ed;
+	--warning: #805600;
+	--warning-soft: #fff4d6;
+	--focus-ring: #4c6ee6;
+	--field-focus: #9b60aa;
+	--selection: #d8e6fa;
+	--sidebar-bg: #003c33;
+	--sidebar-ink: #f2f7f2;
+	--sidebar-muted: #b7cdc4;
+	--sidebar-line: #38635a;
+	--sidebar-hover: #1b5146;
+	--sidebar-active-bg: #eeece7;
+	--sidebar-active-ink: #003c33;
+	--hero-bg: #003c33;
+	--hero-hover: #064b3f;
+	--hero-ink: #f2f7f2;
+	--hero-muted: #c0d5cb;
+	--content-width: 1360px;
+	--content-gutter: 64px;
+	--radius: 16px;
+	--radius-control: 8px;
+	--radius-dialog: 22px;
+	--radius-pill: 32px;
+	--control-height: 40px;
+	--shadow: none;
+}
+
+:root[data-theme="dark"] {
+	color-scheme: dark;
+	--canvas: #131b1a;
+	--panel: #192321;
+	--stone: #27302b;
+	--surface-subtle: #222e2a;
+	--surface-hover: #2c3933;
+	--ink: #eeeae2;
+	--muted: #b7c3bb;
+	--faint: #a2b0a7;
+	--line: #3b4c44;
+	--line-strong: #6c8275;
+	--accent: #c0dfc8;
+	--accent-soft: #304b3a;
+	--primary: #eeece7;
+	--primary-hover: #d8dbd2;
+	--on-primary: #17171c;
+	--link: #92baff;
+	--taxonomy: #ffad9b;
+	--taxonomy-soft: #402e29;
+	--taxonomy-line: #8e5545;
+	--success: #83d5ae;
+	--success-soft: #123b2b;
+	--danger: #ffaaa0;
+	--danger-soft: #452522;
+	--warning: #ead089;
+	--warning-soft: #3c301c;
+	--focus-ring: #92baff;
+	--field-focus: #d5a2df;
+	--selection: #324863;
+	--sidebar-bg: #0b2922;
+	--sidebar-ink: #eeeae2;
+	--sidebar-muted: #b4c9bd;
+	--sidebar-line: #375549;
+	--sidebar-hover: #234638;
+	--sidebar-active-bg: #dce8d7;
+	--sidebar-active-ink: #0b2922;
+	--hero-bg: #0b392e;
+	--hero-hover: #144b3b;
+	--hero-ink: #eeeae2;
+	--hero-muted: #c0d5cb;
+}
+
+@media (max-width: 640px) {
+	:root {
+		--control-height: 44px;
+	}
+}

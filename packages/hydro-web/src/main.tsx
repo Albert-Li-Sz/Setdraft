@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import { AuthRoot } from "./AuthRoot.tsx";
 import { LocaleProvider } from "./i18n.tsx";
 import { ThemeProvider } from "./theme.tsx";
+import "./design-tokens.css";
 import "./styles.css";
 import "./shell.css";
 import "./auth.css";

@@ -60,7 +60,7 @@
 	transition: background 160ms ease;
 }
 .problem-row-main:hover {
-	background: #f7f7f7;
+	background: var(--surface-subtle);
 }
 .problem-row-icon {
 	display: grid;
@@ -70,7 +70,8 @@
 	height: 40px;
 	border: 1px solid var(--line);
 	border-radius: var(--radius-control);
-	color: #666;
+	background: var(--stone);
+	color: var(--accent);
 }
 .problem-row-content {
 	display: grid;
@@ -93,9 +94,15 @@
 	gap: 6px;
 }
 .problem-tags > span {
-	background: #f3f3f3;
-	padding: 3px 7px;
-	border-radius: 6px;
+	background: var(--surface-subtle);
+	padding: 3px 9px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-pill);
+}
+.problem-tags > span:first-child {
+	background: var(--taxonomy-soft);
+	color: var(--taxonomy);
+	border-color: var(--taxonomy-line);
 }
 .problem-row-end {
 	display: grid;
@@ -136,17 +143,17 @@
 .release-verified {
 	flex-shrink: 0;
 	padding: 5px 9px;
-	border-radius: 6px;
-	background: #f4f4f4;
+	border-radius: var(--radius-pill);
+	background: var(--success-soft);
 	font-size: 12px;
-	color: #5d5d5d;
+	color: var(--success);
 }
 .release-card-actions {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: space-between;
 	gap: 18px;
-	border-top: 1px solid #f0f0f0;
+	border-top: 1px solid var(--line);
 	margin-top: 20px;
 	padding-top: 15px;
 }
@@ -160,7 +167,7 @@
 	padding: 9px 12px;
 	border: 1px solid var(--line);
 	border-radius: var(--radius-control);
-	background: #fff;
+	background: var(--panel);
 	color: var(--ink);
 	font: inherit;
 	min-height: var(--control-height);

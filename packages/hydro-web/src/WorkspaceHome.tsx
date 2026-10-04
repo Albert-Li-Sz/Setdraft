@@ -25,6 +25,8 @@ export function WorkspaceHome({
 	const { t, locale } = useLocale();
 	const [opening, setOpening] = useState<string>();
 	const [query, setQuery] = useState("");
+	const caseCount = projects.reduce((total, project) => total + project.cases.length, 0);
+	const publishedCount = projects.filter((project) => project.latestReleaseId).length;
 	const recent = [...projects]
 		.filter((project) =>
 			(project.title || t("未命名题目")).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
@@ -42,29 +44,67 @@ export function WorkspaceHome({
 	return (
 		<main className="page workspace-home">
 			<div className="home-heading">
-				<h1>{t("工作台")}</h1>
+				<div>
+					<h1>{t("工作台")}</h1>
+					<p>{t("撰写题面，构建数据，验证与发布。")}</p>
+				</div>
 				<span>{t("个人工作区")}</span>
 			</div>
-			<button className="home-create" type="button" onClick={onNew}>
-				<Icon name="compose" />
-				<span>
-					<strong>{t("新建题目")}</strong>
-					<small>ACM / OI</small>
-				</span>
-				<Icon name="plus" />
-			</button>
+			<div className="home-entry">
+				<button className="home-create" type="button" onClick={onNew}>
+					<span className="home-create-mark" aria-hidden="true">
+						<Icon name="compose" />
+					</span>
+					<span className="home-create-copy">
+						<strong>{t("新建题目")}</strong>
+						<small>{t("四种题型 · ACM / OI")}</small>
+					</span>
+					<span className="home-create-arrow" aria-hidden="true">
+						<Icon name="plus" />
+					</span>
+				</button>
+				<section className="home-overview" aria-label={t("工作区概览")}>
+					<span className="home-summary-label">{t("工作区概览")}</span>
+					<dl className="home-stats">
+						<div>
+							<dt>{t("题目数量")}</dt>
+							<dd>{projects.length.toLocaleString(locale)}</dd>
+						</div>
+						<div>
+							<dt>{t("测试点")}</dt>
+							<dd>{caseCount.toLocaleString(locale)}</dd>
+						</div>
+						<div>
+							<dt>{t("已发布题目")}</dt>
+							<dd>{publishedCount.toLocaleString(locale)}</dd>
+						</div>
+					</dl>
+				</section>
+			</div>
 			<div className="home-quick-links">
 				<a href="#records">
 					<Icon name="files" />
-					{t("题目中心")}
+					<span>
+						<strong>{t("题目中心")}</strong>
+						<small>{t("管理题目与发布记录")}</small>
+					</span>
+					<Icon name="arrow" />
 				</a>
 				<a href="#chat">
 					<Icon name="chat" />
-					{t("AI 对话")}
+					<span>
+						<strong>{t("AI 对话")}</strong>
+						<small>{t("讨论思路与搜索资料")}</small>
+					</span>
+					<Icon name="arrow" />
 				</a>
 				<a href="#contests">
 					<Icon name="layers" />
-					{t("竞赛")}
+					<span>
+						<strong>{t("竞赛")}</strong>
+						<small>{t("组织题目与导出题册")}</small>
+					</span>
+					<Icon name="arrow" />
 				</a>
 			</div>
 			<section className="home-projects">

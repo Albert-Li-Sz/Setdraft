@@ -95,7 +95,7 @@
 	text-align: left;
 }
 .matrix-table th {
-	background: var(--panel);
+	background: var(--surface-subtle);
 	max-width: 220px;
 	overflow-wrap: anywhere;
 }
@@ -124,6 +124,7 @@
 	text-align: left;
 	border: 0;
 	background: transparent;
+	color: var(--ink);
 	padding: 4px;
 	cursor: pointer;
 	font: inherit;
@@ -131,6 +132,9 @@
 }
 .matrix-cell.failed {
 	color: var(--danger);
+}
+.matrix-cell.passed {
+	color: var(--success);
 }
 .matrix-cell:hover {
 	background: var(--surface-subtle);

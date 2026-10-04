@@ -80,7 +80,10 @@ export function AppShell({
 		<>
 			<div className="sidebar-brand-row">
 				<a className="sidebar-brand" href="#workspace" aria-label={t("Setdraft 首页")}>
-					Setdraft
+					<span className="brand-mark" aria-hidden="true">
+						<Icon name="layers" />
+					</span>
+					<span>Setdraft</span>
 				</a>
 				{compact && (
 					<button className="icon-button" type="button" onClick={close} aria-label={t("关闭侧栏")}>

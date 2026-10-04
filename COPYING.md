@@ -29,6 +29,14 @@ provide a separate redistribution/embedding license for them. Their presence
 in that repository is not proof of permission: operators/distributors must
 verify the necessary font rights before publishing images, source bundles or PDFs.
 
+## UI design reference
+
+Setdraft's UI uses the Cohere analysis from VoltAgent's
+[awesome-design-md](https://github.com/VoltAgent/awesome-design-md) as a design reference.
+The original prompt is preserved in `docs/design/cohere.md`; its MIT notice is in
+`LICENSES/awesome-design-md.txt`. `DESIGN.md` records the Setdraft workspace adaptation.
+No proprietary Cohere fonts or logos are bundled.
+
 ## Network source offer
 
 The application sidebar and PDF settings link to `/open-source/index.html`.

@@ -21,6 +21,10 @@
 	display: flex;
 	align-items: center;
 	gap: 12px;
+	padding: 8px 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-pill);
+	background: var(--surface-subtle);
 	font-size: 13px;
 }
 .communication-flow li + li::before {

@@ -469,7 +469,7 @@ export function ManualWorkspace(props: Props) {
 		<main className="page" id="workspace" data-natural-flow={naturalFlow}>
 			<section className="page-heading">
 				<div>
-					<h1>{project.title || t("新建题目")}</h1>
+					<h1 title={project.title || t("新建题目")}>{project.title || t("新建题目")}</h1>
 					<p>{t("上传测试数据或运行 Gen，完成沙箱验证后下载 Hydro 包。")}</p>
 				</div>
 				<div className="heading-actions">

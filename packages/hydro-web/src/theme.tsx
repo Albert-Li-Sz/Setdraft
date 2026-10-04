@@ -41,7 +41,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 	useLayoutEffect(() => {
 		document.documentElement.dataset.theme = dark ? "dark" : "light";
 		document.documentElement.style.colorScheme = dark ? "dark" : "light";
-		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#141414" : "#f7f7f7");
+		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#131b1a" : "#ffffff");
 	}, [dark]);
 	useEffect(() => {
 		const media = window.matchMedia("(prefers-color-scheme: dark)");

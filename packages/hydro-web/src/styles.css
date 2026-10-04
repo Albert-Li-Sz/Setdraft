@@ -1,6 +1,5 @@
 :root {
-	font-family:
-		-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+	font-family: var(--font-body);
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
 	-webkit-font-smoothing: antialiased;
@@ -14,30 +13,6 @@
 	--motion-stagger: 0ms;
 	--ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 	--ease-spring: cubic-bezier(0.2, 0.8, 0.2, 1.12);
-	--canvas: #fff;
-	--panel: #fff;
-	--surface-subtle: #f5f5f5;
-	--ink: #151515;
-	--muted: #666;
-	--faint: #767676;
-	--line: #e5e5e5;
-	--accent: #171717;
-	--accent-soft: #eeeeee;
-	--success: #292929;
-	--success-soft: #ededed;
-	--danger: #292929;
-	--danger-soft: #dedede;
-	--warning: #5c5c5c;
-	--warning-soft: #f1f1f1;
-	--content-width: 1280px;
-	--content-gutter: 64px;
-	--radius: 12px;
-	--radius-control: 8px;
-	--radius-dialog: 20px;
-	--control-height: 40px;
-	--surface-hover: #ededed;
-	--focus-ring: #777;
-	--shadow: none;
 }
 
 * {
@@ -128,10 +103,11 @@ a svg {
 .page-heading h1 {
 	color: var(--ink);
 	margin: 0 0 8px;
-	font-size: 26px;
-	line-height: 1.3;
-	letter-spacing: -0.6px;
-	font-weight: 600;
+	font-family: var(--font-display);
+	font-size: 32px;
+	line-height: 1.2;
+	letter-spacing: -0.8px;
+	font-weight: 400;
 	overflow-wrap: anywhere;
 }
 .page-heading > div:first-child {
@@ -170,8 +146,8 @@ a svg {
 	gap: 8px;
 	min-height: var(--control-height);
 	border: 1px solid transparent;
-	border-radius: var(--radius-control);
-	padding: 7px 14px;
+	border-radius: var(--radius-pill);
+	padding: 8px 18px;
 	font-size: 13px;
 	font-weight: 500;
 	line-height: 1.5;
@@ -181,13 +157,13 @@ a svg {
 		color var(--motion) ease;
 }
 .button.primary {
-	color: #fff;
-	background: var(--ink);
-	border-color: var(--ink);
+	color: var(--on-primary);
+	background: var(--primary);
+	border-color: var(--primary);
 }
 .button.primary:hover:not(:disabled) {
-	background: #333;
-	border-color: #333;
+	background: var(--primary-hover);
+	border-color: var(--primary-hover);
 	box-shadow: none;
 }
 .button.secondary,
@@ -198,7 +174,7 @@ a svg {
 }
 .button.secondary:hover:not(:disabled),
 .upload-button:hover {
-	border-color: #d0d0d0;
+	border-color: var(--line-strong);
 	background: var(--surface-subtle);
 }
 
@@ -210,7 +186,7 @@ a svg {
 	margin-bottom: 20px;
 	padding: 10px 14px;
 	border: 1px solid var(--line);
-	border-radius: 0;
+	border-radius: var(--radius-control);
 	background: var(--panel);
 	color: var(--muted);
 	font-size: 13px;
@@ -226,7 +202,7 @@ a svg {
 }
 .notice.passed {
 	border-color: var(--success-soft);
-	background: var(--surface-subtle);
+	background: var(--success-soft);
 	color: var(--success);
 }
 .notice.passed .notice-dot {
@@ -234,7 +210,7 @@ a svg {
 }
 .notice.failed {
 	border-color: var(--danger-soft);
-	background: var(--surface-subtle);
+	background: var(--danger-soft);
 	color: var(--danger);
 }
 .notice.failed .notice-dot {
@@ -270,7 +246,7 @@ a svg {
 .tabs button {
 	flex: none;
 	border: 0;
-	border-radius: var(--radius-control);
+	border-radius: var(--radius-pill);
 	background: transparent;
 	padding: 6px 12px;
 	color: var(--muted);
@@ -285,7 +261,7 @@ a svg {
 	background: var(--surface-subtle);
 }
 .tabs button.active {
-	color: var(--ink);
+	color: var(--accent);
 	background: var(--accent-soft);
 	font-weight: 600;
 }
@@ -419,7 +395,7 @@ a svg {
 	height: auto;
 }
 .problem-preview a {
-	color: var(--accent);
+	color: var(--link);
 	text-decoration: none;
 }
 .problem-preview a:hover {
@@ -528,8 +504,8 @@ a svg {
 }
 .test-columns textarea:focus,
 .field input:focus {
-	border-color: var(--accent);
-	box-shadow: 0 0 0 2px rgb(0 0 0 / 7%);
+	border-color: var(--field-focus);
+	box-shadow: none;
 }
 .text-button {
 	border: 0;
@@ -579,7 +555,7 @@ a svg {
 	background: var(--success);
 }
 .failed .summary-icon {
-	background: var(--accent);
+	background: var(--danger);
 }
 .validation-summary strong {
 	color: var(--ink);
@@ -642,7 +618,7 @@ a svg {
 	margin-top: 14px;
 	padding: 14px;
 	border: 1px solid var(--line);
-	background: white;
+	background: var(--panel);
 }
 .conversation-history {
 	margin-top: 14px;
@@ -681,7 +657,7 @@ a svg {
 	border-radius: 14px;
 	resize: vertical;
 	color: var(--ink);
-	background: white;
+	background: var(--panel);
 	font-size: 14px;
 	line-height: 1.65;
 }
@@ -898,9 +874,9 @@ a svg {
 	background: var(--success);
 }
 .workflow-list li.failed > span {
-	border-color: var(--accent);
+	border-color: var(--danger);
 	color: var(--panel);
-	background: var(--accent);
+	background: var(--danger);
 }
 .workflow-list li.active > span {
 	border-color: var(--accent);
@@ -962,7 +938,7 @@ a svg {
 	flex: 0 0 auto;
 	padding: 4px 8px;
 	border: 1px solid var(--line);
-	border-radius: 6px;
+	border-radius: var(--radius-pill);
 	color: var(--muted);
 	background: var(--surface-subtle);
 	font-size: 12px;
@@ -975,7 +951,7 @@ a svg {
 .status-badge.online {
 	border-color: var(--success-soft);
 	color: var(--success);
-	background: var(--surface-subtle);
+	background: var(--success-soft);
 }
 .status-badge.offline {
 	border-color: var(--danger-soft);
@@ -1307,16 +1283,16 @@ a svg {
 	white-space: nowrap;
 }
 .run-status.passed {
-	background: var(--surface-subtle);
+	background: var(--success-soft);
 	color: var(--success);
 }
 .run-status.failed {
-	background: var(--surface-subtle);
+	background: var(--danger-soft);
 	color: var(--danger);
 }
 .run-status.attention {
-	background: var(--surface-subtle);
-	color: var(--danger);
+	background: var(--warning-soft);
+	color: var(--warning);
 }
 .history-actions {
 	display: flex;
@@ -1505,7 +1481,7 @@ a svg {
 	cursor: pointer;
 }
 .manual-file-button:focus-within {
-	outline: 2px solid #777;
+	outline: 2px solid var(--focus-ring);
 	outline-offset: 3px;
 }
 .manual-subtask input,
@@ -1714,9 +1690,9 @@ a svg {
 	padding: 0 16px;
 }
 .manual-code-editor .cm-gutters {
-	border-right: 1px solid #f0f0f0;
-	background: #fafafa;
-	color: #8a8a8a;
+	border-right: 1px solid var(--line);
+	background: var(--surface-subtle);
+	color: var(--faint);
 }
 .manual-code-editor .cm-editor .cm-content,
 .manual-code-editor .cm-editor .cm-gutters {
@@ -1730,13 +1706,13 @@ a svg {
 }
 .manual-code-editor .cm-activeLine,
 .manual-code-editor .cm-activeLineGutter {
-	background: #f6f6f6;
+	background: var(--surface-subtle);
 }
 .manual-code-editor .cm-editor.cm-focused {
 	outline: 0;
 }
 .manual-code-block:focus-within {
-	border-color: #aaa;
+	border-color: var(--field-focus);
 }
 .manual-code-editor .cm-matchingBracket {
 	background: #e1e7ef;
@@ -1764,7 +1740,7 @@ a svg {
 	padding: 4px 8px;
 }
 .manual-code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
-	background: #ededed;
+	background: var(--accent-soft);
 	color: var(--ink);
 }
 .manual-code-editor .cm-completionDetail {
@@ -1776,7 +1752,7 @@ a svg {
 	margin: 0;
 	padding: 8px 14px;
 	border-top: 1px solid var(--line);
-	background: #fafafa;
+	background: var(--surface-subtle);
 	color: var(--muted);
 	font-size: 10px;
 	line-height: 1.6;
@@ -1880,7 +1856,7 @@ a svg {
 }
 .manual-program-menu button.active {
 	border-left-color: var(--accent);
-	background: var(--surface-subtle);
+	background: var(--accent-soft);
 	color: var(--accent);
 	font-weight: 600;
 }
@@ -2174,7 +2150,7 @@ a svg {
 	padding: 16px 18px;
 	border: 1px solid var(--line);
 	border-radius: 14px;
-	background: #f8f9fb;
+	background: var(--surface-subtle);
 	font:
 		13px / 1.75 ui-monospace,
 		SFMono-Regular,
@@ -2192,7 +2168,7 @@ a svg {
 	overflow: hidden;
 	border: 1px solid var(--line);
 	border-radius: 14px;
-	background: #f7f7f7;
+	background: var(--surface-subtle);
 }
 .chat-code-toolbar {
 	display: flex;
@@ -2224,7 +2200,7 @@ a svg {
 	cursor: pointer;
 }
 .chat-code-toolbar button:hover {
-	background: #eaeaea;
+	background: var(--surface-hover);
 	color: var(--ink);
 }
 .chat-code-toolbar button:focus-visible {
@@ -2274,7 +2250,7 @@ a svg {
 	height: auto;
 }
 .manual-chat-markdown a {
-	color: var(--accent);
+	color: var(--link);
 }
 .manual-chat-markdown .katex-display {
 	max-width: 100%;
@@ -2302,9 +2278,10 @@ a svg {
 .field input:focus-visible,
 .field select:focus-visible,
 .field textarea:focus-visible {
-	outline: none;
-	border-color: var(--accent);
-	box-shadow: 0 0 0 2px rgb(0 0 0 / 8%);
+	outline: 2px solid var(--focus-ring);
+	outline-offset: 2px;
+	border-color: var(--focus-ring);
+	box-shadow: none;
 }
 .history-table tbody tr {
 	transition: background-color var(--motion) ease;
@@ -2591,7 +2568,7 @@ a svg {
 }
 .scoring-options button:hover {
 	background: var(--accent-soft);
-	border-color: #cecece;
+	border-color: var(--line-strong);
 }
 .scoring-copy {
 	flex: 1;
@@ -2663,7 +2640,7 @@ a svg {
 	flex: none;
 }
 .tabs [role="tab"][aria-selected="true"] {
-	color: var(--ink);
+	color: var(--accent);
 }
 .history-table .danger {
 	border: 0;
@@ -2897,8 +2874,8 @@ a svg {
 }
 /* Motion follows the interaction; reduced motion keeps the same states. */
 ::selection {
-	background: #dedede;
-	color: #151515;
+	background: var(--selection);
+	color: var(--ink);
 }
 .page {
 	animation: page-in var(--motion-enter) var(--ease-out);
@@ -3044,7 +3021,8 @@ body:has(.motion-dialog[open]) {
 	margin-bottom: 18px;
 	border: 1px solid var(--line);
 	border-radius: var(--radius);
-	background: var(--panel);
+	background: var(--surface-subtle);
+	color: var(--accent);
 }
 .empty-state-mark svg {
 	width: 22px;

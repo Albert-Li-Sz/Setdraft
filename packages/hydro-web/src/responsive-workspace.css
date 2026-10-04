@@ -17,6 +17,14 @@
 	margin-bottom: 18px;
 	gap: 16px;
 }
+#workspace .page-heading h1 {
+	font-size: 24px;
+	letter-spacing: -0.5px;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+}
 #workspace > .notice {
 	flex: none;
 }
@@ -163,6 +171,10 @@
 	min-height: 0;
 	margin-bottom: 0;
 	flex: 1;
+}
+#workspace .manual-program-panel .manual-code-block {
+	min-height: 300px;
+	flex: 1 0 300px;
 }
 #workspace .manual-code-heading {
 	flex: none;
