@@ -47,17 +47,21 @@ async function painted(page) {
 	await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-test("keeps rendering healthy task polls with 2500 ms responses", async ({ page }) => {
-	let started = 0;
+test("serializes healthy task polls with 2500 ms responses", async ({ page }) => {
+	let started = 0, active = 0, maximumActive = 0;
 	await mount(page, async route => {
 		const revision = ++started;
-		await setTimeout(2500);
-		await route.fulfill({ json: { tasks: [task(revision < 3 ? "running" : "succeeded", `Slow response ${revision}`)] } });
+		maximumActive = Math.max(maximumActive, ++active);
+		try {
+			await setTimeout(2500);
+			await route.fulfill({ json: { tasks: [task(revision < 3 ? "running" : "succeeded", `Slow response ${revision}`)] } });
+		} finally { --active; }
 	});
 	await expect(page.getByRole("heading", { name: "Slow response 1", exact: true })).toBeVisible();
 	await expect(page.getByRole("heading", { name: "Slow response 2", exact: true })).toBeVisible();
 	await expect(page.locator(".task-row")).toContainText("已完成");
-	expect(started).toBeGreaterThanOrEqual(4);
+	expect(started).toBe(3);
+	expect(maximumActive).toBe(1);
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
@@ -95,19 +99,22 @@ for (const kind of ["cancel", "retry"]) test(`keeps ${kind} responses ahead of s
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
-test("ignores an older running poll after a newer successful response", async ({ page }) => {
-	const older = gate(), returned = gate();
+test("waits for the current poll before requesting the next task state", async ({ page }) => {
+	const older = gate(), started = gate(), returned = gate();
 	let polls = 0;
 	await mount(page, async route => {
 		const first = ++polls === 1;
-		if (first) await older.promise;
+		if (first) { started.resolve(); await older.promise; }
 		await route.fulfill({ json: { tasks: [task(first ? "running" : "succeeded")] } });
 		if (first) returned.resolve();
 	});
-	await expect(page.locator(".task-row")).toContainText("已完成");
+	await started.promise;
+	await setTimeout(2200);
+	expect(polls).toBe(1);
+	await expect(page.locator(".task-row")).toHaveCount(0);
 	older.resolve();
 	await returned.promise;
-	await painted(page);
+	await expect(page.locator(".task-row")).toContainText("进行中");
 	await expect(page.locator(".task-row")).toContainText("已完成");
 });
 

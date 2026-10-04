@@ -82,7 +82,7 @@ for (const full of [false, true]) test(full ? "responsive matrix 320–3840, DPR
 					await current.goto(`${app.url}/#workspace`);
 					await frame(current, testInfo, `${width}-${dpr}-${language}-${navigation}`);
 					if (await current.locator(".manual-layout").getAttribute("data-compact") === "true") {
-						await current.locator("#workspace > .page-heading button").first().click();
+						await current.getByRole("button", { name: language === "zh" ? "题目配置" : "Problem settings", exact: true }).click();
 						await expect(current.locator(".workspace-settings-drawer")).toBeVisible();
 						await current.locator(".workspace-settings-drawer .confirmation-heading button").click();
 					}

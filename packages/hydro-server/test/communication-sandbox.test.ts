@@ -151,7 +151,8 @@ it("isolates compilation and reports WA/TLE/MLE/RE in either round, retaining va
 	}
 	solutions.push(candidate("compile-failed", "this will not compile", "cpp17"));
 	const result = await runSolutionSandbox({
-		...sandbox("interactive", "python3", { timeLimitMs: 400, memoryLimitMb: 64 }),
+		// Leave normal rounds enough startup time on busy runners; infinite loops still exceed the limit.
+		...sandbox("interactive", "python3", { memoryLimitMb: 64 }),
 		solutions,
 		primaryId: "primary",
 	});

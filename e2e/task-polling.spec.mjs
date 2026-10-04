@@ -1,7 +1,8 @@
+import { setTimeout } from "node:timers/promises";
 import { test, expect, setup } from "./fixtures.mjs";
 
 for (const lateError of [false, true]) {
-	test(`task polling ignores a late ${lateError ? "error" : "running state"} after a newer success`, async ({ page, app }) => {
+	test(`task polling serializes a delayed ${lateError ? "error" : "running state"} and recovers on the next response`, async ({ page, app }) => {
 		await setup(page, app);
 		const task = { id: "polling-task", kind: "generate", resource: "project:polling", resourceTitle: "Polling regression", fingerprint: "test", createdAt: "2026-10-02T00:00:00Z", updatedAt: "2026-10-02T00:00:00Z" };
 		let unblock, captured;
@@ -20,13 +21,15 @@ for (const lateError of [false, true]) {
 			if (lateError) await expect(page.getByRole("alert")).toContainText("TEMPORARY_POLL_ERROR");
 			await pending;
 			const badge = page.locator(".task-row .status-badge");
-			await expect(badge).toHaveText("已完成");
-			if (lateError) await expect(page.getByRole("alert")).toHaveCount(0);
+			await setTimeout(2200);
+			expect(requests).toBe(lateError ? 2 : 1);
+			await expect(badge).toHaveCount(0);
 			const response = page.waitForResponse(result => result.headers()["x-test-late"] === "1");
 			unblock(); await (await response).finished();
-			await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-			await expect(badge).toHaveText("已完成", { timeout: 500 });
-			await expect(page.getByRole("alert")).toHaveCount(0, { timeout: 500 });
-		} finally { unblock(); }
+			if (lateError) await expect(page.getByRole("alert")).toContainText("OLD_POLL_ERROR");
+			else await expect(badge).toHaveText("进行中");
+			await expect(badge).toHaveText("已完成");
+			await expect(page.getByRole("alert")).toHaveCount(0);
+		} finally { unblock(); await page.unrouteAll({ behavior: "ignoreErrors" }); }
 	});
 }

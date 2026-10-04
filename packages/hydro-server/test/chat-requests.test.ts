@@ -427,7 +427,9 @@ describe("persisted chat requests", () => {
 			for (const r of results) if (r.status === "rejected") expect(r.reason).toMatchObject({ statusCode: 429 });
 			await queue.cancel(first.id, id);
 			await vi.waitFor(() => expect(scheduler.status("alice").outstanding).toBe(1));
-			await queue.retry(first.id, id);
+			// Admission is freed before the cancelled worker finishes its storage cleanup.
+			const attemptId = randomUUID();
+			await vi.waitFor(() => queue.retry(first.id, id, attemptId));
 			expect(scheduler.status("alice").outstanding).toBe(2);
 		} finally {
 			await queue.close();

@@ -100,7 +100,7 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 	const [query, setQuery] = useState("");
 	const [filter, setFilter] = useState<TaskFilter>("all");
 	const [kind, setKind] = useState<BackgroundTask["kind"] | "all">("all");
-	// A newer pending poll must not discard a healthy response that has already arrived.
+	// A poll started before a completed action must not overwrite the action's result.
 	const refreshRevision = useRef(0);
 	const requestRevision = useRef(0);
 	const viewRevision = useRef(0);
