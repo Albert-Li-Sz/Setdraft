@@ -1,13 +1,29 @@
 export { interactiveReferenceTemplate, interactorTemplate } from "./interactive-templates.ts";
 
+import { type Generator, type GeneratorLanguage, isGenerator } from "./generators.ts";
+import {
+	type CommunicationConfig,
+	isCompleteCommunicationResult,
+	isProblemType,
+	isProtocolSamples,
+	type ProblemType,
+	type ProtocolSample,
+	type RoundResult,
+	resolveProblemType,
+	synchronizeProblemType,
+	usesProtocol,
+} from "./problem-types.ts";
 import type { Solution, VerificationOptions } from "./verification.ts";
 import { isSolution } from "./verification.ts";
 
+export * from "./communication-templates.ts";
+export * from "./generators.ts";
+export * from "./problem-types.ts";
 export * from "./verification.ts";
 
 export type CheckerMode = "text" | "custom";
-export const verificationContractVersion = 5;
-export const exportContractVersion = 4;
+export const verificationContractVersion = 7;
+export const exportContractVersion = 5;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
@@ -27,11 +43,14 @@ export interface ManualCheck {
 	caseId?: string;
 	passed: boolean;
 	message: string;
-	verdict?: "AC" | "WA" | "CE" | "RE" | "TLE" | "SYSTEM_ERROR";
+	verdict?: "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "SYSTEM_ERROR";
 	score?: number;
 	scoreRatio?: number;
 	durationMs?: number;
+	memoryBytes?: number;
 	logPath?: string;
+	rounds?: RoundResult[];
+	failedRound?: 1 | 2;
 }
 
 export interface ManualSandboxReport {
@@ -44,6 +63,7 @@ export interface ManualSandboxReport {
 	validatorUsed: boolean;
 	checkerUsed: boolean;
 	interactorUsed?: boolean;
+	communicationUsed?: boolean;
 	toolchain?: { cpp: string; python: string; java: string };
 }
 
@@ -58,12 +78,18 @@ export interface StatementSections {
 	input: string;
 	output: string;
 	interaction: string;
+	communication?: string;
+	firstRound?: string;
+	secondRound?: string;
 	notes: string;
 }
 
 export interface ManualProject {
 	id: string;
 	scoringMode: "acm" | "oi";
+	problemType?: ProblemType;
+	communication?: CommunicationConfig;
+	protocolSamples?: ProtocolSample[];
 	judgingMode?: JudgingMode;
 	interactionInputMode?: InteractionInputMode;
 	interactorSource?: string;
@@ -84,7 +110,9 @@ export interface ManualProject {
 	solutions?: Solution[];
 	referenceSolutionId?: string;
 	generatorSource: string;
-	generatorStandard: CppLanguage;
+	generatorStandard: GeneratorLanguage;
+	generators?: Generator[];
+	generatorSequence?: number;
 	generatorScript: string;
 	checkerSource: string;
 	checkerMode?: CheckerMode;
@@ -146,6 +174,8 @@ export interface ManualRelease {
 	name?: string;
 	id: string;
 	scoringMode: "acm" | "oi";
+	problemType?: ProblemType;
+	communication?: CommunicationConfig;
 	judgingMode?: JudgingMode;
 	interactionInputMode?: InteractionInputMode;
 	projectId: string;
@@ -348,11 +378,13 @@ export type TaskKind =
 	| "release-export"
 	| "image-build"
 	| "matrix"
+	| "pressure"
 	| "stress";
 export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "stale" | "interrupted";
 
 export interface TaskRecord {
 	resourceTitle?: string;
+	problemType?: ProblemType;
 	releaseName?: string;
 	verification?: VerificationOptions;
 	replayOf?: string;
@@ -401,7 +433,12 @@ export type ProgramSource = ManualProgram;
 export type ProjectCase = ManualCaseSummary;
 export type ProjectSnapshot = ManualProjectSnapshot;
 export type ManualReport = ManualSandboxReport &
-	Partial<Pick<ManualVerificationReport, "revision" | "projectHash" | "verifiedAt" | "issues">>;
+	Partial<
+		Pick<
+			ManualVerificationReport,
+			"revision" | "projectHash" | "verifiedAt" | "issues" | "verificationContractVersion"
+		>
+	>;
 export type BackgroundTask<T = unknown> = Omit<TaskRecord, "result"> & { result?: T };
 export type ProjectUpdate = Partial<
 	Omit<
@@ -453,13 +490,27 @@ export interface AiConfiguration {
 }
 
 export function isContestReadyRelease(release: ManualRelease): boolean {
+	const primaryChecks = release.report?.checks.filter((check) => check.stage === "interaction:reference") ?? [];
 	return (
 		!requiresReverification(release) &&
 		release.report?.success === true &&
 		release.report.mode === "finalize" &&
-		(release.judgingMode === "interactive"
-			? release.report.interactorUsed === true
-			: release.report.checkerUsed && (release.checkerMode === "text" || release.checkerMode === "custom")) &&
+		(resolveProblemType(release) === "communication"
+			? release.report.communicationUsed === true &&
+				release.report.caseCount > 0 &&
+				primaryChecks.length === release.report.caseCount &&
+				new Set(primaryChecks.map((check) => check.caseId)).size === release.report.caseCount &&
+				primaryChecks.every(
+					(check) =>
+						Boolean(check.caseId) &&
+						check.passed &&
+						check.verdict === "AC" &&
+						check.score === 100 &&
+						isCompleteCommunicationResult(check),
+				)
+			: usesProtocol(release)
+				? release.report.interactorUsed === true
+				: release.report.checkerUsed && (release.checkerMode === "text" || release.checkerMode === "custom")) &&
 		(release.scoringMode === "acm" || release.scoringMode === "oi")
 	);
 }
@@ -489,6 +540,7 @@ function report(value: unknown): boolean {
 		typeof value.validatorUsed === "boolean" &&
 		typeof value.checkerUsed === "boolean" &&
 		(value.interactorUsed === undefined || typeof value.interactorUsed === "boolean") &&
+		(value.communicationUsed === undefined || typeof value.communicationUsed === "boolean") &&
 		["caseCount", "generatedCount", "oracleCount"].every((key) => Number.isSafeInteger(value[key])) &&
 		Array.isArray(value.checks) &&
 		value.checks.every(
@@ -539,12 +591,34 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 		].every((key) => typeof value[key] === "string")
 	)
 		return false;
+	if (!["checkerStandard", "validatorStandard"].every((key) => cppLanguages.includes(value[key] as CppLanguage)))
+		return false;
+	if (![...cppLanguages, "python3"].includes(String(value.generatorStandard))) return false;
 	if (
-		!["generatorStandard", "checkerStandard", "validatorStandard"].every((key) =>
-			cppLanguages.includes(value[key] as CppLanguage),
-		)
+		value.generators !== undefined &&
+		(!Array.isArray(value.generators) ||
+			value.generators.length > 32 ||
+			!value.generators.every(isGenerator) ||
+			new Set(value.generators.map((item) => item.id)).size !== value.generators.length ||
+			new Set(value.generators.map((item) => item.name)).size !== value.generators.length)
 	)
 		return false;
+	if (
+		value.generatorSequence !== undefined &&
+		(!Number.isSafeInteger(value.generatorSequence) || Number(value.generatorSequence) < 1)
+	)
+		return false;
+	if (value.problemType !== undefined && !isProblemType(value.problemType)) return false;
+	if (
+		value.communication !== undefined &&
+		(!object(value.communication) ||
+			typeof value.communication.judgeSource !== "string" ||
+			value.communication.judgeSource.length > 200_000 ||
+			!cppLanguages.includes(value.communication.judgeStandard as CppLanguage) ||
+			!["interactive", "text", "custom"].includes(String(value.communication.secondRound)))
+	)
+		return false;
+	if (value.protocolSamples !== undefined && !isProtocolSamples(value.protocolSamples)) return false;
 	if (value.checkerMode !== undefined && value.checkerMode !== "text" && value.checkerMode !== "custom") return false;
 	if (value.judgingMode !== undefined && value.judgingMode !== "default" && value.judgingMode !== "interactive")
 		return false;
@@ -560,6 +634,12 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 		(!object(value.statementSections) ||
 			!["description", "input", "output", "interaction", "notes"].every(
 				(key) => typeof (value.statementSections as Record<string, unknown>)[key] === "string",
+			) ||
+			!["communication", "firstRound", "secondRound"].every(
+				(key) =>
+					value.statementSections &&
+					object(value.statementSections) &&
+					(value.statementSections[key] === undefined || typeof value.statementSections[key] === "string"),
 			))
 	)
 		return false;
@@ -626,6 +706,7 @@ export function isProjectSnapshot(value: unknown): value is ProjectSnapshot {
 
 export function readProjectSnapshot(value: unknown): ProjectSnapshot {
 	if (!isProjectSnapshot(value)) throw new Error("服务端返回的题目格式无效。");
+	synchronizeProblemType(value);
 	return value;
 }
 

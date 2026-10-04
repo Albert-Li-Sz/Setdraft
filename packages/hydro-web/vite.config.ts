@@ -6,6 +6,9 @@ import { defineConfig, type Plugin } from "vite";
 
 // Keep PDF fonts, character maps and codecs local for private/offline deployments.
 export default defineConfig(async () => {
+	const metadata: { version: string } = JSON.parse(
+		await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+	);
 	const root = dirname(fileURLToPath(import.meta.resolve("pdfjs-dist/package.json")));
 	const assets = new Map<string, Uint8Array>();
 	for (const directory of ["cmaps", "standard_fonts", "wasm"]) {
@@ -14,6 +17,7 @@ export default defineConfig(async () => {
 		}
 	}
 	return {
+		define: { __SETDRAFT_VERSION__: JSON.stringify(metadata.version) },
 		plugins: [
 			react(),
 			{

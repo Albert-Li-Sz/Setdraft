@@ -308,6 +308,7 @@ export class ChatRequestQueue {
 		searchQuery?: string,
 		attemptId = id,
 	): Promise<ChatRequest> {
+		if (searchQuery !== undefined) throw new ChatError("搜索关键词由 AI 自动生成，不支持手动输入。", 422);
 		await this.ready;
 		return this.withRequestLock(id, async () => {
 			await this.assertWritable();
@@ -425,7 +426,6 @@ export class ChatRequestQueue {
 				payload.contextSnapshot,
 				payload.profileId,
 				await this.loadImages(payload, id),
-				payload.searchQuery,
 			);
 			this.reserve(id);
 			try {
@@ -695,7 +695,6 @@ export class ChatRequestQueue {
 				images,
 				id,
 				payload.webSearch,
-				payload.searchQuery,
 			);
 			await events.flush();
 			await this.complete(id, async () => chat);

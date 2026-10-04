@@ -22,7 +22,7 @@ afterEach(async () => {
 	await rm(root, { recursive: true, force: true });
 });
 
-async function fixture(structuredStatement = false) {
+async function fixture(structuredStatement = false, multipleGenerators = false) {
 	const project = await source.create("acm");
 	await source.update(project.id, {
 		title: "Original",
@@ -40,6 +40,15 @@ async function fixture(structuredStatement = false) {
 				}
 			: {}),
 		reference: { language: "cpp17", code: "code" },
+		...(multipleGenerators
+			? {
+					generators: [
+						{ id: "gen", name: "gen", language: "python3", code: "print(1)", remark: "Python baseline" },
+						{ id: "second", name: "gen_2", language: "cpp17", code: "cpp source", remark: "Boundary cases" },
+					],
+					generatorScript: "gen 1\ngen_2 2",
+				}
+			: {}),
 		attachments: [{ name: "note.txt", contentBase64: Buffer.from("attachment").toString("base64") }],
 	});
 	await source.addTextCase(project.id, { name: "1.in", input: "1 2\n", output: "3\n" });
@@ -109,6 +118,21 @@ async function fixture(structuredStatement = false) {
 }
 
 describe("problem copies and release restoration", () => {
+	it("copies and restores complete generator collections, remarks and stable numbering", async () => {
+		const { project, release } = await fixture(false, true);
+		const copied = await copyProject(source, project.id, target, project.revision);
+		expect(copied.generators).toEqual(project.generators);
+		expect(copied.generatorSequence).toBe(3);
+		const changed = await source.update(project.id, {
+			generators: [project.generators![0]],
+			generatorScript: "gen 1",
+		});
+		const restored = await restoreProject(source, project.id, release.id, changed.revision);
+		expect(restored.generators).toEqual(project.generators);
+		expect(restored.generatorScript).toBe(project.generatorScript);
+		expect(restored.generatorSequence).toBe(3);
+		expect(restored.generatorStandard).toBe("python3");
+	});
 	it("binds restoration to the version loaded before an intervening successful edit", async () => {
 		const { project, release } = await fixture();
 		const concurrent = new ManualProjectStore({ root: source.root });
@@ -278,7 +302,15 @@ describe("problem copies and release restoration", () => {
 	it("restores legacy snapshots with default language standards and no explicit checker mode", async () => {
 		const { project, release, dir } = await fixture();
 		const legacy = JSON.parse(await readFile(join(dir, "project.json"), "utf8")) as Record<string, unknown>;
-		for (const field of ["scoringMode", "generatorStandard", "checkerStandard", "validatorStandard", "checkerMode"])
+		for (const field of [
+			"scoringMode",
+			"generators",
+			"generatorSequence",
+			"generatorStandard",
+			"checkerStandard",
+			"validatorStandard",
+			"checkerMode",
+		])
 			delete legacy[field];
 		const bytes = Buffer.from(JSON.stringify(legacy));
 		await writeFile(join(dir, "project.json"), bytes);

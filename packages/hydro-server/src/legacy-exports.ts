@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises
 import { join } from "node:path";
 import { extractAttachmentReferences, parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import { formatHydroStatement } from "@setdraft/authoring/statement";
+import { resolveProblemType, usesProtocol } from "@setdraft/contracts";
 import { exportFileName } from "./export-contract.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 
@@ -125,7 +126,9 @@ export async function writeLegacyProblemExport(
 	release: ManualRelease,
 	format: "fps" | "qduoj",
 ): Promise<string> {
-	if (release.judgingMode === "interactive") throw new Error("交互题仅支持 Hydro 和 DOMjudge 导出。");
+	if (resolveProblemType(release) === "communication")
+		throw new Error("通信题暂不支持 FPS／QDUOJ，请使用 Hydro 或 DOMjudge。");
+	if (usesProtocol(release)) throw new Error("交互题仅支持 Hydro 和 DOMjudge 导出。");
 	if (!release.report.success || release.scoringMode !== "acm" || release.checkerMode !== "text") {
 		throw new Error(
 			"FPS、QDUOJ 当前只支持使用默认文本 Checker 的 ACM 题目；自定义 testlib Checker 无法按其双参数 SPJ 协议安全转换。",

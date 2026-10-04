@@ -1,0 +1,299 @@
+:root {
+	color-scheme: light;
+}
+:root[data-theme="dark"] {
+	color-scheme: dark;
+	--canvas: #141414;
+	--panel: #1b1b1b;
+	--surface-subtle: #242424;
+	--surface-hover: #303030;
+	--ink: #ededed;
+	--muted: #b0b0b0;
+	--faint: #a1a1a1;
+	--line: #3a3a3a;
+	--accent: #ededed;
+	--accent-soft: #333333;
+	--success: #dedede;
+	--success-soft: #404040;
+	--danger: #ffb4af;
+	--danger-soft: #573735;
+	--warning: #e1ca92;
+	--warning-soft: #383124;
+	--focus-ring: #bcbcbc;
+}
+.shell-toolbar-tools {
+	gap: 12px;
+}
+.toolbar-brand {
+	color: var(--ink);
+	text-decoration: none;
+	white-space: nowrap;
+	font-weight: 600;
+}
+.toolbar-brand small,
+.brand-version {
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 400;
+	letter-spacing: 0;
+	margin-left: 3px;
+}
+.theme-switcher {
+	max-width: 120px;
+	min-height: 33px;
+	padding: 4px 8px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--panel);
+	color: var(--ink);
+	font-size: 12px;
+}
+.source-fields {
+	min-width: 0;
+	margin: 0;
+	padding: 16px;
+	border: 0;
+}
+.generator-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	border: 0;
+	border-bottom: 1px solid var(--line);
+	padding: 12px 16px;
+	margin: 0;
+	min-width: 0;
+}
+.generator-list .button {
+	align-items: start;
+	flex-direction: column;
+	min-width: 90px;
+	max-width: 180px;
+	text-align: left;
+}
+.generator-list small {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 11px;
+	color: var(--muted);
+}
+.generator-list [aria-pressed="true"] {
+	border-color: var(--accent);
+	background: var(--surface-subtle);
+}
+.generator-library > .source-fields {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 300px;
+}
+.generator-library .manual-code-actions {
+	flex-wrap: wrap;
+	margin-bottom: 12px;
+}
+.generator-library .manual-muted {
+	flex: none;
+	font-size: 12px;
+	margin-bottom: 0;
+}
+#workspace .generator-library .cm-editor {
+	min-height: 240px;
+}
+.wrong-solution-library {
+	min-width: 0;
+	padding: 16px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+}
+.wrong-solution-library h3 {
+	margin: 0;
+}
+.wrong-solution-library .source-fields {
+	padding: 0;
+}
+#workspace .wrong-solution-library .code-editor-surface {
+	min-height: 280px;
+	height: 36dvh;
+	flex: auto;
+}
+.solution-summaries .notice {
+	margin: 6px 0;
+	border-radius: var(--radius-control);
+	color: var(--warning);
+	background: var(--warning-soft);
+}
+.matrix-cell {
+	color: var(--ink);
+}
+
+/* Fixed paper previews retain their authored colors; app surfaces follow the selected theme. */
+:root[data-theme="dark"]
+	:is(
+		.app-sidebar,
+		.code-editor-help,
+		.manual-code-editor .cm-gutters,
+		.chat-code-block,
+		.manual-chat-markdown pre,
+		.pdf-preview-viewport,
+		.temporary-password,
+		.problem-tags > span,
+		.release-verified,
+		.manual-chat-message.user,
+		.chat-code-toolbar
+	) {
+	background: var(--surface-subtle);
+}
+:root[data-theme="dark"]
+	:is(
+		.auth-card input,
+		.account-form input,
+		.account-form select,
+		.user-create-form input,
+		.user-create-form select,
+		.users-card select,
+		.preference-row select,
+		.account-popover,
+		.workspace-avatar,
+		.current-reply,
+		.continue-form textarea
+	) {
+	background: var(--panel);
+	color: var(--ink);
+}
+:root[data-theme="dark"]
+	:is(
+		.shell-toolbar,
+		.app-sidebar,
+		.home-project-row,
+		.release-card-actions,
+		.chat-search-sources,
+		.composer-surface,
+		.manual-code-editor .cm-gutters,
+		.workspace-avatar
+	) {
+	border-color: var(--line);
+}
+:root[data-theme="dark"]
+	:is(
+		.shell-page-title,
+		.chat-search-sources summary,
+		.chat-search-sources li p,
+		.chat-search-warning,
+		.release-verified,
+		.problem-row-icon
+	) {
+	color: var(--muted);
+}
+:root[data-theme="dark"] .locale-switcher::before {
+	background: var(--surface-hover);
+}
+:root[data-theme="dark"]
+	:is(
+		.sidebar-nav a.active,
+		.sidebar-project.active,
+		.sidebar-settings.active,
+		.sidebar-new:hover,
+		.sidebar-nav a:hover,
+		.sidebar-project:hover,
+		.sidebar-settings:hover,
+		.manual-chat-list-item:hover,
+		.manual-chat-list-item.active,
+		.home-project-row:hover:not(:disabled),
+		.home-create:hover:not(:disabled),
+		.icon-button:hover:not(:disabled),
+		.chat-code-toolbar button:hover,
+		.account-popover button:hover,
+		.problem-row-main:hover
+	) {
+	background: var(--surface-hover);
+	border-color: var(--line);
+}
+:root[data-theme="dark"] :is(.button.primary, .chat-send, .auth-mark) {
+	background: var(--ink);
+	color: var(--canvas);
+}
+:root[data-theme="dark"] :is(.button.primary:hover:not(:disabled), .chat-send:hover:not(:disabled)) {
+	background: #d3d3d3;
+	color: var(--canvas);
+	border-color: #d3d3d3;
+}
+:root[data-theme="dark"] .chat-send:disabled {
+	background: var(--surface-hover);
+	color: var(--faint);
+}
+:root[data-theme="dark"]
+	:is(
+		.manual-code-editor .cm-activeLine,
+		.manual-code-editor .cm-activeLineGutter,
+		.manual-code-editor .cm-tooltip-autocomplete > ul > li[aria-selected]
+	) {
+	background: var(--surface-hover);
+}
+:root[data-theme="dark"] .manual-code-editor .cm-cursor {
+	border-left-color: var(--ink);
+}
+:root[data-theme="dark"]
+	:is(.manual-code-editor .cm-selectionBackground, .manual-code-editor .cm-focused .cm-selectionBackground) {
+	background: #38445a;
+}
+:root[data-theme="dark"] .manual-code-editor .cm-matchingBracket {
+	background: #38445a;
+	outline-color: #7989a3;
+}
+:root[data-theme="dark"] .manual-code-editor .cm-nonmatchingBracket {
+	background: #633730;
+	outline-color: #ff9a91;
+}
+:root[data-theme="dark"] .code-keyword,
+:root[data-theme="dark"] .code-invalid {
+	color: #ff9a91;
+}
+:root[data-theme="dark"] .code-name {
+	color: #ededed;
+}
+:root[data-theme="dark"] .code-function {
+	color: #cfafff;
+}
+:root[data-theme="dark"] .code-type {
+	color: #ffc49b;
+}
+:root[data-theme="dark"] .code-string {
+	color: #a5d3ff;
+}
+:root[data-theme="dark"] .code-literal,
+:root[data-theme="dark"] .code-meta {
+	color: #82bfff;
+}
+:root[data-theme="dark"] .code-punctuation,
+:root[data-theme="dark"] .code-comment {
+	color: #b0b0b0;
+}
+:root[data-theme="dark"] ::selection {
+	background: #38445a;
+	color: var(--ink);
+}
+:root[data-theme="dark"] .output-difference mark {
+	background: #665124;
+	color: #ffe9b0;
+}
+:root[data-theme="dark"] .upload-progress-dialog progress {
+	accent-color: var(--accent);
+}
+
+@media (max-width: 540px) {
+	.shell-page-title {
+		display: none;
+	}
+	.shell-toolbar-tools {
+		gap: 8px;
+	}
+	.toolbar-brand {
+		font-size: 13px;
+	}
+	.theme-switcher {
+		max-width: 100px;
+		font-size: 11px;
+	}
+}

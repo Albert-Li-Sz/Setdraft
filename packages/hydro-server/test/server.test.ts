@@ -162,6 +162,35 @@ afterEach(async () => {
 });
 
 describe("manual project API", () => {
+	it("rejects manual search keywords in JSON and multipart requests before queueing", async () => {
+		const conversation = await chat.create();
+		for (const key of ["searchQuery", "searchQueries"]) {
+			const result = await json(`/chats/${conversation.id}/messages`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					requestId: randomUUID(),
+					message: "question",
+					webSearch: true,
+					[key]: key === "searchQuery" ? "" : [],
+				}),
+			});
+			expect(result.status).toBe(422);
+			const form = new FormData();
+			form.set("requestId", randomUUID());
+			form.set("message", "question");
+			form.set(key, "");
+			expect(
+				(
+					await authenticatedFetch(`${origin}/api/chats/${conversation.id}/messages`, {
+						method: "POST",
+						body: form,
+					})
+				).status,
+			).toBe(422);
+		}
+		expect((await chat.get(conversation.id)).messages).toHaveLength(0);
+	});
 	it("serves PDF worker modules and codecs with executable MIME types", async () => {
 		await mkdir(join(root, "web"));
 		for (const [name, type] of [
@@ -324,8 +353,8 @@ describe("manual project API", () => {
 
 	it("accepts quoted Gen arguments but rejects shell execution syntax", () => {
 		expect(parseGeneratorScript("# seed\ngen large 1000000 100\ngen 'two words' 7 # comment")).toEqual([
-			["large", "1000000", "100"],
-			["two words", "7"],
+			{ generator: "gen", args: ["large", "1000000", "100"], line: 2 },
+			{ generator: "gen", args: ["two words", "7"], line: 3 },
 		]);
 		for (const script of ["gen 1 | cat", "gen 1 > 1.in", "gen $HOME", "echo 1", "gen 'unfinished"]) {
 			expect(() => parseGeneratorScript(script), script).toThrow();
@@ -398,8 +427,8 @@ describe("manual project API", () => {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ generatorStandard: "cpp99" }),
 		});
-		expect(invalid.status).toBe(400);
-		expect(invalid.body.message).toContain("C++11");
+		expect(invalid.status).toBe(422);
+		expect(invalid.body.message).toContain("C++ 或 Python 3");
 	});
 
 	it("streams and pairs input, output and answer files", async () => {

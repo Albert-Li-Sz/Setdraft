@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { isSafeFlatName } from "@setdraft/authoring";
-import type { ManualCaseSummary } from "@setdraft/contracts";
+import type { GeneratorCommand, ManualCaseSummary } from "@setdraft/contracts";
 import { ManualProjectError } from "./project-error.ts";
 
 const dataNamePattern = /^([A-Za-z0-9][A-Za-z0-9._-]*)\.(in|out|ans)$/;
@@ -15,8 +15,8 @@ export function dataStem(name: string): { stem: string; extension: "in" | "out" 
 }
 
 /** Parse one gen invocation per line without invoking a shell. */
-export function parseGeneratorScript(script: string): string[][] {
-	const commands: string[][] = [];
+export function parseGeneratorScript(script: string): GeneratorCommand[] {
+	const commands: GeneratorCommand[] = [];
 	for (const [index, line] of script.split(/\r?\n/u).entries()) {
 		const tokens: string[] = [];
 		let token = "";
@@ -59,11 +59,12 @@ export function parseGeneratorScript(script: string): string[][] {
 		if (quote || escaped) throw new ManualProjectError(`生成脚本第 ${index + 1} 行引号或转义不完整。`);
 		if (started) tokens.push(token);
 		if (tokens.length === 0) continue;
-		if (tokens[0] !== "gen") throw new ManualProjectError(`生成脚本第 ${index + 1} 行必须以 gen 开头。`);
+		if (!/^gen(?:_[1-9]\d{0,8})?$/u.test(tokens[0]))
+			throw new ManualProjectError(`生成脚本第 ${index + 1} 行必须以 Gen 编号开头，如 gen、gen_1。`);
 		if (tokens.length > 64 || tokens.some((item) => item.length > 1000)) {
 			throw new ManualProjectError(`生成脚本第 ${index + 1} 行参数过多或过长。`);
 		}
-		commands.push(tokens.slice(1));
+		commands.push({ generator: tokens[0], args: tokens.slice(1), line: index + 1 });
 	}
 	return commands;
 }

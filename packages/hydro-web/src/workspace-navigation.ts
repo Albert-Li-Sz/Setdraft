@@ -5,7 +5,7 @@ export interface WorkspaceLocation {
 	tab?: string;
 	run?: string;
 	task?: string;
-	mode?: "matrix" | "stress";
+	mode?: "matrix" | "pressure" | "stress";
 	solution?: string;
 	subtask?: string;
 	abnormal?: boolean;
@@ -22,7 +22,7 @@ export function readWorkspaceLocation(hash: string): WorkspaceLocation {
 		tab: id("tab"),
 		run: id("run"),
 		task: id("task"),
-		mode: params.get("mode") === "stress" ? "stress" : "matrix",
+		mode: params.get("mode") === "stress" ? "stress" : params.get("mode") === "pressure" ? "pressure" : "matrix",
 		solution: id("solution"),
 		subtask: id("subtask"),
 		abnormal: params.get("abnormal") === "1",

@@ -1,4 +1,5 @@
-import type { ContestPdfOptions, ManualProject } from "@setdraft/contracts";
+import { statementSectionList } from "@setdraft/authoring/statement";
+import { type ContestPdfOptions, type ManualProject, resolveProblemType, usesProtocol } from "@setdraft/contracts";
 import { preparePdfFootnotes, preparePdfMarkdown, preparePdfMarkdownParts, typstString } from "./markdown-typst.ts";
 
 export interface PdfProblem
@@ -7,6 +8,8 @@ export interface PdfProblem
 		| "statement"
 		| "statementSections"
 		| "judgingMode"
+		| "problemType"
+		| "protocolSamples"
 		| "samples"
 		| "attachments"
 		| "timeLimit"
@@ -35,21 +38,17 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 			assets.set(name, Buffer.from(attachment.contentBase64, "base64"));
 			images.set(`file://${attachment.name}`, `/${name}`);
 		}
-		const interactive = problem.judgingMode === "interactive";
+		const interactive = usesProtocol(problem);
 		const sections = problem.statementSections;
+		const selected = statementSectionList(problem);
 		const prepared = preparePdfFootnotes(
 			preparePdfMarkdownParts(
-				[
-					sections?.description ?? problem.statement,
-					interactive ? "" : (sections?.input ?? ""),
-					interactive ? "" : (sections?.output ?? ""),
-					interactive ? (sections?.interaction ?? "") : "",
-					sections?.notes ?? "",
-				],
+				selected.map(({ key }) => sections?.[key] ?? (key === "description" ? problem.statement : "")),
 				images,
 			),
 		);
-		const [description, input, output, interaction, notes] = prepared.parts.map(typstString);
+		const fields = new Map(selected.map(({ key }, index) => [key, typstString(prepared.parts[index])]));
+		const field = (key: string) => fields.get(key as (typeof selected)[number]["key"]) ?? typstString("");
 		const limits =
 			language === "en"
 				? [
@@ -61,16 +60,31 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 						["内存限制", problem.memoryLimit],
 					];
 		return `(problem: (
-  label: ${typstString(problem.label)}, display_name: ${typstString(problem.title)}, format: "markdown", interactive: ${interactive},
+  label: ${typstString(problem.label)}, display_name: ${typstString(problem.title)}, format: "markdown", interactive: ${interactive}, problem_type: ${typstString(resolveProblemType(problem))},
   limits: (${limits.map(([key, value]) => `(key: ${typstString(key)}, value: ${typstString(value)})`).join(", ")},),
   samples: (${problem.samples.map((sample) => `(input: ${typstString(sample.input)}, output: ${typstString(sample.output)}),`).join("\n")}),
+  protocol_samples: (${(interactive ? (problem.protocolSamples ?? []) : [])
+		.map(
+			(sample) =>
+				`(rounds: (${sample.rounds
+					.filter((group) => resolveProblemType(problem) === "communication" || group.round === 1)
+					.map(
+						(group) =>
+							`(round: ${group.round}, messages: (${group.messages.map((message) => `(sender: ${typstString(message.sender)}, text: ${typstString(message.text)}),`).join(" ")})),`,
+					)
+					.join(" ")})),`,
+		)
+		.join(" ")}),
 ), statement: (
   footnotes: (${prepared.footnotes.map((note) => `(body: ${typstString(note.body)}, nested: (${note.nested.map((index) => `${index},`).join(" ")})),`).join(" ")}),
-  description: ${description},
-  input: ${input},
-  output: ${output},
-  interaction: ${interaction},
-  notes: ${notes},
+  description: ${field("description")},
+  input: ${field("input")},
+  output: ${field("output")},
+  interaction: ${field("interaction")},
+  notes: ${field("notes")},
+  communication: ${field("communication")},
+  first_round: ${field("firstRound")},
+  second_round: ${field("secondRound")},
 ))`;
 	});
 	const source = (selected: string[], standalone: boolean) => `#import "/xcpc/lib.typ": contest-conf

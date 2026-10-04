@@ -26,9 +26,32 @@ it.skipIf(!dockerAvailable)(
 				join(directory, "testlib.h"),
 			);
 			await writeFile(join(directory, "input.in"), "1 2\n");
-			await writeFile(join(directory, "answer.out"), "3\n");
-			await writeFile(join(directory, "equivalent.out"), "3 \r\n\r\n");
-			await writeFile(join(directory, "wrong.out"), "4\n");
+			await writeFile(join(directory, "answer.out"), "Hello 3\n");
+			await writeFile(join(directory, "equivalent.out"), "Hello 3 \t\r\n\t\r\n");
+			await writeFile(join(directory, "bare-cr.out"), "Hello 3\r\r");
+			const different = ["Hello 4\n", "Hello  3\n", "hello 3\n", "Hello 3.0\n", "Hello\n3\n", "Hello\t3\n"];
+			for (const [index, text] of different.entries()) await writeFile(join(directory, `wrong-${index}.out`), text);
+			execFileSync(
+				"docker",
+				[
+					"run",
+					"--rm",
+					"--network",
+					"none",
+					"--mount",
+					`type=bind,source=${directory},target=/work`,
+					"--workdir",
+					"/work",
+					"setdraft/sandbox:local",
+					"g++",
+					"-std=c++17",
+					"-I.",
+					"checker.cc",
+					"-o",
+					"checker",
+				],
+				{ stdio: "pipe", timeout: 30000 },
+			);
 			const run = (output: string) => {
 				try {
 					const stdout = execFileSync(
@@ -43,9 +66,10 @@ it.skipIf(!dockerAvailable)(
 							"--workdir",
 							"/work",
 							"setdraft/sandbox:local",
-							"sh",
-							"-c",
-							`g++ -std=c++17 -I. checker.cc -o checker && ./checker input.in ${output} answer.out`,
+							"./checker",
+							"input.in",
+							output,
+							"answer.out",
 						],
 						{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
 					);
@@ -56,7 +80,12 @@ it.skipIf(!dockerAvailable)(
 			};
 			expect(run("answer.out").passed).toBe(true);
 			expect(run("equivalent.out").passed).toBe(true);
-			expect(run("wrong.out")).toMatchObject({ passed: false, output: expect.stringContaining("wrong answer") });
+			expect(run("bare-cr.out").passed).toBe(true);
+			for (const index of different.keys())
+				expect(run(`wrong-${index}.out`)).toMatchObject({
+					passed: false,
+					output: expect.stringContaining("wrong answer"),
+				});
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

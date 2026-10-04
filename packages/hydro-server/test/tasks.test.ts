@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { projectSolutions } from "@setdraft/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
@@ -205,38 +206,74 @@ describe("persistent task queue", () => {
 		projects.database.sql.close();
 	});
 
-	it("interrupts a persisted matrix run with its task and preserves retry options", async () => {
+	it.each(["matrix", "pressure"] as const)(
+		"interrupts a persisted %s run and preserves retry options",
+		async (kind) => {
+			const projects = new ManualProjectStore({ root });
+			const project = await projects.create("acm");
+			await projects.update(project.id, {
+				solutions: [
+					...projectSolutions(project),
+					{
+						id: "wrong",
+						name: "Wrong",
+						language: "python3",
+						code: "print(0)",
+						purpose: "wrong",
+						required: false,
+						expectation: { kind: "WA" },
+					},
+				],
+			});
+			const verification = { kind, solutionIds: kind === "pressure" ? ["wrong"] : ["reference"] };
+			const id = randomUUID(),
+				runId = randomUUID(),
+				now = new Date().toISOString();
+			await projects.database.sql.execute(
+				"INSERT INTO tasks (id,kind,resource,state,fingerprint,created_at,updated_at,owner_pid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+				[id, kind, `project:${project.id}`, "running", "old-hash", now, now, 999999],
+			);
+			await projects.database.put("task-options", id, { verification });
+			await projects.database.put("verification-run", runId, {
+				id: runId,
+				taskId: id,
+				projectId: project.id,
+				state: "running",
+				solutions: [],
+				createdAt: now,
+			});
+			const queue = new TaskQueue(projects, new ContestStore(projects));
+			queues.push(queue);
+			await queue.ready;
+			queue.close();
+			expect((await queue.get(id)).state).toBe("interrupted");
+			expect(await projects.runs.get(project.id, runId)).toMatchObject({
+				state: "failed",
+				error: expect.stringContaining("中断"),
+			});
+			expect(await queue.retry(id)).toMatchObject({
+				kind,
+				verification,
+			});
+		},
+	);
+
+	it("cancels queued legacy differential work at startup and rejects its retry", async () => {
 		const projects = new ManualProjectStore({ root });
 		const project = await projects.create("acm");
 		const id = randomUUID(),
-			runId = randomUUID(),
 			now = new Date().toISOString();
 		await projects.database.sql.execute(
-			"INSERT INTO tasks (id,kind,resource,state,fingerprint,created_at,updated_at,owner_pid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-			[id, "matrix", `project:${project.id}`, "running", "old-hash", now, now, 999999],
+			"INSERT INTO tasks(id,kind,resource,state,fingerprint,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7)",
+			[id, "stress", `project:${project.id}`, "queued", "legacy", now, now],
 		);
-		await projects.database.put("task-options", id, { verification: { kind: "matrix", solutionIds: ["reference"] } });
-		await projects.database.put("verification-run", runId, {
-			id: runId,
-			taskId: id,
-			projectId: project.id,
-			state: "running",
-			solutions: [],
-			createdAt: now,
-		});
 		const queue = new TaskQueue(projects, new ContestStore(projects));
 		queues.push(queue);
 		await queue.ready;
+		expect(await queue.get(id)).toMatchObject({ state: "cancelled", error: expect.stringContaining("停用") });
+		await expect(queue.retry(id)).rejects.toMatchObject({ statusCode: 410 });
+		await expect(queue.submit("stress", project.id)).rejects.toMatchObject({ statusCode: 410 });
 		queue.close();
-		expect((await queue.get(id)).state).toBe("interrupted");
-		expect(await projects.runs.get(project.id, runId)).toMatchObject({
-			state: "failed",
-			error: expect.stringContaining("中断"),
-		});
-		expect(await queue.retry(id)).toMatchObject({
-			kind: "matrix",
-			verification: { kind: "matrix", solutionIds: ["reference"] },
-		});
 	});
 
 	it("rejects a matrix submission if the draft changes during option validation", async () => {

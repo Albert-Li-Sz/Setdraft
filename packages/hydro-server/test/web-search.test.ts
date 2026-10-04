@@ -225,7 +225,7 @@ it("preserves caller cancellation instead of reporting an upstream outage", asyn
 	const database = new WorkspaceDatabase(root);
 	await expect(search.search(database, randomUUID(), randomUUID(), "query", controller.signal)).rejects.toBe(reason);
 });
-it("persists search events and sources and sends only explicit query text to the provider", async () => {
+it("persists search events and sources and sends only AI planned query text to the provider", async () => {
 	const identity = new IdentityStore(root);
 	let query = "";
 	const service = new WebSearch(identity, async (input) => {
@@ -248,6 +248,7 @@ it("persists search events and sources and sends only explicit query text to the
 		configuration,
 		search: { service, userId: db.sql.accountId! },
 		client: async ({ context, onDelta }) => {
+			if (context.systemPrompt?.includes("关键词规划器")) return '["public query"]';
 			expect(context.systemPrompt).toContain("不可信");
 			expect(context.systemPrompt).not.toContain("External reference");
 			expect(JSON.stringify(context.messages.at(-1))).toContain("External reference");
@@ -260,21 +261,13 @@ it("persists search events and sources and sends only explicit query text to the
 	try {
 		const conversation = await chat.create();
 		const requestId = randomUUID();
-		await queue.submit(
-			conversation.id,
-			requestId,
-			"private conversation",
-			"private project",
-			undefined,
-			[],
-			true,
-			"public query",
-		);
+		await queue.submit(conversation.id, requestId, "private conversation", "private project", undefined, [], true);
 		await queue.idle();
 		expect(query).toBe("public query");
 		expect((await queue.get(requestId, conversation.id)).state).toBe("done");
 		expect((await queue.events(requestId, conversation.id, 0)).map((event) => event.type)).toEqual([
 			"start",
+			"search",
 			"search",
 			"search",
 			"search",
@@ -297,7 +290,8 @@ it("continues the model reply with a visible search failure and no invented sour
 		database: db,
 		configPath: join(root, "unused"),
 		search: { service, userId: randomUUID() },
-		client: async () => "offline answer",
+		client: async ({ context }) =>
+			context.systemPrompt?.includes("关键词规划器") ? '["question"]' : "offline answer",
 	});
 	await chat.configure({ provider: "openai-completions", modelId: "mock", apiKey: "fake" });
 	const conversation = await chat.create();
@@ -311,7 +305,6 @@ it("continues the model reply with a visible search failure and no invented sour
 		[],
 		randomUUID(),
 		true,
-		"question",
 	);
 	expect(result.messages.at(-1)).toMatchObject({
 		content: "offline answer",

@@ -22,7 +22,7 @@ import {
 } from "./ai-configuration.ts";
 import { ChatError } from "./chat-error.ts";
 import { NOOP_OBSERVABILITY, type Observability, secondsSince } from "./observability.ts";
-import { plannedSearch, searchQueries, totalUsage } from "./search-planner.ts";
+import { plannedSearch, totalUsage } from "./search-planner.ts";
 
 export type { ChatConfigurationSnapshot, ChatProfileSnapshot } from "./ai-configuration.ts";
 export { ChatError } from "./chat-error.ts";
@@ -437,7 +437,7 @@ export class ChatService {
 		if ((!message.trim() && images.length === 0) || message.length > 40_000)
 			throw new ChatError("请填写消息或添加图片；文字最多 40000 个字符。");
 		if (contextSnapshot && contextSnapshot.length > 80_000) throw new ChatError("附带的题目上下文过长。");
-		if (searchQuery?.trim()) searchQueries(searchQuery.split("\n").filter((item) => item.trim()));
+		if (searchQuery !== undefined) throw new ChatError("搜索关键词由 AI 自动生成，不支持手动输入。", 422);
 		const selectedProfileId = profileId ?? chat.profileId ?? this.catalog.defaultProfileId;
 		const configuration = this.catalog.profiles.find((item) => item.id === selectedProfileId);
 		if (!configuration) throw new ChatError("当前对话使用的 AI 配置不存在，请重新选择。", 422);
@@ -522,7 +522,6 @@ export class ChatService {
 					requestId: requestId ?? user.id,
 					chatId: id,
 					messages: chat.messages,
-					manual: searchQuery,
 					configuration,
 					invoke: (request) => this.invoke(request),
 					search: this.search,

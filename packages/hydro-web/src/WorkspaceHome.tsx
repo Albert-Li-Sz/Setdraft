@@ -1,3 +1,4 @@
+import { problemTypeNames, resolveProblemType } from "@setdraft/contracts";
 import { useState } from "react";
 import { EmptyState } from "./EmptyState.tsx";
 import { Icon } from "./Icon.tsx";
@@ -102,6 +103,8 @@ export function WorkspaceHome({
 								<span className="project-row-copy">
 									<strong>{project.title || t("未命名题目")}</strong>
 									<small>
+										{t(problemTypeNames[resolveProblemType(project)])}
+										<span>·</span>
 										{project.scoringMode.toUpperCase()}
 										<span>·</span>
 										{t("测试点 {0}", project.cases.length)}

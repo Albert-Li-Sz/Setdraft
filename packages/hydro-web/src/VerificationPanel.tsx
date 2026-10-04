@@ -5,16 +5,16 @@ import {
 	type ProjectSnapshot,
 	projectSolutions,
 	type VerificationOptions,
-	type VerificationRun,
+	verificationContractVersion,
 } from "@setdraft/contracts";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, requestJson, waitForTask } from "./api-client.ts";
 import { copyText } from "./browser-capabilities.ts";
-import { Dialog } from "./Dialog.tsx";
 import { useLocale } from "./i18n.tsx";
 import type { ProjectSession } from "./project-session.ts";
 import { useVerificationHistory } from "./use-verification-history.ts";
 import { VerificationDetail } from "./VerificationDetail.tsx";
+import { WrongSolutionLibrary } from "./WrongSolutionLibrary.tsx";
 import { replaceWorkspaceLocation } from "./workspace-navigation.ts";
 
 export function VerificationPanel({
@@ -45,18 +45,8 @@ export function VerificationPanel({
 	const setAbnormal = (value: boolean) => replaceWorkspaceLocation(project.id, { abnormal: value });
 	const [limit, setLimit] = useState(100);
 	const solutions = projectSolutions(project);
-	const [baseline, setBaseline] = useState(project.referenceSolutionId ?? "reference");
-	const [targets, setTargets] = useState<string[]>(
-		solutions.filter((item) => item.id !== baseline).map((item) => item.id),
-	);
-	const [command, setCommand] = useState("gen {seed}");
-	const [seed, setSeed] = useState(1);
-	const [rounds, setRounds] = useState(100);
-	const [seconds, setSeconds] = useState(60);
-	const [importing, setImporting] = useState(false);
-	const [importName, setImportName] = useState("");
-	const [importSubtask, setImportSubtask] = useState(project.subtasks[0]?.id ?? 1);
-	const [importRevision, setImportRevision] = useState(0);
+	const [excluded, setExcluded] = useState<string[]>([]);
+	const wrong = solutions.filter((item) => item.expectation.kind !== "AC");
 	const lifecycle = useRef<AbortController | undefined>(undefined);
 	const pending = useRef(false);
 	useEffect(() => {
@@ -70,7 +60,7 @@ export function VerificationPanel({
 		setCopied(false);
 		setLimit(100);
 	}, [run?.id]);
-	async function start(replay?: VerificationRun, subset?: MatrixOptions) {
+	async function start(subset?: MatrixOptions | { kind: "pressure"; solutionIds: string[] }) {
 		if (pending.current || disabled) return;
 		pending.current = true;
 		setBusy(true);
@@ -82,26 +72,21 @@ export function VerificationPanel({
 			const current = session.getSnapshot().project;
 			if (!current || current.id !== project.id) throw new Error("题目会话已变化。");
 			const options: VerificationOptions =
-				mode === "matrix"
-					? (subset ?? { kind: "matrix" })
-					: {
-							kind: "stress",
-							baselineId: baseline,
-							solutionIds: targets.filter((id) => id !== baseline && solutions.some((item) => item.id === id)),
-							command,
-							seed,
-							rounds,
-							budgetMs: seconds * 1000,
-						};
-			const accepted = await requestJson<{ task: BackgroundTask }>(
-				apiUrl(apiOrigin, replay ? `${route}/${replay.id}/replay` : route),
-				{
-					method: "POST",
-					signal,
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ ...options, expectedRevision: current.revision }),
-				},
-			);
+				subset ??
+				(mode === "pressure"
+					? {
+							kind: "pressure",
+							solutionIds: projectSolutions(current)
+								.filter((item) => item.expectation.kind !== "AC" && !excluded.includes(item.id))
+								.map((item) => item.id),
+						}
+					: { kind: "matrix" });
+			const accepted = await requestJson<{ task: BackgroundTask }>(apiUrl(apiOrigin, route), {
+				method: "POST",
+				signal,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ...options, expectedRevision: current.revision }),
+			});
 			setTask(accepted.task);
 			replaceWorkspaceLocation(project.id, { tab: "validation", mode, task: accepted.task.id, run: undefined });
 			const result = await waitForTask<{ runId: string }>(apiOrigin, accepted.task.id, setTask, signal);
@@ -127,43 +112,6 @@ export function VerificationPanel({
 			if (!lifecycle.current?.signal.aborted) setError(cause instanceof Error ? cause.message : "取消失败。");
 		}
 	}
-	async function previewImport() {
-		try {
-			await session.flush();
-			setImportRevision(session.getSnapshot().project?.revision ?? 0);
-			setImportName(`stress-${run?.id.slice(0, 8)}.in`);
-			setImporting(true);
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "请先保存题目。");
-		}
-	}
-	async function importCase() {
-		if (!run || pending.current) return;
-		pending.current = true;
-		setBusy(true);
-		const signal = AbortSignal.any([session.signal, lifecycle.current!.signal]);
-		try {
-			await session.flush();
-			signal.throwIfAborted();
-			if (session.getSnapshot().project?.revision !== importRevision)
-				throw new Error("题目版本已变化，请重新预览。");
-			const next = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, `${route}/${run.id}/import`), {
-				method: "POST",
-				signal,
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ expectedRevision: importRevision, name: importName, subtaskId: importSubtask }),
-			});
-			signal.throwIfAborted();
-			session.accept(next);
-			setImporting(false);
-			await select(run.id);
-		} catch (cause) {
-			if (!signal.aborted) setError(cause instanceof Error ? cause.message : "反例入库失败。");
-		} finally {
-			pending.current = false;
-			if (!signal.aborted) setBusy(false);
-		}
-	}
 	const matrix = run?.matrix;
 	const columns = run?.solutions.filter((item) => !solutionFilter || item.id === solutionFilter) ?? [];
 	const cellMap = new Map(matrix?.cells.map((item) => [`${item.caseId}/${item.solutionId}`, item]));
@@ -177,7 +125,11 @@ export function VerificationPanel({
 						return !value || value.verdict !== "AC" || value.score !== 100;
 					})),
 		) ?? [];
-	const stale = run && (run.revision !== project.revision || session.getSnapshot().status !== "saved");
+	const stale =
+		run &&
+		(run.revision !== project.revision ||
+			run.verificationContractVersion !== verificationContractVersion ||
+			session.getSnapshot().status !== "saved");
 	const cellButton = (value?: MatrixCell) =>
 		value ? (
 			<button
@@ -185,10 +137,14 @@ export function VerificationPanel({
 				className={`matrix-cell ${value.verdict === "AC" && value.score === 100 ? "passed" : "failed"}`}
 				onClick={() => setCell(value)}
 			>
-				<strong>{value.verdict}</strong>
+				<strong>
+					{value.verdict}
+					{value.failedRound ? ` · ${t("第 {0} 轮", value.failedRound)}` : ""}
+				</strong>
 				<small>
 					{value.points !== undefined ? `${value.points} / ${value.fullPoints}` : `${value.score}%`} ·{" "}
 					{value.durationMs} ms
+					{value.memoryBytes !== undefined && ` · ${(value.memoryBytes / 1048576).toFixed(1)} MiB`}
 				</small>
 			</button>
 		) : (
@@ -211,12 +167,20 @@ export function VerificationPanel({
 					<button
 						className="button secondary"
 						type="button"
-						aria-pressed={mode === "stress"}
+						aria-pressed={mode === "pressure"}
 						onClick={() => {
-							setMode("stress");
+							setMode("pressure");
 						}}
 					>
-						{t("随机对拍")}
+						{t("压力测试")}
+					</button>
+					<button
+						className="button secondary"
+						type="button"
+						aria-pressed={mode === "stress"}
+						onClick={() => setMode("stress")}
+					>
+						{t("旧对拍记录")}
 					</button>
 				</div>
 				{busy ? (
@@ -232,10 +196,14 @@ export function VerificationPanel({
 					<button
 						className="button secondary"
 						type="button"
-						disabled={disabled || (mode === "stress" && project.judgingMode === "interactive")}
+						disabled={
+							disabled ||
+							mode === "stress" ||
+							(mode === "pressure" && !wrong.some((item) => !excluded.includes(item.id)))
+						}
 						onClick={() => void start()}
 					>
-						{t(mode === "matrix" ? "运行完整矩阵" : "开始对拍")}
+						{t(mode === "matrix" ? "运行完整矩阵" : mode === "pressure" ? "运行压力测试" : "旧记录只读")}
 					</button>
 				)}
 			</div>
@@ -248,93 +216,35 @@ export function VerificationPanel({
 					)}
 				</output>
 			)}
-			{mode === "stress" &&
-				(project.judgingMode === "interactive" ? (
-					<p>{t("交互题请使用验证矩阵；随机对拍暂不支持。")}</p>
-				) : (
-					<div className="stress-options">
-						<div className="verification-fields">
-							<label className="field">
-								<span>{t("基准解法")}</span>
-								<select
-									aria-label={t("基准解法")}
-									value={baseline}
-									disabled={busy}
-									onChange={(event) => setBaseline(event.target.value)}
-								>
-									{solutions.map((item) => (
-										<option key={item.id} value={item.id}>
-											{item.name}
-										</option>
-									))}
-								</select>
-							</label>
-							<label className="field">
-								<span>{t("生成器参数模板")}</span>
-								<input
-									value={command}
-									disabled={busy}
-									onChange={(event) => setCommand(event.target.value)}
-									placeholder="gen {seed}"
-								/>
-							</label>
-							<label className="field">
-								<span>{t("起始种子")}</span>
-								<input
-									type="number"
-									min={0}
-									value={seed}
-									disabled={busy}
-									onChange={(event) => setSeed(Number(event.target.value))}
-								/>
-							</label>
-							<label className="field">
-								<span>{t("轮数")}</span>
-								<input
-									type="number"
-									min={1}
-									max={1000}
-									value={rounds}
-									disabled={busy}
-									onChange={(event) => setRounds(Number(event.target.value))}
-								/>
-							</label>
-							<label className="field">
-								<span>{t("总预算（秒，含编译）")}</span>
-								<input
-									type="number"
-									min={1}
-									max={900}
-									value={seconds}
-									disabled={busy}
-									onChange={(event) => setSeconds(Number(event.target.value))}
-								/>
-							</label>
-						</div>
-						<fieldset className="verification-targets">
-							<legend>{t("待测解法")}</legend>
-							{solutions
-								.filter((item) => item.id !== baseline)
-								.map((item) => (
-									<label key={item.id}>
-										<input
-											type="checkbox"
-											disabled={busy}
-											checked={targets.includes(item.id)}
-											onChange={(event) =>
-												setTargets((current) =>
-													event.target.checked
-														? [...current, item.id]
-														: current.filter((id) => id !== item.id),
-												)
-											}
-										/>
-										{item.name}
-									</label>
-								))}
+			{mode === "pressure" && (
+				<>
+					<WrongSolutionLibrary project={project} session={session} disabled={busy || disabled} />
+					{wrong.length > 0 && (
+						<fieldset className="verification-targets" disabled={busy || disabled}>
+							<legend>{t("选择待测错误解")}</legend>
+							{wrong.map((item) => (
+								<label key={item.id} title={item.name}>
+									<input
+										type="checkbox"
+										checked={!excluded.includes(item.id)}
+										onChange={(event) =>
+											setExcluded((current) =>
+												event.target.checked
+													? current.filter((id) => id !== item.id)
+													: [...current, item.id],
+											)
+										}
+									/>
+									<span>
+										{item.name} · {item.expectation.kind}
+									</span>
+								</label>
+							))}
 						</fieldset>
-					</div>
-				))}
+					)}
+				</>
+			)}
+			{mode === "stress" && <p className="info-strip">{t("随机对拍已停用；历史记录只读，可下载原复现包。")}</p>}
 			{(error || history.error || task?.error) && (
 				<output className="notice failed" role="alert">
 					{t(error || history.error || task?.error || "")}
@@ -354,7 +264,14 @@ export function VerificationPanel({
 					{(run && !runs.some((item) => item.id === run.id) ? [run, ...runs] : runs).map((item) => (
 						<option key={item.id} value={item.id}>
 							{new Date(item.createdAt).toLocaleString(locale)} ·{" "}
-							{t(item.options.kind === "matrix" ? "验证矩阵" : "随机对拍")} · v{item.revision} ·{" "}
+							{t(
+								item.options.kind === "matrix"
+									? "验证矩阵"
+									: item.options.kind === "pressure"
+										? "压力测试"
+										: "旧对拍记录",
+							)}{" "}
+							· v{item.revision} ·{" "}
 							{t(
 								item.state === "running"
 									? "运行中"
@@ -388,7 +305,7 @@ export function VerificationPanel({
 					{t("下一页")}
 				</button>
 			</div>
-			{!runs.length && <p className="manual-muted">{t("尚无运行记录。矩阵检查现有测试点，对拍寻找新的反例。")}</p>}
+			{!runs.length && <p className="manual-muted">{t("尚无运行记录。矩阵与压力测试检查现有测试点。")}</p>}
 			{run && (
 				<>
 					<div className="manual-report-status">
@@ -457,11 +374,13 @@ export function VerificationPanel({
 							<p>
 								{t(matrix.full ? "完整数据集" : "抽样结果，不能用于发布")} ·{" "}
 								{t(
-									run.state === "running"
-										? "运行中，尚不能用于发布"
-										: matrix.requiredPassed
-											? "全部必检预期满足"
-											: "必检预期未全部满足",
+									run.options.kind === "pressure"
+										? "压力测试检查错误解；发布时重新验证全部必检程序"
+										: run.state === "running"
+											? "运行中，尚不能用于发布"
+											: matrix.requiredPassed
+												? "全部必检预期满足"
+												: "必检预期未全部满足",
 								)}
 							</p>
 							<div className="verification-fields">
@@ -514,7 +433,13 @@ export function VerificationPanel({
 										!solutionFilter ||
 										!solutions.some((item) => item.id === solutionFilter)
 									}
-									onClick={() => void start(undefined, { kind: "matrix", solutionIds: [solutionFilter] })}
+									onClick={() =>
+										void start(
+											mode === "pressure"
+												? { kind: "pressure", solutionIds: [solutionFilter] }
+												: { kind: "matrix", solutionIds: [solutionFilter] },
+										)
+									}
 								>
 									{t("重跑当前解法")}
 								</button>
@@ -544,7 +469,11 @@ export function VerificationPanel({
 											setError("所选失败项已不存在，请运行完整矩阵。");
 											return;
 										}
-										void start(undefined, { kind: "matrix", solutionIds, caseIds });
+										void start(
+											mode === "pressure"
+												? { kind: "pressure", solutionIds }
+												: { kind: "matrix", solutionIds, caseIds },
+										);
 									}}
 								>
 									{t("重跑失败项")}
@@ -574,6 +503,9 @@ export function VerificationPanel({
 															: "不符合预期",
 												)}
 											</span>
+											{summary && !summary.matches && run.state !== "running" && (
+												<output className="notice pending">{t(summary.message)}</output>
+											)}
 											{summary?.compile && !summary.compile.passed && <pre>{summary.compile.message}</pre>}
 										</div>
 									);
@@ -660,14 +592,6 @@ export function VerificationPanel({
 									</div>
 									{run.stress.truncated && <p>{t("预览已截断；下载与入库使用完整文件。")}</p>}
 									<div className="heading-actions">
-										<button
-											className="button secondary"
-											type="button"
-											disabled={busy || disabled}
-											onClick={() => void start(run)}
-										>
-											{t("按原快照重放")}
-										</button>
 										<a
 											className="button secondary button-link"
 											download
@@ -675,14 +599,6 @@ export function VerificationPanel({
 										>
 											{t("下载复现包")}
 										</a>
-										<button
-											className="button secondary"
-											type="button"
-											disabled={busy || disabled || !!run.importedCase}
-											onClick={() => void previewImport()}
-										>
-											{t(run.importedCase ? "已加入测试数据" : "加入测试数据")}
-										</button>
 									</div>
 								</>
 							)}
@@ -727,63 +643,6 @@ export function VerificationPanel({
 				cell={cell}
 				onClose={() => setCell(undefined)}
 			/>
-			<Dialog
-				open={importing}
-				onClose={() => {
-					if (!busy) setImporting(false);
-				}}
-				labelledBy="import-counterexample-title"
-			>
-				<form
-					onSubmit={(event) => {
-						event.preventDefault();
-						void importCase();
-					}}
-				>
-					<h2 id="import-counterexample-title">{t("反例入库预览")}</h2>
-					<p>{t("题目版本：{0}", importRevision)}</p>
-					<pre>{run?.stress?.inputPreview}</pre>
-					<p>{t("导入完整输入与基准输出，并使旧验证结果过期。")}</p>
-					<label className="field">
-						<span>{t("输入文件名")}</span>
-						<input
-							required
-							value={importName}
-							disabled={busy}
-							onChange={(event) => setImportName(event.target.value)}
-						/>
-					</label>
-					<label className="field">
-						<span>{t("子任务")}</span>
-						<select
-							aria-label={t("子任务")}
-							value={importSubtask}
-							disabled={busy}
-							onChange={(event) => setImportSubtask(Number(event.target.value))}
-						>
-							{project.subtasks.map((item) => (
-								<option key={item.id} value={item.id}>
-									{item.id} · {item.score}
-								</option>
-							))}
-						</select>
-					</label>
-					{error && <p role="alert">{t(error)}</p>}
-					<div className="confirmation-actions">
-						<button
-							className="button secondary"
-							type="button"
-							disabled={busy}
-							onClick={() => setImporting(false)}
-						>
-							{t("取消")}
-						</button>
-						<button className="button primary" type="submit" disabled={busy}>
-							{t("确认加入")}
-						</button>
-					</div>
-				</form>
-			</Dialog>
 		</section>
 	);
 }

@@ -1,0 +1,111 @@
+.problem-type-select small {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.communication-settings {
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.communication-flow {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	padding: 0;
+	margin: 0 0 20px;
+	list-style: none;
+}
+.communication-flow li {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-size: 13px;
+}
+.communication-flow li + li::before {
+	content: "→";
+	color: var(--muted);
+}
+.protocol-round {
+	display: grid;
+	gap: 12px;
+	min-width: 0;
+	margin: 16px 0 0;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+}
+.protocol-round legend {
+	padding: 0 6px;
+	font-size: 13px;
+	font-weight: 600;
+}
+.protocol-round > .button {
+	justify-self: start;
+}
+.protocol-message {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+}
+.protocol-message-toolbar {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.protocol-message-toolbar > span {
+	color: var(--muted);
+	font-size: 12px;
+}
+.protocol-message-toolbar select {
+	flex: 1 1 120px;
+	min-width: 0;
+	min-height: var(--control-height);
+	padding: 6px 10px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-control);
+	background: var(--panel);
+	color: var(--ink);
+}
+.protocol-message textarea {
+	width: 100%;
+	min-height: 100px;
+	resize: vertical;
+	padding: 12px;
+	border: 1px solid var(--line);
+	background: var(--panel);
+	color: var(--ink);
+	font-family: var(--font-mono, monospace);
+	font-size: 13px;
+	line-height: 1.6;
+}
+.round-diagnostics {
+	min-width: 0;
+	margin-top: 20px;
+	border-top: 1px solid var(--line);
+}
+.round-diagnostics .statement-tabs {
+	padding-inline: 0;
+}
+.round-diagnostics pre {
+	max-height: 280px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.round-diagnostics .button-link {
+	margin: 4px 8px 4px 0;
+}
+@container (max-width: 420px) {
+	.communication-flow {
+		flex-direction: column;
+	}
+	.communication-flow li + li::before {
+		content: "↓";
+	}
+	.protocol-round {
+		padding: 8px;
+	}
+}

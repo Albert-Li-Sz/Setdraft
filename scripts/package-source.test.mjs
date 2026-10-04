@@ -15,7 +15,7 @@ test("corresponding source includes application, notices, tests and installation
  const files = await collectSourceFiles(root);
  for (const required of [
   "Dockerfile", "compose.yaml", ".env.example", "package-lock.json", "scripts/package-source.mjs", ".husky/pre-commit", "backup.sh",
-  "LICENSE", "COPYING.md", "LICENSES/AGPL-3.0.txt", "docs/authoring-guide.md", "fixtures/hydro/a-plus-b/README.md",
+  "LICENSE", "COPYING.md", "LICENSES/AGPL-3.0.txt", "CONTEXT.md", "docs/authoring-guide.md", "fixtures/hydro/a-plus-b/README.md",
   "fixtures/hydro/a-plus-b/authoring/reference.cc", "packages/ai/scripts/check-model-data.ts",
   "deploy/Caddyfile.example", "packages/ai/bedrock-provider.d.ts", "packages/ai/bedrock-provider.js",
   "packages/hydro-server/src/contest-pdf-worker.ts", "packages/hydro-server/assets/xcpc/lib.typ",
@@ -24,6 +24,11 @@ test("corresponding source includes application, notices, tests and installation
   "playwright.config.mjs", "e2e/fixtures.mjs", "e2e/core.spec.mjs", "e2e/full.spec.mjs", "fixtures/markdown/statement.md",
  ]) assert.ok(files.includes(required), required);
  assert.ok(files.every((path) => !/(?:^|\/)(?:node_modules|dist|\.git|\.setdraft|\.artifacts)(?:\/|$)/u.test(path)));
+ const dockerfile = await readFile(join(root, "Dockerfile"), "utf8");
+ const copiedRootFiles = new Set([...dockerfile.matchAll(/^COPY (?!\s*--from=)(.+)$/gmu)]
+  .flatMap((match) => match[1].split(/\s+/u).slice(0, -1)));
+ for (const path of files.filter((file) => !file.includes("/")))
+  assert.ok(copiedRootFiles.has(path), `Docker build must copy source archive input ${path}`);
 });
 
 test("published archive omits secrets, outputs, user data and symlinks and is reproducible without itself", async () => {

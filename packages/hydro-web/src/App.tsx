@@ -1,4 +1,4 @@
-import type { AuthUser } from "@setdraft/contracts";
+import type { AuthUser, ProblemType } from "@setdraft/contracts";
 import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { AppShell } from "./AppShell.tsx";
 import { RevisionConflict, requestJson } from "./api-client.ts";
@@ -6,8 +6,8 @@ import { authClient, authFetch } from "./auth-client.ts";
 import { CopyProblemDialog } from "./CopyProblemDialog.tsx";
 import { Dialog } from "./Dialog.tsx";
 import { readFileWithProgress, transferFiles, transfers } from "./file-transfer.ts";
-import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
+import { ProblemTypeSelect } from "./ProblemTypeSelect.tsx";
 import {
 	apiUrl,
 	type BackgroundTask,
@@ -58,6 +58,9 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 	const [sandbox, setSandbox] = useState<SandboxStatus>();
 	const [aiConfigured, setAiConfigured] = useState(false);
 	const [choosingScoringMode, setChoosingScoringMode] = useState(false);
+	const [newScoringMode, setNewScoringMode] = useState<"acm" | "oi">("acm");
+	const [newProblemType, setNewProblemType] = useState<ProblemType>("standard");
+	const [creating, setCreating] = useState(false);
 	const [projects, setProjects] = useState<ProjectSnapshot[]>([]);
 	const [releases, setReleases] = useState<ManualRelease[]>([]);
 	const [release, setRelease] = useState<ManualRelease>();
@@ -230,8 +233,9 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 		showNotice("题目已修改，发布前需要重新验证。");
 	}
 
-	async function newProject(scoringMode: "acm" | "oi"): Promise<void> {
-		if (contentOperation.current) return;
+	async function newProject(scoringMode: "acm" | "oi", problemType: ProblemType): Promise<void> {
+		if (contentOperation.current || creating) return;
+		setCreating(true);
 		selection.current?.abort();
 		const controller = new AbortController();
 		selection.current = controller;
@@ -241,7 +245,7 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			const created = await requestJson<ProjectSnapshot>(apiUrl(apiOrigin, "/projects"), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ scoringMode }),
+				body: JSON.stringify({ scoringMode, problemType }),
 			});
 			setProjects((items) => [created, ...items.filter((item) => item.id !== created.id)]);
 			controller.signal.throwIfAborted();
@@ -251,10 +255,12 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			setChoosingScoringMode(false);
 
 			showNotice("题目已创建，所有题目都保存在题目中心。", "passed");
-			window.location.hash = "workspace";
+			window.location.hash = workspaceHash({ project: created.id });
 		} catch (error) {
 			if (controller.signal.aborted) return;
 			showNotice(error instanceof Error ? error.message : "创建题目失败。", "failed");
+		} finally {
+			setCreating(false);
 		}
 	}
 
@@ -665,6 +671,8 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 				taskRunning={!!activeTask && ["queued", "running"].includes(activeTask.state)}
 				onNew={() => {
 					selection.current?.abort();
+					setNewProblemType("standard");
+					setNewScoringMode("acm");
 					setChoosingScoringMode(true);
 				}}
 				onOpen={openProject}
@@ -729,6 +737,8 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 								messageTone={recordsTone}
 								onNew={() => {
 									selection.current?.abort();
+									setNewProblemType("standard");
+									setNewScoringMode("acm");
 									setChoosingScoringMode(true);
 								}}
 								onOpen={openProject}
@@ -779,29 +789,22 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 			>
 				<div className="confirmation-heading">
 					<span>{t("新建题目")}</span>
-					<h2 id="scoring-mode-title">{t("选择赛制")}</h2>
+					<h2 id="scoring-mode-title">{t("题型与计分方式")}</h2>
 				</div>
 				<p>{t("选择适合这道题的计分方式。创建后赛制固定。")}</p>
-				<div className="scoring-options">
-					<button type="button" onClick={() => void newProject("acm")}>
-						<span className="scoring-symbol">ACM</span>
-						<span className="scoring-copy">
-							<strong>{t("全部通过")}</strong>
-							<small className="scoring-description">
-								{t("所有测试点通过即得分。支持 Hydro 与 DOMjudge。")}
-							</small>
-						</span>
-						<Icon name="arrow" />
-					</button>
-					<button type="button" onClick={() => void newProject("oi")}>
-						<span className="scoring-symbol">OI</span>
-						<span className="scoring-copy">
-							<strong>{t("子任务计分")}</strong>
-							<small className="scoring-description">{t("按子任务分配分值。支持 Hydro。")}</small>
-						</span>
-						<Icon name="arrow" />
-					</button>
-				</div>
+				<ProblemTypeSelect value={newProblemType} disabled={creating} onChange={setNewProblemType} />
+				<label className="field">
+					<span>{t("计分方式")}</span>
+					<select
+						aria-label={t("计分方式")}
+						value={newScoringMode}
+						disabled={creating}
+						onChange={(event) => setNewScoringMode(event.target.value as "acm" | "oi")}
+					>
+						<option value="acm">ACM · {t("全部通过")}</option>
+						<option value="oi">OI · {t("子任务计分")}</option>
+					</select>
+				</label>
 				<div className="confirmation-actions">
 					<button
 						className="button secondary"
@@ -812,6 +815,14 @@ export function App({ user, paused }: { user: AuthUser; paused: boolean }) {
 						}}
 					>
 						{t("取消")}
+					</button>
+					<button
+						className="button primary"
+						type="button"
+						disabled={creating}
+						onClick={() => void newProject(newScoringMode, newProblemType)}
+					>
+						{t(creating ? "创建中…" : "创建题目")}
 					</button>
 				</div>
 			</Dialog>

@@ -3,6 +3,8 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { App } from "./App.tsx";
 import { type AuthState, authClient } from "./auth-client.ts";
 import { LocaleSwitcher, useLocale } from "./i18n.tsx";
+import { ThemeSwitcher } from "./theme.tsx";
+import { appVersion } from "./version.ts";
 import { WorkspacePausedContext } from "./workspace-paused.ts";
 
 function AuthScreen({ state }: { state: AuthState }) {
@@ -26,9 +28,12 @@ function AuthScreen({ state }: { state: AuthState }) {
 		<main className="auth-page">
 			<header className="auth-header">
 				<a href="#workspace" className="sidebar-brand">
-					Setdraft
+					Setdraft <small className="brand-version">{appVersion}</small>
 				</a>
-				<LocaleSwitcher />
+				<div className="shell-toolbar-tools">
+					<ThemeSwitcher />
+					<LocaleSwitcher />
+				</div>
 			</header>
 			<section className="auth-card" aria-labelledby="auth-title">
 				<div className="auth-mark" aria-hidden="true">

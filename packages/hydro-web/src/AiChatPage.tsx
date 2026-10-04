@@ -14,7 +14,6 @@ import {
 } from "./chat-request-lifecycle.ts";
 import { shouldSendChatMessage } from "./chat-shortcut.ts";
 import { type ChatStreamEvent, readChatStream } from "./chat-stream.ts";
-import { Dialog } from "./Dialog.tsx";
 import { transferFiles } from "./file-transfer.ts";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, uiMessage, useLocale } from "./i18n.tsx";
@@ -97,11 +96,9 @@ export function AiChatPage(props: Props) {
 	const [attachProject, setAttachProject] = useState(false);
 	const [webSearch, setWebSearch] = useState(true);
 	const [wide, setWide] = useState(false);
-	const [searchQuery, setSearchQuery] = useState("");
 	const [searchPhase, setSearchPhase] = useState("");
 	const [actualQueries, setActualQueries] = useState("");
 	const [queryResults, setQueryResults] = useState<SearchQueryResult[]>();
-	const [research, setResearch] = useState<{ content: string; queries: string; context?: string }>();
 	const [streaming, setStreaming] = useState("");
 	const deferredStreaming = useDeferredValue(streaming);
 	const [streamFailed, setStreamFailed] = useState(false);
@@ -397,7 +394,7 @@ export function AiChatPage(props: Props) {
 		}
 	}
 
-	async function send(researchInput?: { content: string; queries: string; context?: string }): Promise<void> {
+	async function send(researchInput?: { content: string; context?: string }): Promise<void> {
 		const content = researchInput?.content ?? input.trim();
 		const messageImages = researchInput ? [] : images;
 		if ((!content && messageImages.length === 0) || loading || busy || readingImages || sendingRef.current) return;
@@ -432,8 +429,6 @@ export function AiChatPage(props: Props) {
 			form.set("attemptId", activeRequestRef.current.attemptId ?? requestId);
 			form.set("message", content);
 			form.set("webSearch", String(researchInput ? true : webSearch));
-			const keywords = researchInput?.queries ?? searchQuery;
-			if (keywords.trim()) form.set("searchQuery", keywords.trim());
 			form.set("profileId", selectedProfileId);
 			if (researchInput?.context) form.set("contextSnapshot", researchInput.context);
 			else if (!researchInput && attachProject && props.projectSnapshot)
@@ -466,7 +461,6 @@ export function AiChatPage(props: Props) {
 				setInput("");
 				setImages([]);
 			}
-			setResearch(undefined);
 			let completed = false;
 			let after = 0;
 			let attempts = 0;
@@ -803,7 +797,7 @@ export function AiChatPage(props: Props) {
 													item.searchPlan.state === "failed"
 														? "规划失败，未使用网络资料"
 														: item.searchPlan.source === "manual"
-															? "手动指定"
+															? "历史关键词"
 															: "AI 生成",
 												)}
 											</summary>
@@ -826,14 +820,13 @@ export function AiChatPage(props: Props) {
 														(message) => message.role === "user" && message.requestId === item.requestId,
 													);
 													if (original?.content)
-														setResearch({
+														void send({
 															content: original.content,
-															queries: item.searchPlan?.queries.join("\n") ?? "",
 															context: original.contextSnapshot,
 														});
 												}}
 											>
-												{t("改词重搜")}
+												{t("重新搜索")}
 											</button>
 										</details>
 									)}
@@ -1021,19 +1014,6 @@ export function AiChatPage(props: Props) {
 									))}
 								</div>
 							)}
-							{webSearch && (
-								<label className="chat-search-query">
-									<span>{t("搜索关键词")}</span>
-									<textarea
-										rows={2}
-										value={searchQuery}
-										maxLength={1502}
-										disabled={busy}
-										onChange={(event) => setSearchQuery(event.target.value)}
-										placeholder={t("留空由 AI 生成 1–3 组关键词；手填每行一组，最多 3 组")}
-									/>
-								</label>
-							)}
 							<div className="manual-chat-actions">
 								<label className="manual-context-toggle">
 									<input
@@ -1140,37 +1120,6 @@ export function AiChatPage(props: Props) {
 					</div>
 				</section>
 			</div>
-			<Dialog open={!!research} onClose={() => setResearch(undefined)} labelledBy="research-title">
-				<form
-					onSubmit={(event) => {
-						event.preventDefault();
-						if (research) void send(research);
-					}}
-				>
-					<h2 id="research-title">{t("改词重搜")}</h2>
-					<p>{t("使用新关键词创建请求，保留旧回答。")}</p>
-					<label className="field">
-						<span>{t("搜索关键词（每行一组，最多 3 组）")}</span>
-						<textarea
-							required
-							rows={3}
-							maxLength={1502}
-							value={research?.queries ?? ""}
-							onChange={(event) =>
-								setResearch((current) => (current ? { ...current, queries: event.target.value } : current))
-							}
-						/>
-					</label>
-					<div className="confirmation-actions">
-						<button className="button secondary" type="button" onClick={() => setResearch(undefined)}>
-							{t("取消")}
-						</button>
-						<button className="button primary" type="submit" disabled={busy || !research?.queries.trim()}>
-							{t("重新搜索")}
-						</button>
-					</div>
-				</form>
-			</Dialog>
 		</main>
 	);
 }

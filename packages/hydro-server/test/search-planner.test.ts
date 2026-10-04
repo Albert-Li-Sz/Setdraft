@@ -91,36 +91,36 @@ it("plans follow-up queries, deduplicates URLs, persists stages and accounts for
 	expect(answer.usage).toMatchObject({ input: 20, output: 10, totalTokens: 30 });
 	expect(answer.answerUsage).toEqual(usage);
 });
-it("manual keywords bypass planning; changed keywords append a separate answer", async () => {
-	let calls = 0;
+it("rejects supplied keywords and replans a new request while preserving old answers", async () => {
+	let plans = 0;
 	const queries: string[] = [];
-	const { chat, id } = await fixture(
-		async () => {
-			calls++;
-			return "Answer [1]";
-		},
+	const { chat, database, id } = await fixture(
+		async ({ context }) =>
+			context.systemPrompt?.includes("关键词规划器") ? JSON.stringify([`plan-${++plans}`]) : "Answer [1]",
 		async (url) => {
 			queries.push(new URL(String(url)).searchParams.get("q")!);
 			return sources();
 		},
 	);
-	await chat.send(id, "question", undefined, events, undefined, undefined, [], randomUUID(), true, "first\nsecond");
-	const result = await chat.send(
-		id,
-		"question",
-		undefined,
-		events,
-		undefined,
-		undefined,
-		[],
-		randomUUID(),
-		true,
-		"edited",
-	);
-	expect(calls).toBe(2);
-	expect(queries).toEqual(["first", "second", "edited"]);
-	expect(result.messages).toHaveLength(4);
-	expect(result.messages.at(-1)?.searchPlan?.source).toBe("manual");
+	const queue = new ChatRequestQueue(database, chat);
+	try {
+		for (const query of ["manual", ""]) {
+			await expect(
+				chat.send(id, "question", undefined, events, undefined, undefined, [], randomUUID(), true, query),
+			).rejects.toMatchObject({ statusCode: 422 });
+			await expect(
+				queue.submit(id, randomUUID(), "question", undefined, undefined, [], true, query),
+			).rejects.toMatchObject({ statusCode: 422 });
+		}
+		expect((await chat.get(id)).messages).toHaveLength(0);
+		await chat.send(id, "question", undefined, events, undefined, undefined, [], randomUUID(), true);
+		const result = await chat.send(id, "question", undefined, events, undefined, undefined, [], randomUUID(), true);
+		expect(queries).toEqual(["plan-1", "plan-2"]);
+		expect(result.messages).toHaveLength(4);
+		expect(result.messages.at(-1)?.searchPlan?.source).toBe("ai");
+	} finally {
+		await queue.close();
+	}
 });
 it("retries only incomplete stages without duplicate search quota or planning usage", async () => {
 	let plans = 0,
@@ -229,7 +229,7 @@ it("limits parallel searches to two, streams each group's outcome and keeps sour
 	const waiting = new Map<string, (response: Response) => void>();
 	const snapshots: unknown[] = [];
 	const { chat, id } = await fixture(
-		async () => "Answer [1]",
+		async ({ context }) => (context.systemPrompt?.includes("关键词规划器") ? '["one","two","three"]' : "Answer [1]"),
 		async (url) => {
 			const query = new URL(String(url)).searchParams.get("q")!;
 			return new Promise<Response>((resolve) => {
@@ -252,7 +252,6 @@ it("limits parallel searches to two, streams each group's outcome and keeps sour
 		[],
 		randomUUID(),
 		true,
-		"one\ntwo\nthree",
 	);
 	await vi.waitFor(() => expect([...waiting.keys()].sort()).toEqual(["one", "two"]));
 	waiting.get("two")!(sources("https://example.org/two"));
@@ -269,12 +268,12 @@ it("limits parallel searches to two, streams each group's outcome and keeps sour
 		expect.objectContaining({ query: "two", state: "complete", count: 1 }),
 		expect.objectContaining({ query: "three", state: "failed", count: 0, message: expect.any(String) }),
 	]);
-	expect(snapshots.some((snapshot) => JSON.stringify(snapshot).includes('"state":"pending"'))).toBe(true);
+	expect(snapshots.some((snapshot) => JSON.stringify(snapshot)?.includes('"state":"pending"'))).toBe(true);
 	expect(
 		snapshots.some(
 			(snapshot) =>
-				JSON.stringify(snapshot).includes('"state":"complete"') &&
-				JSON.stringify(snapshot).includes('"state":"searching"'),
+				JSON.stringify(snapshot)?.includes('"state":"complete"') &&
+				JSON.stringify(snapshot)?.includes('"state":"searching"'),
 		),
 	).toBe(true);
 });

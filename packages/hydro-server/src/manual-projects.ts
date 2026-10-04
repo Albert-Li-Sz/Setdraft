@@ -14,11 +14,16 @@ import {
 	type ManualProjectSnapshot,
 	type ManualRelease,
 	type ManualSubtask,
+	type ProblemType,
+	synchronizeGenerators,
+	synchronizeProblemType,
 	synchronizeSolutions,
 } from "@setdraft/contracts";
 import { assertReleasesUnreferenced } from "./contest-references.ts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { updateGenerators } from "./generator-model.ts";
 import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
+import { updateProblemType } from "./problem-model.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, dataStem, hashFile } from "./project-files.ts";
 import { ProjectPipeline } from "./project-pipeline.ts";
@@ -149,12 +154,13 @@ export class ManualProjectStore {
 		return path;
 	}
 
-	async create(scoringMode: "acm" | "oi"): Promise<ManualProjectSnapshot> {
+	async create(scoringMode: "acm" | "oi", problemType: ProblemType = "standard"): Promise<ManualProjectSnapshot> {
 		const id = randomUUID();
 		const now = new Date().toISOString();
 		const project: ManualProject = {
 			id,
 			scoringMode,
+			problemType,
 			judgingMode: "default",
 			interactionInputMode: "provided",
 			interactorSource: "",
@@ -184,6 +190,8 @@ export class ManualProjectStore {
 			attachments: [],
 		};
 		const directory = this.projectDirectory(id);
+		synchronizeProblemType(project);
+		synchronizeGenerators(project);
 		await mkdir(join(directory, "manual"), { recursive: true });
 		await this.save(project);
 		return await this.get(id);
@@ -207,7 +215,9 @@ export class ManualProjectStore {
 				validatorStandard: stored.validatorStandard ?? "cpp17",
 			};
 			if (version !== undefined) this.documentVersions.set(project, version);
+			synchronizeProblemType(project);
 			synchronizeSolutions(project);
+			synchronizeGenerators(project);
 			return project;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ManualProjectError("项目不存在。", 404);
@@ -309,7 +319,12 @@ export class ManualProjectStore {
 	async update(id: string, value: unknown): Promise<ManualProjectSnapshot> {
 		await this.assertNotBusy(id);
 		const project = await this.load(id);
-		const previousStatement = JSON.stringify([project.statement, project.statementSections, project.samples]);
+		const previousStatement = JSON.stringify([
+			project.statement,
+			project.statementSections,
+			project.samples,
+			project.protocolSamples,
+		]);
 		const input = record(value, "题目");
 		if (input.expectedRevision !== undefined && input.expectedRevision !== project.revision) {
 			throw new ManualProjectError("题目版本已变化，请检查最新内容后重试。", 409, await this.get(id));
@@ -317,26 +332,13 @@ export class ManualProjectStore {
 		if (input.scoringMode !== undefined && input.scoringMode !== project.scoringMode) {
 			throw new ManualProjectError("题目赛制在创建后不可更改；请新建题目。", 422);
 		}
-		for (const field of ["judgingMode", "interactionInputMode", "interactorSource", "interactorStandard"] as const) {
-			if (input[field] !== undefined && input[field] !== project[field]) project.lastReport = undefined;
-		}
-		if (input.judgingMode !== undefined) {
-			if (input.judgingMode !== "default" && input.judgingMode !== "interactive")
-				throw new ManualProjectError("判题模式无效。", 422);
-			project.judgingMode = input.judgingMode;
-		}
-		if (input.interactionInputMode !== undefined) {
-			if (input.interactionInputMode !== "provided" && input.interactionInputMode !== "empty")
-				throw new ManualProjectError("交互题输入模式无效。", 422);
-			project.interactionInputMode = input.interactionInputMode;
-		}
+		updateProblemType(project, input);
 		const fields = [
 			"slug",
 			"title",
 			"statement",
 			"timeLimit",
 			"memoryLimit",
-			"generatorSource",
 			"generatorScript",
 			"checkerSource",
 			"validatorSource",
@@ -353,7 +355,22 @@ export class ManualProjectStore {
 				description: boundedString(sections.description, "描述", 1_000_000),
 				input: boundedString(sections.input, "输入", 1_000_000),
 				output: boundedString(sections.output, "输出", 1_000_000),
-				interaction: boundedString(sections.interaction, "交互描述", 1_000_000),
+				interaction: boundedString(sections.interaction, "交互协议", 1_000_000),
+				communication: boundedString(
+					sections.communication ?? project.statementSections?.communication ?? "",
+					"通信说明",
+					1_000_000,
+				),
+				firstRound: boundedString(
+					sections.firstRound ?? project.statementSections?.firstRound ?? "",
+					"第一轮协议",
+					1_000_000,
+				),
+				secondRound: boundedString(
+					sections.secondRound ?? project.statementSections?.secondRound ?? "",
+					"第二轮协议",
+					1_000_000,
+				),
 				notes: boundedString(sections.notes, "提示", 1_000_000),
 			};
 			if (Object.values(project.statementSections).reduce((size, text) => size + text.length, 0) > 1_000_000)
@@ -361,20 +378,10 @@ export class ManualProjectStore {
 		} else if (input.statement !== undefined) {
 			project.statementSections = undefined;
 		}
-		for (const field of [
-			"generatorStandard",
-			"checkerStandard",
-			"validatorStandard",
-			"interactorStandard",
-		] as const) {
+		for (const field of ["checkerStandard", "validatorStandard", "interactorStandard"] as const) {
 			if (input[field] !== undefined) project[field] = readCppLanguage(input[field], field);
 		}
-		if (input.checkerMode !== undefined) {
-			if (input.checkerMode !== "text" && input.checkerMode !== "custom") {
-				throw new ManualProjectError("Checker 模式无效。");
-			}
-			project.checkerMode = input.checkerMode;
-		}
+		updateGenerators(project, input);
 		if (input.solutions !== undefined || input.referenceSolutionId !== undefined) {
 			if (input.reference !== undefined || input.oracle !== undefined)
 				throw new ManualProjectError("请分别使用解法库或旧程序字段更新。", 422);
@@ -466,7 +473,10 @@ export class ManualProjectStore {
 			});
 		}
 		if (project.statementSections) project.statement = formatHydroStatement(project);
-		if (JSON.stringify([project.statement, project.statementSections, project.samples]) !== previousStatement)
+		if (
+			JSON.stringify([project.statement, project.statementSections, project.samples, project.protocolSamples]) !==
+			previousStatement
+		)
 			project.lastReport = undefined;
 		project.revision += 1;
 		project.updatedAt = new Date().toISOString();

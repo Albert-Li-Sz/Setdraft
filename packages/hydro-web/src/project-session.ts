@@ -1,4 +1,10 @@
-import { type ProjectSnapshot, readProjectSnapshot, synchronizeSolutions } from "@setdraft/contracts";
+import {
+	type ProjectSnapshot,
+	readProjectSnapshot,
+	synchronizeGenerators,
+	synchronizeProblemType,
+	synchronizeSolutions,
+} from "@setdraft/contracts";
 import { RevisionConflict } from "./api-client.ts";
 import { editableProject } from "./problem.ts";
 
@@ -104,7 +110,9 @@ export class ProjectSession {
 		}
 		this.baseline = project;
 		const next = { ...project, ...patch };
+		synchronizeProblemType(next);
 		if (next.solutions) synchronizeSolutions(next);
+		if (next.generators) synchronizeGenerators(next);
 		this.publish({
 			project: next,
 			status: dirty ? "dirty" : "saved",
@@ -130,9 +138,18 @@ export class ProjectSession {
 	edit(change: (project: ProjectSnapshot) => ProjectSnapshot): void {
 		if (!this.state.project) return;
 		this.version++;
-		this.publish({ ...this.state, project: change(this.state.project), status: this.blocked ? "conflict" : "dirty" });
+		this.publish({
+			...this.state,
+			project: this.normalize(change(this.state.project)),
+			status: this.blocked ? "conflict" : "dirty",
+		});
 		this.clearTimer();
 		if (!this.blocked && !this.paused) this.timer = setTimeout(() => void this.flush().catch(this.onError), 650);
+	}
+
+	private normalize(project: ProjectSnapshot): ProjectSnapshot {
+		synchronizeProblemType(project);
+		return project;
 	}
 
 	pause(): void {

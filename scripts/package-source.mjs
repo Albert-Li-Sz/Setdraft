@@ -10,7 +10,7 @@ const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootFiles = [
  "package.json", "package-lock.json", "tsconfig.json", "tsconfig.base.json", "vitest.base.ts", "playwright.config.mjs", "biome.json",
  "Dockerfile", ".dockerignore", ".gitignore", ".gitattributes", ".npmrc", ".env.example", "compose.yaml", "compose.build.yaml",
- "LICENSE", "COPYING.md", "README.md", "UPSTREAM.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md",
+ "LICENSE", "COPYING.md", "README.md", "UPSTREAM.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "CONTEXT.md",
  "install.sh", "upgrade.sh", "uninstall.sh", "backup.sh",
 ];
 const packageNames = ["ai", "telemetry", "hydro-contracts", "hydro-authoring", "hydro-server", "hydro-web"];

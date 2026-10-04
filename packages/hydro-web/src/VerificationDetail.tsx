@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { apiUrl, requestJson } from "./api-client.ts";
 import { Dialog } from "./Dialog.tsx";
 import { useLocale } from "./i18n.tsx";
+import { RoundDiagnostics } from "./RoundDiagnostics.tsx";
 
 export function VerificationDetail({
 	apiOrigin,
@@ -66,6 +67,19 @@ export function VerificationDetail({
 				{run?.solutions.find((item) => item.id === value?.solutionId)?.name} · {value?.caseId} ·{" "}
 				{t(value?.message ?? "")}
 			</p>
+			<p>
+				{value?.durationMs} ms ·{" "}
+				{value?.memoryBytes === undefined ? t("内存记录不可用") : `${(value.memoryBytes / 1048576).toFixed(2)} MiB`}
+			</p>
+			{value?.rounds && (
+				<RoundDiagnostics
+					rounds={value.rounds}
+					apiOrigin={apiOrigin}
+					route={route}
+					runId={runId}
+					ready={diagnosticsReady}
+				/>
+			)}
 			{error && <p role="alert">{t(error)}</p>}
 			{!detail && !error && cell && <output>{t("正在读取详情…")}</output>}
 			{difference && (

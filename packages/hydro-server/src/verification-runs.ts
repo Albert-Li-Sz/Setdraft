@@ -1,13 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import {
 	aggregateScore,
 	allocateCaseScores,
 	evaluateSolution,
+	isCompleteCommunicationResult,
 	type ManualCaseSummary,
 	type ManualCheck,
 	type ManualProject,
@@ -15,19 +15,17 @@ import {
 	type MatrixCell,
 	type MatrixDiagnostic,
 	projectSolutions,
-	readProjectSnapshot,
+	resolveProblemType,
 	type VerificationOptions,
 	type VerificationRun,
 	type VerificationRunPage,
+	verificationContractVersion,
 } from "@setdraft/contracts";
 import { effectiveChecker } from "./acm-checker.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
-import type { SandboxCase } from "./manual-sandbox.ts";
+import type { SandboxCase, SandboxCompilationCache } from "./manual-sandbox.ts";
 import { ManualProjectError } from "./project-error.ts";
-import { dataStem, parseGeneratorScript } from "./project-files.ts";
-import { copySandboxFile } from "./sandbox-files.ts";
-import { sandboxPolicy } from "./sandbox-policy.ts";
 import { cleanupSandboxStage, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 import { runSolutionSandbox } from "./solution-sandbox.ts";
 import {
@@ -56,44 +54,11 @@ export function readVerificationOptions(value: unknown): VerificationOptions {
 			throw new ManualProjectError("请选择有效的解法和测试点。", 422);
 		return raw as string[];
 	};
-	if (input.kind === "matrix")
-		return { kind: "matrix", solutionIds: ids(input.solutionIds), caseIds: ids(input.caseIds) };
-	if (
-		input.kind !== "stress" ||
-		typeof input.baselineId !== "string" ||
-		typeof input.command !== "string" ||
-		!input.command.includes("{seed}")
-	)
-		throw new ManualProjectError("对拍需要基准解法和含 {seed} 的生成命令。", 422);
-	const commands = parseGeneratorScript(input.command);
-	if (commands.length !== 1) throw new ManualProjectError("对拍只接受一行 gen 命令。", 422);
-	const seed = input.seed ?? 1,
-		rounds = input.rounds ?? 100,
-		budgetMs = input.budgetMs ?? 60_000;
-	if (
-		!Number.isSafeInteger(seed) ||
-		Number(seed) < 0 ||
-		!Number.isSafeInteger(rounds) ||
-		Number(rounds) < 1 ||
-		Number(rounds) > 1000 ||
-		!Number.isSafeInteger(Number(seed) + Number(rounds)) ||
-		!Number.isSafeInteger(budgetMs) ||
-		Number(budgetMs) < 1000 ||
-		Number(budgetMs) > sandboxPolicy().runTimeoutMs
-	)
-		throw new ManualProjectError("种子、轮数或时间预算无效；最多 1000 轮且不能超过沙箱时间上限。", 422);
-	const solutionIds = ids(input.solutionIds);
-	if (!solutionIds?.length || solutionIds.includes(input.baselineId))
-		throw new ManualProjectError("请选择不同于基准的待测解法。", 422);
-	return {
-		kind: "stress",
-		baselineId: input.baselineId,
-		solutionIds,
-		command: input.command,
-		seed: Number(seed),
-		rounds: Number(rounds),
-		budgetMs: Number(budgetMs),
-	};
+	if (input.kind === "stress") throw new ManualProjectError("随机对拍已停用，旧记录仍可查看和下载。", 410);
+	if (input.kind !== "matrix" && input.kind !== "pressure") throw new ManualProjectError("运行类型无效。", 422);
+	if (input.kind === "pressure" && input.caseIds !== undefined)
+		throw new ManualProjectError("压力测试必须覆盖完整数据集，不能抽样。", 422);
+	return { kind: input.kind, solutionIds: ids(input.solutionIds), caseIds: ids(input.caseIds) };
 }
 
 export class VerificationRuns {
@@ -194,7 +159,7 @@ export class VerificationRuns {
 			!Number.isInteger(limit) ||
 			limit < 1 ||
 			limit > 100 ||
-			(options.kind && !["matrix", "stress"].includes(options.kind))
+			(options.kind && !["matrix", "pressure", "stress"].includes(options.kind))
 		)
 			throw new ManualProjectError("运行记录分页参数无效。", 422);
 		let before: { createdAt: string; id: string } | undefined;
@@ -262,16 +227,30 @@ export class VerificationRuns {
 			throw new ManualProjectError("测试点数量超过当前沙箱上限。", 422);
 		if (options.solutionIds?.some((id) => !solutions.some((item) => item.id === id)))
 			throw new ManualProjectError("所选解法不存在。", 422);
-		if (options.kind === "stress") {
-			if (project.judgingMode === "interactive")
-				throw new ManualProjectError("交互题请使用验证矩阵；随机对拍暂不支持。", 422);
+		if (options.kind === "stress") throw new ManualProjectError("随机对拍已停用。", 410);
+		if (options.kind === "pressure") {
+			if (options.caseIds !== undefined) throw new ManualProjectError("压力测试必须覆盖完整数据集，不能抽样。", 422);
+			const selected = solutions.filter((item) =>
+				options.solutionIds ? options.solutionIds.includes(item.id) : item.expectation.kind !== "AC",
+			);
 			if (
-				!solutions.some((item) => item.id === options.baselineId && item.code.trim()) ||
-				!project.generatorSource.trim()
+				!selected.length ||
+				selected.some((item) => item.expectation.kind === "AC" || item.id === project.referenceSolutionId)
 			)
-				throw new ManualProjectError("请填写基准程序和生成器。", 422);
-		} else if (options.caseIds?.some((id) => !this.cases(project).some((item) => key(item) === id)))
+				throw new ManualProjectError("请选择设置了 WA、TLE、MLE、RE 或分数区间预期的错误解。", 422);
+		}
+		if (options.caseIds?.some((id) => !cases.some((item) => key(item) === id)))
 			throw new ManualProjectError("所选测试点不存在。", 422);
+		if (
+			cases.some((item) => item.origin === "generated") &&
+			project.generatedFromHash !==
+				(await this.projects.pipeline.generatedHash(
+					projectId,
+					project,
+					cases.filter((item) => item.origin === "manual"),
+				))
+		)
+			throw new ManualProjectError("Gen、脚本、标程或手动测试点已修改，请重新生成数据。", 422);
 	}
 	private cases(project: ManualProjectSnapshot): ManualCaseSummary[] {
 		return project.judgingMode === "interactive" && project.interactionInputMode === "empty"
@@ -306,40 +285,32 @@ export class VerificationRuns {
 		options: VerificationOptions,
 		context?: ExecutionContext,
 		replayOf?: string,
+		compilationCache?: SandboxCompilationCache,
 	): Promise<VerificationRun> {
-		let project = current;
-		let original: VerificationRun | undefined;
-		if (replayOf) {
-			original = await this.get(current.id, replayOf);
-			if (original.stress?.reason !== "counterexample" || original.options.kind !== "stress")
-				throw new ManualProjectError("此记录没有可重放的反例。", 422);
-			project = readProjectSnapshot(
-				JSON.parse(
-					(await this.database.readBuffer("verification-file", original.id, "project.json")).toString("utf8"),
-				),
-			);
-			options = original.options;
-		} else await this.validate(current.id, options);
+		if (replayOf) throw new ManualProjectError("随机对拍重放已停用，旧记录仍可查看和下载。", 410);
+		await this.validate(current.id, options);
+		if (options.kind === "stress") throw new ManualProjectError("随机对拍已停用。", 410);
+		const project = current;
 		const allCases = this.cases(project);
-		const selectedCases =
-			options.kind === "matrix"
-				? allCases.filter((item) => !options.caseIds || options.caseIds.includes(key(item)))
-				: [];
-		const solutions = projectSolutions(project).filter(
-			(item) => !options.solutionIds || options.solutionIds.includes(item.id),
+		const selectedCases = allCases.filter((item) => !options.caseIds || options.caseIds.includes(key(item)));
+		const solutions = projectSolutions(project).filter((item) =>
+			options.solutionIds
+				? options.solutionIds.includes(item.id)
+				: options.kind !== "pressure" || item.expectation.kind !== "AC",
 		);
-		if (options.kind === "matrix" && (!selectedCases.length || selectedCases.length * solutions.length > 10000))
+		if (!solutions.length || !selectedCases.length || selectedCases.length * solutions.length > 10000)
 			throw new ManualProjectError("请选择测试数据，单次矩阵最多 10000 个单元。", 422);
-		const primaryId = options.kind === "stress" ? options.baselineId : (project.referenceSolutionId ?? "reference");
+		const primaryId = project.referenceSolutionId ?? "reference";
 		const primary = projectSolutions(project).find((item) => item.id === primaryId);
 		if (!primary?.code.trim()) throw new ManualProjectError("请填写主标程。", 422);
-		const image = (
-			await promisify(execFile)(
-				"docker",
-				["image", "inspect", "--format", "{{.Id}}", original?.image ?? this.projects.image],
-				{ timeout: 15000, signal: context?.signal },
-			)
-		).stdout.trim();
+		const image =
+			compilationCache?.image ??
+			(
+				await promisify(execFile)("docker", ["image", "inspect", "--format", "{{.Id}}", this.projects.image], {
+					timeout: 15000,
+					signal: context?.signal,
+				})
+			).stdout.trim();
 		if (!/^sha256:[a-f0-9]{64}$/u.test(image)) throw new ManualProjectError("无法固定沙箱镜像版本。", 503);
 		const run: VerificationRun = {
 			id: randomUUID(),
@@ -348,7 +319,9 @@ export class VerificationRuns {
 			revision: project.revision,
 			fingerprint: "",
 			image,
-			sandboxArgs: original?.sandboxArgs ?? sandboxRuntimeArgs(),
+			sandboxArgs: sandboxRuntimeArgs(),
+			verificationContractVersion,
+			problemType: resolveProblemType(project),
 			createdAt: new Date().toISOString(),
 			state: "running",
 			options,
@@ -362,18 +335,17 @@ export class VerificationRuns {
 				? [{ id: 1, score: 100, type: "min" as const }]
 				: project.subtasks;
 		const weights = allocateCaseScores(subtasks, allCases);
-		if (options.kind === "matrix")
-			run.matrix = {
-				cases: selectedCases,
-				cells: [],
-				solutions: [],
-				full: selectedCases.length === allCases.length,
-				requiredPassed: false,
-			};
+		run.matrix = {
+			cases: selectedCases,
+			cells: [],
+			solutions: [],
+			full: selectedCases.length === allCases.length,
+			requiredPassed: false,
+		};
 		run.checks = [];
 		run.progress = {
 			completed: 0,
-			total: options.kind === "matrix" ? selectedCases.length * solutions.length : options.rounds,
+			total: selectedCases.length * solutions.length,
 			message: "准备运行",
 			elapsedMs: 0,
 		};
@@ -469,6 +441,7 @@ export class VerificationRuns {
 			await this.save(run);
 			context?.emit("stage", "运行解法验证", { runId: run.id });
 			const result = await runSolutionSandbox({
+				compilationCache,
 				onProgress: ({ cell, check }) => {
 					if (cell && run.matrix) {
 						if (
@@ -492,7 +465,6 @@ export class VerificationRuns {
 					if (check) {
 						run.checks!.push(check);
 						pendingChecks.push(check);
-						if (check.stage === "stress-round") run.progress!.completed++;
 					}
 					run.progress!.message = cell ? `${cell.caseId} · ${cell.verdict}` : (check?.message ?? "运行中");
 					run.progress!.elapsedMs = Date.now() - started;
@@ -507,10 +479,10 @@ export class VerificationRuns {
 				primaryId,
 				solutions,
 				interactor:
-					project.judgingMode === "interactive"
+					resolveProblemType(project) === "interactive"
 						? { language: project.interactorStandard ?? "cpp17", code: project.interactorSource ?? "" }
 						: undefined,
-				generator: options.kind === "stress" ? project.generatorSource : undefined,
+				communication: resolveProblemType(project) === "communication" ? project.communication : undefined,
 				generatorStandard: project.generatorStandard,
 				checker: effectiveChecker(project.checkerMode, project.checkerSource),
 				checkerStandard: project.checkerStandard,
@@ -522,20 +494,23 @@ export class VerificationRuns {
 				cases,
 				maxFileBytes: this.projects.maxFileBytes,
 				...this.projects.pipeline.limits(project),
-				stress:
-					options.kind === "stress" ? { ...options, args: parseGeneratorScript(options.command)[0] } : undefined,
-				replay: original
-					? {
-							inputPath: (await this.database.filePath("verification-file", original.id, "counterexample.in"))!,
-							seed: original.stress?.seed ?? 0,
-							args: original.stress?.args ?? [],
-						}
-					: undefined,
 			});
 			await checkpoints.stop();
+			if (resolveProblemType(project) === "communication")
+				result.cells = result.cells.map((cell) =>
+					cell.verdict === "CE" || cell.verdict === "SYSTEM_ERROR" || isCompleteCommunicationResult(cell)
+						? cell
+						: {
+								...cell,
+								verdict: "SYSTEM_ERROR",
+								score: 0,
+								scoreRatio: 0,
+								message: "通信轮次结果不完整或不一致。",
+							},
+				);
 			run.checks = result.checks;
 			context?.signal.throwIfAborted();
-			if (options.kind === "matrix") {
+			{
 				const full = selectedCases.length === allCases.length;
 				const subtasks =
 					project.judgingMode === "interactive" && project.interactionInputMode === "empty"
@@ -575,54 +550,14 @@ export class VerificationRuns {
 							.filter((item) => item.required)
 							.every((item) => summaries.some((summary) => summary.solutionId === item.id && summary.matches)),
 				};
-			} else {
-				if (!result.stress) throw new Error("沙箱没有返回对拍结果。");
-				run.stress = result.stress;
 			}
 			const infrastructureError = result.checks.find((item) => item.stage === "verification-system" && !item.passed);
-			run.error = result.stress?.reason === "error" ? result.stress.message : infrastructureError?.message;
+			run.error = infrastructureError?.message;
 			run.state = run.error ? "failed" : "complete";
 			run.finishedAt = new Date().toISOString();
 			run.progress!.elapsedMs = Date.now() - started;
 			run.progress!.message = run.error ?? "执行完成";
-			const artifacts: WorkspaceFile[] = [];
-			if (run.stress?.reason === "counterexample") {
-				const safe = join(stage, "export");
-				await mkdir(safe);
-				const budget = { remainingBytes: this.projects.maxProjectBytes };
-				const archiveFiles = new Map<string, string>();
-				for (const name of [
-					"counterexample.in",
-					"counterexample.out",
-					"runner.py",
-					"payload.json",
-					...solutions.map((_item, index) => `outputs/candidate${index}-stress.out`),
-				]) {
-					const destination = join(safe, name);
-					await mkdir(join(destination, ".."), { recursive: true });
-					await copySandboxFile(stage, name, destination, this.projects.maxFileBytes, budget, context?.signal);
-					artifacts.push({ ownerKind: "verification-file", ownerId: run.id, name, source: { path: destination } });
-					archiveFiles.set(name, destination);
-				}
-				const payload = JSON.parse(await readFile(join(safe, "payload.json"), "utf8")) as Record<string, unknown>;
-				payload.replay = { seed: run.stress.seed, args: run.stress.args };
-				await writeFile(join(safe, "payload.json"), JSON.stringify(payload));
-				await writeFile(join(safe, "project.json"), JSON.stringify(project, null, 2));
-				await writeFile(join(safe, "run.json"), JSON.stringify(run, null, 2));
-				await writeFile(
-					join(safe, "reproduce.sh"),
-					`#!/bin/sh\nset -eu\ncd "$(dirname "$0")"\nexec docker run --rm ${run.sandboxArgs!.join(" ")} --mount "type=bind,source=$PWD,target=/work" --entrypoint python3 ${image} /work/runner.py\n`,
-				);
-				for (const name of ["project.json", "run.json", "reproduce.sh"]) archiveFiles.set(name, join(safe, name));
-				await writeStoredArchiveFromFiles(join(safe, "reproduction.zip"), "setdraft-reproduction", archiveFiles);
-				artifacts.push({
-					ownerKind: "verification-file",
-					ownerId: run.id,
-					name: "reproduction.zip",
-					source: { path: join(safe, "reproduction.zip") },
-				});
-			}
-			artifacts.push(...(await diagnostics()));
+			const artifacts = await diagnostics();
 			await this.save(run, artifacts, context);
 			return run;
 		} catch (error) {
@@ -696,7 +631,11 @@ export class VerificationRuns {
 		};
 	}
 
-	async required(project: ManualProject, context?: ExecutionContext): Promise<VerificationRun> {
+	async required(
+		project: ManualProject,
+		context?: ExecutionContext,
+		compilationCache?: SandboxCompilationCache,
+	): Promise<VerificationRun> {
 		return this.executeLocked(
 			{ ...project, ...(await this.projects.caseList(project)) },
 			{
@@ -706,6 +645,8 @@ export class VerificationRuns {
 					.map((item) => item.id),
 			},
 			context,
+			undefined,
+			compilationCache,
 		);
 	}
 	async archive(projectId: string, id: string): Promise<string> {
@@ -714,61 +655,7 @@ export class VerificationRuns {
 		if (!path) throw new ManualProjectError("此记录没有反例复现包。", 404);
 		return path;
 	}
-	async importCase(projectId: string, id: string, input: Record<string, unknown>): Promise<ManualProjectSnapshot> {
-		const unlock = await this.projects.lock(projectId);
-		try {
-			const run = await this.get(projectId, id);
-			if (run.stress?.reason !== "counterexample") throw new ManualProjectError("此记录没有反例。", 422);
-			if (run.importedCase) throw new ManualProjectError(`此反例已加入 ${run.importedCase}。`, 409);
-			const project = await this.projects.load(projectId);
-			if (!Number.isSafeInteger(input.expectedRevision)) throw new ManualProjectError("请提供当前题目版本。", 422);
-			if (input.expectedRevision !== project.revision)
-				throw new ManualProjectError("题目版本已变化，请重新预览。", 409);
-			if (project.judgingMode === "interactive") throw new ManualProjectError("不能将非交互反例加入交互题。", 422);
-			if (!project.subtasks.some((item) => item.id === input.subtaskId))
-				throw new ManualProjectError("请选择有效子任务。", 422);
-			const name = typeof input.name === "string" ? input.name.trim() : `stress-${id.slice(0, 8)}.in`;
-			const { stem, extension } = dataStem(name);
-			if (extension !== "in" || name.length > 254) throw new ManualProjectError("请输入有效的 .in 文件名。", 422);
-			const { cases, orphanOutputs } = await this.projects.caseList(project);
-			if (cases.some((item) => item.id === stem) || orphanOutputs.some((item) => dataStem(item).stem === stem))
-				throw new ManualProjectError("测试点名称已存在。", 409);
-			if (cases.length >= this.projects.judgeLimits.maxTestCases)
-				throw new ManualProjectError("测试点已达上限。", 422);
-			const entries = (await this.database.fileEntries("verification-file", id)).filter((item) =>
-				["counterexample.in", "counterexample.out"].includes(item.name),
-			);
-			if (
-				entries.length !== 2 ||
-				entries.some((item) => item.size > this.projects.maxFileBytes) ||
-				entries.reduce((sum, item) => sum + item.size, await this.projects.projectDataBytes(projectId)) >
-					this.projects.maxProjectBytes
-			)
-				throw new ManualProjectError("反例文件缺失或超过容量上限。", 422);
-			project.caseSubtasks[`manual:${stem}`] = Number(input.subtaskId);
-			project.revision++;
-			project.updatedAt = new Date().toISOString();
-			project.lastReport = undefined;
-			run.importedCase = name;
-			await this.database.commitFiles(
-				await Promise.all(
-					entries.map(
-						async (item): Promise<WorkspaceFile> => ({
-							ownerKind: "manual",
-							ownerId: projectId,
-							name: `${stem}.${item.name.endsWith(".in") ? "in" : "out"}`,
-							source: { path: (await this.database.filePath("verification-file", id, item.name))! },
-						}),
-					),
-				),
-				async () => {
-					await this.projects.save(project);
-					await this.database.put("verification-run", id, this.summary(run));
-				},
-			);
-			return this.projects.snapshot(projectId);
-		} finally {
-			unlock();
-		}
+	async importCase(_projectId: string, _id: string, _input: Record<string, unknown>): Promise<ManualProjectSnapshot> {
+		throw new ManualProjectError("随机对拍反例入库已停用；已有测试数据保留。", 410);
 	}
 }

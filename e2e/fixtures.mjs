@@ -61,7 +61,7 @@ export async function json(page, app, path, options = {}) {
 export async function newProject(page) {
 	await page.getByRole("button", { name: "新建题目", exact: true }).click();
 	const created = page.waitForResponse(response => new URL(response.url()).pathname === "/api/projects" && response.request().method() === "POST");
-	await page.getByRole("dialog").getByRole("button", { name: /ACM/ }).click();
+	await page.getByRole("dialog").getByRole("button", { name: "创建题目", exact: true }).click();
 	const project = await (await created).json();
 	await expect(page.getByRole("dialog")).not.toBeVisible();
 	await expect(page.getByLabel("题目标题", { exact: true })).toBeVisible();

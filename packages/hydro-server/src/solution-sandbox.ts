@@ -1,20 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ManualCheck, MatrixCell, Solution, StressOptions, StressReport } from "@setdraft/contracts";
+import type { ManualCheck, MatrixCell, Solution, StressReport } from "@setdraft/contracts";
 import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import { runDocker, type SandboxInput, sandboxProgramRuntime } from "./manual-sandbox.ts";
 import { readSandboxFile } from "./sandbox-files.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
-import { readSandboxCheck } from "./sandbox-report.ts";
+import { readRoundResults, readSandboxCheck } from "./sandbox-report.ts";
 import { sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 export interface SolutionSandboxInput extends SandboxInput {
 	sandboxArgs?: string[];
 	solutions: Solution[];
 	primaryId: string;
-	stress?: StressOptions & { args: string[] };
-	replay?: { inputPath: string; seed: number; args: string[] };
 	onProgress?: (update: { cell?: MatrixCell; check?: ManualCheck }) => void;
 }
 export interface SolutionSandboxResult {
@@ -25,29 +23,20 @@ export interface SolutionSandboxResult {
 
 const runner = `${sandboxProgramRuntime}
 cells = []
-stress = None
-class BudgetEnd(Exception): pass
-deadline = time.monotonic() + payload['stress']['budgetMs'] / 1000 if payload.get('stress') else None
 original_run = run
 total_bytes = 0
 def run(command, input_path, output_path, timeout, memory_mb, cwd):
     global total_bytes
-    if deadline:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0: raise BudgetEnd()
-        timeout = min(timeout, remaining)
     result = original_run(command, input_path, output_path, timeout, memory_mb, cwd)
     total_bytes += result['bytes'] + result['stderrBytes']
     if total_bytes > payload['maxTotalBytes']: raise RuntimeError('任务输出超过容量上限')
-    if deadline and time.monotonic() >= deadline: raise BudgetEnd()
     return result
 
 def preview(path):
     return path.open('rb').read(2048).decode('utf-8', errors='replace') if path.exists() else ''
 
 def publish_cell(value):
-    if not payload.get('stress'):
-        print('SETDRAFT_CELL ' + json.dumps({k:v for k,v in value.items() if k not in ('output','expected','log')}, ensure_ascii=False), flush=True)
+    print('SETDRAFT_CELL ' + json.dumps({k:v for k,v in value.items() if k not in ('output','expected','log')}, ensure_ascii=False), flush=True)
     return value
 
 def cell(item, role, case, input_path, answer):
@@ -65,10 +54,11 @@ def cell(item, role, case, input_path, answer):
         paths.update(output=str(output.relative_to(root)))
         if answer is not None: paths['expected'] = str(answer.relative_to(root))
         if actual.get('logPath'): paths['logs'].append(actual['logPath'])
-        result.update(verdict=actual['verdict'], durationMs=actual['durationMs'], message=actual['message'], log=preview(root / actual['logPath']) if actual.get('logPath') else '')
+        result.update(verdict=actual['verdict'], durationMs=actual['durationMs'], memoryBytes=actual.get('memoryBytes'), message=actual['message'], log=preview(root / actual['logPath']) if actual.get('logPath') else '')
         result.update(output=preview(output), expected=preview(answer) if answer is not None else '')
         return result
     duration = checks[-1]['durationMs']
+    result['memoryBytes'] = checks[-1].get('memoryBytes')
     paths.update(output=str(output.relative_to(root)))
     if checks[-1].get('logPath'): paths['logs'].append(checks[-1]['logPath'])
     if answer is None:
@@ -90,24 +80,23 @@ def verify(case):
     if not validate_input(input_path, case['id']): raise RuntimeError('Validator 拒绝输入')
     answer = root / 'answers' / (case['id'] + '.out')
     baseline_ok = 'reference' in commands and program('reference', input_path, answer, case['id'])
-    if not baseline_ok and payload.get('stress'): raise RuntimeError('基准程序运行失败或无法生成答案')
     if not baseline_ok and not case.get('outputPath'):
         return [publish_cell(cell(item, 'candidate' + str(index), case, input_path, None)) for index, item in enumerate(payload['solutions'])]
     supplied = root / case['outputPath'] if case.get('outputPath') else answer
     if baseline_ok:
         score = checker_score(input_path, answer, supplied, 'baseline', case['id']) if 'checker' in commands else (100 if same_default(answer, supplied) else 0)
-        if score != 100 and (payload.get('stress') or not case.get('outputPath')): raise RuntimeError('基准程序与答案或 Checker 不相容')
+        if score != 100 and not case.get('outputPath'): raise RuntimeError('基准程序与答案或 Checker 不相容')
     found = []
     for index, item in enumerate(payload['solutions']):
         found.append(publish_cell(cell(item, 'candidate' + str(index), case, input_path, supplied)))
     return found
 
 def main():
-    global cells, stress
-    for role in ('reference', 'checker', 'validator', 'generator'):
+    global cells
+    for role in ('reference', 'checker', 'validator'):
         item = payload.get(role)
         if item and not source(role, item['language'], item['code']):
-            if role != 'reference' or payload.get('stress'): raise RuntimeError(role + ' 编译失败')
+            if role != 'reference': raise RuntimeError(role + ' 编译失败')
     for index, item in enumerate(payload['solutions']):
         role = 'candidate' + str(index)
         if item['id'] == payload['primaryId']:
@@ -116,45 +105,15 @@ def main():
             else:
                 check('compile:' + role, False, next(item['message'] for item in checks if item['stage'] == 'compile:reference'), verdict='CE')
         else: source(role, item['language'], item['code'])
-    if not payload.get('stress'):
-        for case in payload['cases']:
-            try: cells.extend(verify(case))
-            except Exception as error:
-                cells.extend(publish_cell({'solutionId':item['id'], 'caseId':case['key'], 'verdict':'SYSTEM_ERROR', 'score':0, 'durationMs':0, 'message':str(error)}) for item in payload['solutions'])
-        return
-    spec = payload['stress']
-    stress = {'completedRounds':0, 'reason':'rounds', 'message':'已完成指定轮数，未发现反例。', 'cells':[]}
-    if any('candidate' + str(index) not in commands for index in range(len(payload['solutions']))): raise RuntimeError('待测程序编译失败')
-    for round in range(1 if payload.get('replay') else spec['rounds']):
-        seed = payload['replay']['seed'] if payload.get('replay') else spec['seed'] + round
-        args = payload['replay']['args'] if payload.get('replay') else [arg.replace('{seed}', str(seed)) for arg in spec['args']]
-        first, second = root / 'counterexample.in', root / 'repeat.in'
-        if not payload.get('replay'):
-            left = run(commands['generator'] + args, None, first, 30, 512, root / 'generator')
-            right = run(commands['generator'] + args, None, second, 30, 512, root / 'generator-repeat')
-            if left['status'] != 'ok' or right['status'] != 'ok': raise RuntimeError('生成器运行失败')
-            if not same_file(first, second): raise RuntimeError('相同种子生成的输入不一致')
-        found = verify({'id':'stress', 'key':'stress', 'inputPath':'counterexample.in'})
-        stress['completedRounds'] += 1
-        check('stress-round', True, '已完成 ' + str(stress['completedRounds']) + ' 轮')
-        if any(item['verdict'] == 'SYSTEM_ERROR' for item in found): raise RuntimeError('Checker 故障')
-        if any(item['verdict'] != 'AC' or item['score'] != 100 for item in found):
-            shutil.copyfile(root / 'answers' / 'stress.out', root / 'counterexample.out')
-            stress.update(reason='counterexample', message='发现反例。', seed=seed, args=args, cells=found,
-                          inputPreview=preview(first), outputPreview=preview(root / 'counterexample.out'),
-                          truncated=first.stat().st_size > 2048 or (root / 'counterexample.out').stat().st_size > 2048)
-            return
+    for case in payload['cases']:
+        try: cells.extend(verify(case))
+        except Exception as error:
+            cells.extend(publish_cell({'solutionId':item['id'], 'caseId':case['key'], 'verdict':'SYSTEM_ERROR', 'score':0, 'durationMs':0, 'message':str(error)}) for item in payload['solutions'])
 
 try: main()
-except BudgetEnd:
-    stress = stress or {'completedRounds':0, 'cells':[]}
-    stress.update(reason='budget', message='已达到时间预算。')
 except Exception as error:
     check('verification-system', False, str(error), verdict='SYSTEM_ERROR')
-    if payload.get('stress'):
-        stress = stress or {'completedRounds':0, 'cells':[]}
-        stress.update(reason='error', message=str(error))
-(root / 'matrix-result.json').write_text(json.dumps({'cells':cells, 'checks':checks, 'stress':stress}, ensure_ascii=False))
+(root / 'matrix-result.json').write_text(json.dumps({'cells':cells, 'checks':checks}, ensure_ascii=False))
 `;
 
 export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<SolutionSandboxResult> {
@@ -170,7 +129,7 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 				if (type !== "check") return;
 				const check = readSandboxCheck(data);
 				input.onProgress?.({ check });
-				if (!input.interactor) return;
+				if (!input.interactor && !input.communication) return;
 				for (const [index, solution] of input.solutions.entries()) {
 					const role = `candidate${index}`;
 					for (const test of input.cases ?? []) {
@@ -185,7 +144,7 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 			},
 		},
 	};
-	if (input.interactor) {
+	if (input.interactor || input.communication) {
 		const report = await runInteractiveSandbox({
 			...input,
 			contestants: input.solutions.map((item) => ({ id: item.id, program: item })),
@@ -199,6 +158,14 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 					report.checks.find((item) => item.stage === `interaction:${role}` && item.caseId === test.id) ?? compile;
 				const log = await readFile(join(input.stage, "logs", `${role}-${test.id}.json`), "utf8").catch(() => "");
 				const value = { ...interactiveCell(solution.id, test.id, role, result), log: log.slice(0, 8000) };
+				if (value.artifacts?.output)
+					value.output = (await readSandboxFile(input.stage, value.artifacts.output, input.maxFileBytes))
+						.subarray(0, 2048)
+						.toString("utf8");
+				if (value.artifacts?.expected)
+					value.expected = (await readSandboxFile(input.stage, value.artifacts.expected, input.maxFileBytes))
+						.subarray(0, 2048)
+						.toString("utf8");
 				cells.push(value);
 				input.onProgress?.({ cell: value });
 			}
@@ -218,7 +185,6 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 			outputPath: item.outputPath ? `cases/${index}.out` : undefined,
 		});
 	}
-	if (input.replay) await copyFile(input.replay.inputPath, join(input.stage, "counterexample.in"));
 	await writeFile(join(input.stage, "runner.py"), runner);
 	await writeFile(
 		join(input.stage, "payload.json"),
@@ -228,10 +194,7 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 			solutions: input.solutions,
 			checker: input.checker ? { code: input.checker, language: input.checkerStandard } : undefined,
 			validator: input.validator ? { code: input.validator, language: input.validatorStandard } : undefined,
-			generator: input.generator ? { code: input.generator, language: input.generatorStandard } : undefined,
 			cases,
-			stress: input.stress,
-			replay: input.replay ? { seed: input.replay.seed, args: input.replay.args } : undefined,
 			timeLimitMs: input.timeLimitMs,
 			memoryLimitMb: input.memoryLimitMb,
 			maxFileBytes: input.maxFileBytes,
@@ -276,8 +239,24 @@ function interactiveCell(solutionId: string, caseId: string, role: string, resul
 		score: result?.score ?? (result?.passed ? 100 : 0),
 		scoreRatio: result?.scoreRatio,
 		durationMs: result?.durationMs ?? 0,
+		memoryBytes: result?.memoryBytes,
 		message: result?.message ?? "测试未完成",
-		artifacts: { logs: [`logs/${role}.compile.txt`, `logs/${role}-${caseId}.json`] },
+		rounds: result?.rounds,
+		failedRound: result?.failedRound,
+		artifacts: {
+			expected: result?.rounds?.flatMap((round) => round.artifacts ?? []).find((path) => path.endsWith(".expected")),
+			output: result?.rounds?.flatMap((round) => round.artifacts ?? []).find((path) => path.endsWith(".out")),
+			logs: [
+				...new Set([
+					`logs/${role}.compile.txt`,
+					`logs/${role}-${caseId}.json`,
+					...(result?.rounds?.flatMap((round) => [
+						...(round.logPath ? [round.logPath] : []),
+						...(round.artifacts ?? []),
+					]) ?? []),
+				]),
+			],
+		},
 	};
 }
 
@@ -341,7 +320,7 @@ function readCells(values: unknown[]): MatrixCell[] {
 		if (
 			typeof item.solutionId !== "string" ||
 			typeof item.caseId !== "string" ||
-			!["AC", "WA", "CE", "RE", "TLE", "SYSTEM_ERROR"].includes(String(item.verdict)) ||
+			!["AC", "WA", "CE", "RE", "TLE", "MLE", "SYSTEM_ERROR"].includes(String(item.verdict)) ||
 			typeof item.score !== "number" ||
 			!Number.isFinite(item.score) ||
 			item.score < 0 ||
@@ -351,6 +330,11 @@ function readCells(values: unknown[]): MatrixCell[] {
 					!Number.isFinite(item.scoreRatio) ||
 					item.scoreRatio < 0 ||
 					item.scoreRatio > 1)) ||
+			(item.memoryBytes !== undefined &&
+				item.memoryBytes !== null &&
+				(typeof item.memoryBytes !== "number" ||
+					!Number.isSafeInteger(item.memoryBytes) ||
+					item.memoryBytes < 0)) ||
 			typeof item.durationMs !== "number" ||
 			!Number.isFinite(item.durationMs) ||
 			item.durationMs < 0 ||
@@ -364,11 +348,14 @@ function readCells(values: unknown[]): MatrixCell[] {
 			score: item.score,
 			scoreRatio: typeof item.scoreRatio === "number" ? item.scoreRatio : undefined,
 			durationMs: item.durationMs,
+			memoryBytes: typeof item.memoryBytes === "number" ? item.memoryBytes : undefined,
 			message: item.message.slice(0, 3000),
 			output: typeof item.output === "string" ? item.output.slice(0, 2048) : undefined,
 			expected: typeof item.expected === "string" ? item.expected.slice(0, 2048) : undefined,
 			log: typeof item.log === "string" ? item.log.slice(0, 8000) : undefined,
 			artifacts: readArtifacts(item.artifacts),
+			rounds: item.rounds === undefined ? undefined : readRoundResults(item.rounds),
+			failedRound: item.failedRound === 1 || item.failedRound === 2 ? item.failedRound : undefined,
 		};
 	});
 }

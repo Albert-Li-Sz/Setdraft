@@ -1,3 +1,4 @@
+import { problemTypeNames, resolveProblemType } from "@setdraft/contracts";
 import { useState } from "react";
 import { Dialog } from "./Dialog.tsx";
 import { EmptyState } from "./EmptyState.tsx";
@@ -27,7 +28,10 @@ export function RecordsPage(props: Props) {
 	const projects = props.projects.filter(
 		(item) =>
 			(scoringMode === "all" || item.scoringMode === scoringMode) &&
-			[item.title, item.slug, ...item.tags].join(" ").toLocaleLowerCase().includes(search),
+			[item.title, item.slug, t(problemTypeNames[resolveProblemType(item)]), ...item.tags]
+				.join(" ")
+				.toLocaleLowerCase()
+				.includes(search),
 	);
 	return (
 		<main className="page problem-center" id="records">
@@ -83,8 +87,8 @@ export function RecordsPage(props: Props) {
 							<span className="problem-row-content">
 								<strong>{project.title || t("未命名题目")}</strong>
 								<span>
-									{project.scoringMode.toUpperCase()} · {project.slug || t("未设置标识")} ·{" "}
-									{t("{0} 个测试点", project.cases.length)} ·{" "}
+									{t(problemTypeNames[resolveProblemType(project)])} · {project.scoringMode.toUpperCase()} ·{" "}
+									{project.slug || t("未设置标识")} · {t("{0} 个测试点", project.cases.length)} ·{" "}
 									{t(
 										"{0} 个发布包",
 										props.releases.filter((release) => release.projectId === project.id).length,

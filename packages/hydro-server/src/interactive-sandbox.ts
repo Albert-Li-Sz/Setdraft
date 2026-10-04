@@ -1,34 +1,55 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ManualCheck, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
+import {
+	communicationCompileStandard,
+	type ManualCheck,
+	type ManualProgram,
+	type ManualSandboxReport,
+} from "@setdraft/contracts";
 import { checkerRatio, checkerScore } from "./checker-protocol.ts";
+import {
+	communicationAdapter,
+	readCommunicationEnvelope,
+	readCommunicationInitialInput,
+} from "./communication-adapter.ts";
+import { sandboxGeneratorCommands, sandboxGenerators } from "./generator-sandbox.ts";
 import type { SandboxCase, SandboxInput } from "./manual-sandbox.ts";
+import { pythonProcessMonitor } from "./process-monitor.ts";
+import { readSandboxFile } from "./sandbox-files.ts";
 import { sandboxPolicy } from "./sandbox-policy.ts";
 import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
 const roles = ["reference", "oracle", "interactor", "validator", "generator"] as const;
-type Role = (typeof roles)[number] | `candidate${number}`;
+type Role = (typeof roles)[number] | `candidate${number}` | `generator${number}`;
 const captureLimit = 64 * 1024;
 const readyMarker = "SETDRAFT_INTERACTIVE_READY\n";
-const launcher = String.raw`import math, os, resource, sys
+const launcher = String.raw`import json, math, os, pathlib, resource, signal, subprocess, sys, time
 timeout, memory, file_limit = map(int, sys.argv[1:4])
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
 resource.setrlimit(resource.RLIMIT_CPU, (math.ceil(timeout / 1000) + 1, math.ceil(timeout / 1000) + 1))
-if memory:
-    resource.setrlimit(resource.RLIMIT_AS, (memory * 1048576, memory * 1048576))
+${pythonProcessMonitor}
 os.chdir('/tmp')
 os.write(2, b'SETDRAFT_INTERACTIVE_READY\n')
 if os.read(0, 1) != b'\n': sys.exit(125)
-os.execvpe(sys.argv[4], sys.argv[4:], {'PATH':'/usr/local/bin:/usr/bin:/bin', 'LANG':'C.UTF-8', 'LC_ALL':'C.UTF-8', 'TZ':'UTC', 'HOME':'/tmp'})
+process = subprocess.Popen(sys.argv[4:], start_new_session=True,
+    env={'PATH':'/usr/local/bin:/usr/bin:/bin', 'LANG':'C.UTF-8', 'LC_ALL':'C.UTF-8', 'TZ':'UTC', 'HOME':'/tmp'})
+path = pathlib.Path('/metrics/result.json')
+def sample(peak):
+    if path.parent.exists(): path.write_text(json.dumps({'memoryBytes':peak}))
+result = wait_program(process, timeout / 1000, memory or None, sample)
+if path.parent.exists(): path.write_text(json.dumps(result))
+sys.exit(0 if result['status'] == 'ok' else result['code'] if result['code'] > 0 else 1)
 `;
 
 export function interactiveContainerNames(taskId: string): string[] {
-	return [...roles, ...Array.from({ length: 32 }, (_, index) => `candidate${index}`)].map(
-		(role) => `setdraft-task-${taskId}-${role}`,
-	);
+	return [
+		...roles,
+		...Array.from({ length: 32 }, (_, index) => `candidate${index}`),
+		...Array.from({ length: 32 }, (_, index) => `generator${index}`),
+	].map((role) => `setdraft-task-${taskId}-${role}`);
 }
 
 function docker(
@@ -74,6 +95,8 @@ interface Program {
 }
 
 export interface InteractorAdapter {
+	source?: string;
+	communicationInputEnvelope?: boolean;
 	build: string;
 	run: string;
 	testlibPath: string;
@@ -196,6 +219,8 @@ async function dialogue(
 	jury: Program,
 	test: SandboxCase,
 	adapted: boolean,
+	round?: 1 | 2,
+	generation = false,
 ): Promise<ManualCheck> {
 	const policy = sandboxPolicy();
 	const juryMemory = 512;
@@ -203,12 +228,14 @@ async function dialogue(
 	if (juryMemory + contestantMemory > policy.memoryMb)
 		throw new Error(`交互任务需要至少 ${juryMemory + contestantMemory} MiB 沙箱内存预算。`);
 	const directory = join(input.stage, "jury", `${contestant.role}-${test.id}`);
+	await rm(directory, { recursive: true, force: true });
 	await mkdir(directory, { recursive: true });
 	await chmod(directory, 0o777);
 	await copyFile(test.inputPath, join(directory, "input.in"));
-	await writeFile(join(directory, "answer.ans"), "");
+	if (test.outputPath) await copyFile(test.outputPath, join(directory, "answer.ans"));
+	else await writeFile(join(directory, "answer.ans"), "");
 	await chmod(join(directory, "input.in"), 0o444);
-	await chmod(join(directory, "answer.ans"), 0o444);
+	await chmod(join(directory, "answer.ans"), generation ? 0o666 : 0o444);
 	const names = [contestant, jury].map((program) => `setdraft-task-${taskId}-${program.role}`);
 	const participants: Participant[] = [];
 	try {
@@ -216,12 +243,21 @@ async function dialogue(
 			input.context?.signal.throwIfAborted();
 			const isJury = index === 1;
 			const memory = isJury ? juryMemory : contestantMemory;
+			const metrics = join(input.stage, "metrics", `${program.role}-${test.id}`);
+			await rm(metrics, { recursive: true, force: true });
+			await mkdir(metrics, { recursive: true });
+			await chmod(metrics, 0o777);
 			const command = [
 				...program.command,
 				...(isJury
 					? adapted
 						? ["/jury/input.in", "/jury/answer.ans", "/jury"]
-						: ["/jury/input.in", "/jury/transcript", "/jury/answer.ans"]
+						: [
+								"/jury/input.in",
+								"/jury/transcript",
+								"/jury/answer.ans",
+								...(round ? [String(round), ...(generation ? ["generate"] : [])] : []),
+							]
 					: []),
 			];
 			const result = await docker([
@@ -235,6 +271,8 @@ async function dialogue(
 				"--mount",
 				`type=bind,source=${join(input.stage, "launcher.py")},target=/launcher.py,readonly`,
 				...(isJury ? ["--mount", `type=bind,source=${directory},target=/jury`] : []),
+				"--mount",
+				`type=bind,source=${metrics},target=/metrics`,
 				"--workdir",
 				"/tmp",
 				"--entrypoint",
@@ -242,7 +280,7 @@ async function dialogue(
 				input.image,
 				"/launcher.py",
 				String(input.timeLimitMs),
-				String(isJury ? juryMemory : contestant.language === "java" ? 0 : input.memoryLimitMb),
+				String(isJury ? juryMemory : input.memoryLimitMb),
 				String(input.maxFileBytes),
 				...command,
 			]);
@@ -319,9 +357,11 @@ async function dialogue(
 							timer = setTimeout(() => {
 								const team = participants[0];
 								finish(
-									team.closed && team.code !== 0 ? "RE" : "TLE",
-									team.closed && team.code !== 0
-										? `选手程序异常退出：${team.stderr}`
+									team.closed ? (team.code !== 0 ? "RE" : "SYSTEM_ERROR") : "TLE",
+									team.closed
+										? team.code !== 0
+											? `选手程序异常退出：${team.stderr}`
+											: "选手程序已结束，裁判未在时限内完成判定。"
 										: "交互超时：检查 flush、通信协议或双方等待。",
 								);
 							}, input.timeLimitMs);
@@ -362,7 +402,50 @@ async function dialogue(
 			}
 			if (input.context?.signal.aborted) abort();
 		});
-		return result;
+		const metrics = await readFile(
+			join(input.stage, "metrics", `${contestant.role}-${test.id}`, "result.json"),
+			"utf8",
+		).catch(() => "{}");
+		let memoryBytes: number | undefined;
+		let memoryExceeded = false;
+		try {
+			const value: unknown = JSON.parse(metrics);
+			if (
+				value &&
+				typeof value === "object" &&
+				"memoryBytes" in value &&
+				typeof value.memoryBytes === "number" &&
+				Number.isSafeInteger(value.memoryBytes) &&
+				value.memoryBytes >= 0
+			) {
+				memoryBytes = value.memoryBytes;
+				memoryExceeded = value.memoryBytes > input.memoryLimitMb * 1048576;
+			}
+		} catch {}
+		const states = await Promise.all(
+			names.map((name) => docker(["inspect", "--format", "{{.State.OOMKilled}}", name])),
+		);
+		if (states[1].stdout.trim() === "true")
+			return {
+				...result,
+				passed: false,
+				verdict: "SYSTEM_ERROR",
+				score: 0,
+				scoreRatio: 0,
+				message: "Interactor 容器内存超限。",
+				memoryBytes,
+			};
+		if (memoryExceeded || states[0].stdout.trim() === "true")
+			return {
+				...result,
+				passed: false,
+				verdict: "MLE",
+				score: 0,
+				scoreRatio: 0,
+				message: "选手程序实际内存使用超过限制。",
+				memoryBytes,
+			};
+		return { ...result, memoryBytes, logPath: `logs/${contestant.role}-${test.id}.json` };
 	} finally {
 		try {
 			await remove(names, input.stage);
@@ -390,6 +473,7 @@ export async function runInteractiveSandbox(
 	input: SandboxInput,
 	adapter?: InteractorAdapter,
 ): Promise<ManualSandboxReport> {
+	if (input.compilationCache) input = { ...input, image: input.compilationCache.image };
 	const taskId = input.context?.id ?? randomUUID();
 	const report: ManualSandboxReport = {
 		mode: input.mode,
@@ -400,7 +484,8 @@ export async function runInteractiveSandbox(
 		oracleCount: 0,
 		validatorUsed: Boolean(input.validator),
 		checkerUsed: false,
-		interactorUsed: true,
+		interactorUsed: !input.communication,
+		communicationUsed: Boolean(input.communication),
 	};
 	const check = (item: ManualCheck) => {
 		const bounded = { ...item, message: item.message.slice(0, 3000) };
@@ -409,26 +494,72 @@ export async function runInteractiveSandbox(
 	};
 	await mkdir(join(input.stage, "logs"), { recursive: true });
 	await mkdir(join(input.stage, "verified"), { recursive: true });
+	await rm(join(input.stage, "launcher.py"), { force: true });
 	await writeFile(join(input.stage, "launcher.py"), launcher);
 	await chmod(join(input.stage, "launcher.py"), 0o444);
 	const programs = new Map<Role, Program>();
+	let diagnosticBytes = 0;
+	const reserveDiagnostic = (bytes: number) => {
+		diagnosticBytes += bytes;
+		if (diagnosticBytes > 512 * 1024 * 1024) throw new Error("通信诊断文件超过任务容量上限。");
+	};
 	try {
 		const sources: Array<readonly [Role, ManualProgram | undefined]> = [
 			...(!input.contestants
 				? [["reference", input.reference] as const, ["oracle", input.oracle] as const]
 				: input.contestants.map((item, index) => [`candidate${index}` as Role, item.program] as const)),
-			["interactor", input.interactor],
-			["generator", input.generator ? { language: input.generatorStandard, code: input.generator } : undefined],
+			...[
+				...(input.communication &&
+				input.contestants &&
+				!input.contestants.some((item) => item.id === input.primaryId)
+					? [["reference", input.reference] as const]
+					: []),
+			],
+			[
+				"interactor",
+				input.communication
+					? {
+							language: communicationCompileStandard(input.communication, input.checkerStandard),
+							code:
+								adapter?.source ??
+								communicationAdapter(input.communication, input.checker ?? "", "local", input.maxFileBytes),
+						}
+					: input.interactor,
+			],
+			...sandboxGenerators(input).map((item, index) => [`generator${index}` as Role, item] as const),
 			["validator", input.validator ? { language: input.validatorStandard, code: input.validator } : undefined],
 		];
 		for (const [role, source] of sources) {
 			if (!source) continue;
 			input.context?.signal.throwIfAborted();
+			const adapted = role === "interactor" && adapter;
+			const cacheKey = createHash("sha256")
+				.update(JSON.stringify([source.language, source.code, adapted ? [adapted.build, adapted.run] : undefined]))
+				.digest("hex");
+			const cached = input.compilationCache?.programs.get(cacheKey);
+			if (cached) {
+				await writeFile(join(input.stage, "logs", `${role}.compile.txt`), cached.log);
+				check({
+					stage: `compile:${role}`,
+					passed: cached.passed,
+					verdict: cached.passed ? "AC" : "CE",
+					message: cached.message,
+					logPath: `logs/${role}.compile.txt`,
+				});
+				if (cached.passed)
+					programs.set(role, {
+						role,
+						language: source.language,
+						directory: cached.directory,
+						command: adapted ? ["/bin/sh", "/program/run"] : programCommand(source.language, input.memoryLimitMb),
+					});
+				else if (!input.contestants || !role.startsWith("candidate")) return report;
+				continue;
+			}
 			input.context?.emit("stage", `编译 ${role}`);
 			const directory = join(input.stage, "programs", role);
 			await mkdir(directory, { recursive: true });
 			await chmod(directory, 0o777);
-			const adapted = role === "interactor" && adapter;
 			const filename = adapted
 				? "interactor.cc"
 				: source.language.startsWith("cpp")
@@ -468,6 +599,12 @@ export async function runInteractiveSandbox(
 			await remove([name], input.stage);
 			await writeFile(join(input.stage, "logs", `${role}.compile.txt`), result.stdout + result.stderr);
 			input.context?.signal.throwIfAborted();
+			input.compilationCache?.programs.set(cacheKey, {
+				directory,
+				passed: result.code === 0,
+				log: result.stdout + result.stderr,
+				message: result.stderr || "编译成功。",
+			});
 			check({
 				stage: `compile:${role}`,
 				passed: result.code === 0,
@@ -490,13 +627,16 @@ export async function runInteractiveSandbox(
 		if (!jury) throw new Error("缺少交互器。");
 		const cases = [...(input.cases ?? [])];
 		if (input.mode === "generate") {
-			const generator = programs.get("generator");
-			if (!generator || !input.commands?.length) throw new Error("缺少生成器或生成命令。");
+			if (!input.commands?.length) throw new Error("缺少生成命令。");
 			await mkdir(join(input.stage, "generated"), { recursive: true });
-			for (const [index, args] of input.commands.entries()) {
+			for (const [index, command] of sandboxGeneratorCommands(input).entries()) {
+				const generator = programs.get(
+					`generator${sandboxGenerators(input).findIndex((item) => item.name === command.generator)}`,
+				);
+				if (!generator) throw new Error(`缺少生成器 ${command.generator}。`);
 				const caseId = String((input.startNumber ?? 1) + index);
-				const first = await runSingle(input, taskId, generator, args);
-				const second = await runSingle(input, taskId, generator, args);
+				const first = await runSingle(input, taskId, generator, command.args);
+				const second = await runSingle(input, taskId, generator, command.args);
 				const valid = first.code === 0 && second.code === 0 && first.stdout.equals(second.stdout);
 				check({
 					stage: "reproducibility",
@@ -511,6 +651,155 @@ export async function runInteractiveSandbox(
 				cases.push({ id: caseId, inputPath, outputName: `${caseId}.out` });
 			}
 		}
+		const communicate = async (contestant: Program, test: SandboxCase, generation = false): Promise<ManualCheck> => {
+			try {
+				const firstTest = { ...test, id: `${test.id}-round1`, outputPath: undefined };
+				let first = await dialogue(input, taskId, contestant, jury, firstTest, Boolean(adapter), 1);
+				const firstLog = `logs/${contestant.role}-${firstTest.id}.json`;
+				reserveDiagnostic((await stat(join(input.stage, firstLog))).size);
+				const nextPath = join(input.stage, "jury", `${contestant.role}-${firstTest.id}`, "nextpass.in");
+				let second: ManualCheck | undefined;
+				const paths: string[] = [];
+				if (first.verdict === "AC" && first.score === 100) {
+					try {
+						const envelope = await readSandboxFile(
+							input.stage,
+							`jury/${contestant.role}-${firstTest.id}/nextpass.in`,
+							input.maxFileBytes,
+							input.context?.signal,
+						);
+						const decoded = readCommunicationEnvelope(envelope, input.maxFileBytes);
+						const initial = await readFile(test.inputPath);
+						if (
+							!decoded.original.equals(
+								adapter?.communicationInputEnvelope ? readCommunicationInitialInput(initial) : initial,
+							)
+						)
+							throw new Error("通信交接改变了原始私有输入。");
+						const handoffPath = `logs/${contestant.role}-${test.id}.handoff`;
+						reserveDiagnostic(envelope.length);
+						await writeFile(join(input.stage, handoffPath), envelope);
+						paths.push(handoffPath);
+					} catch (error) {
+						first = {
+							...first,
+							passed: false,
+							verdict: "SYSTEM_ERROR",
+							score: 0,
+							scoreRatio: 0,
+							message: String(error),
+						};
+					}
+					if (first.passed) {
+						if (!generation && input.communication?.secondRound !== "interactive" && !test.outputPath)
+							second = {
+								stage: "interaction",
+								passed: false,
+								verdict: "SYSTEM_ERROR",
+								message: "主标程未生成第二轮标准答案。",
+							};
+						else
+							second = await dialogue(
+								input,
+								taskId,
+								contestant,
+								jury,
+								{ ...test, id: `${test.id}-round2`, inputPath: nextPath },
+								Boolean(adapter),
+								2,
+								generation,
+							);
+					}
+				}
+				const secondLog =
+					second?.logPath ??
+					(second?.durationMs !== undefined ? `logs/${contestant.role}-${test.id}-round2.json` : undefined);
+				if (secondLog) paths.push(secondLog);
+				if (secondLog) reserveDiagnostic((await stat(join(input.stage, secondLog))).size);
+				if (second && input.communication?.secondRound !== "interactive") {
+					const folder = `jury/${contestant.role}-${test.id}-round2`;
+					const output = await readSandboxFile(
+						input.stage,
+						`${folder}/final.out`,
+						input.maxFileBytes,
+						input.context?.signal,
+					).catch(() => undefined);
+					if (output) {
+						const outputPath = `logs/${contestant.role}-${test.id}.out`;
+						reserveDiagnostic(output.length);
+						await writeFile(join(input.stage, outputPath), output);
+						paths.push(outputPath);
+						if (generation && second.passed && second.score === 100)
+							await writeFile(join(input.stage, "verified", test.outputName), output);
+					}
+				}
+				if (second && test.outputPath) {
+					const expected = `logs/${contestant.role}-${test.id}.expected`;
+					reserveDiagnostic((await stat(test.outputPath)).size);
+					await copyFile(test.outputPath, join(input.stage, expected));
+					paths.push(expected);
+				}
+				const final = second ?? first;
+				const failedRound: 1 | 2 | undefined =
+					first.verdict !== "AC" || first.score !== 100
+						? 1
+						: second?.verdict !== "AC" || second.score !== 100
+							? 2
+							: undefined;
+				const result: ManualCheck = {
+					...final,
+					stage: `interaction:${contestant.role}`,
+					caseId: test.id,
+					passed: first.passed && second?.passed === true,
+					score: second?.score ?? 0,
+					scoreRatio: second?.scoreRatio ?? 0,
+					failedRound,
+					durationMs: Math.max(first.durationMs ?? 0, second?.durationMs ?? 0),
+					memoryBytes: Math.max(first.memoryBytes ?? 0, second?.memoryBytes ?? 0),
+					logPath: `logs/${contestant.role}-${test.id}.json`,
+					rounds: [
+						{
+							round: 1,
+							state: "complete",
+							verdict: first.verdict,
+							score: 0,
+							message: first.message,
+							durationMs: first.durationMs,
+							memoryBytes: first.memoryBytes,
+							logPath: firstLog,
+							artifacts: paths.filter((path) => path.endsWith(".handoff")),
+						},
+						second
+							? {
+									round: 2,
+									state: "complete",
+									verdict: second.verdict,
+									score: second.score,
+									message: second.message,
+									durationMs: second.durationMs,
+									memoryBytes: second.memoryBytes,
+									logPath: secondLog,
+									artifacts: paths.filter((path) => !path.endsWith(".handoff")),
+								}
+							: { round: 2, state: "skipped", message: "未运行：第一轮失败" },
+					],
+				};
+				const summary = JSON.stringify(result.rounds);
+				reserveDiagnostic(Buffer.byteLength(summary));
+				await writeFile(join(input.stage, result.logPath!), summary);
+				return result;
+			} finally {
+				// Persisted diagnostics use the bounded flat logs; temporary jury files are no longer needed.
+				await Promise.all(
+					([1, 2] as const).map((round) =>
+						rm(join(input.stage, "jury", `${contestant.role}-${test.id}-round${round}`), {
+							recursive: true,
+							force: true,
+						}),
+					),
+				);
+			}
+		};
 		for (const test of cases) {
 			input.context?.signal.throwIfAborted();
 			const validator = programs.get("validator");
@@ -525,19 +814,42 @@ export async function runInteractiveSandbox(
 				});
 				if (validation.code !== 0) continue;
 			}
-			for (const role of input.contestants
+			const candidateRoles = input.contestants
 				? input.contestants.map((_, index): Role => `candidate${index}`)
-				: (["reference", "oracle"] as const)) {
+				: (["reference", "oracle"] as const);
+			let baseline: ManualCheck | undefined;
+			const primaryRole: Role = input.contestants?.some((item) => item.id === input.primaryId)
+				? `candidate${input.contestants.findIndex((item) => item.id === input.primaryId)}`
+				: "reference";
+			if (input.communication && input.communication.secondRound !== "interactive") {
+				const primary = programs.get(primaryRole);
+				if (primary) {
+					baseline = await communicate(primary, test, !test.outputPath);
+					check(baseline);
+					if (baseline.passed && baseline.score === 100 && test.outputPath)
+						await copyFile(test.outputPath, join(input.stage, "verified", test.outputName));
+				}
+			}
+			for (const role of candidateRoles) {
 				const contestant = programs.get(role);
 				if (!contestant) continue;
-				const result = await dialogue(input, taskId, contestant, jury, test, Boolean(adapter));
+				if (baseline && role === primaryRole) continue;
+				const answerPath = join(input.stage, "verified", test.outputName);
+				const answer = baseline?.passed && baseline.score === 100 ? answerPath : undefined;
+				const result = input.communication
+					? await communicate(contestant, { ...test, outputPath: answer })
+					: await dialogue(input, taskId, contestant, jury, test, Boolean(adapter));
 				check(result);
 				if (role === "oracle") report.oracleCount += 1;
 				input.context?.signal.throwIfAborted();
 			}
-			await writeFile(join(input.stage, "verified", test.outputName), "");
+			if (!input.communication || input.communication.secondRound === "interactive")
+				await writeFile(join(input.stage, "verified", test.outputName), "");
 			if (input.mode === "generate") {
-				await writeFile(join(input.stage, "generated", test.outputName), "");
+				await copyFile(
+					join(input.stage, "verified", test.outputName),
+					join(input.stage, "generated", test.outputName),
+				);
 				report.generatedCount += 1;
 			}
 		}

@@ -5,6 +5,7 @@ export function SolutionSettings({
 	solution,
 	primary,
 	canCopy,
+	wrongOnly = false,
 	onChange,
 	onPrimary,
 	onCopy,
@@ -13,6 +14,7 @@ export function SolutionSettings({
 	solution: Solution;
 	primary: boolean;
 	canCopy: boolean;
+	wrongOnly?: boolean;
 	onChange(change: Partial<Solution>): void;
 	onPrimary(): void;
 	onCopy(): void;
@@ -23,7 +25,7 @@ export function SolutionSettings({
 		<div className="solution-settings">
 			<div className="verification-fields">
 				<label className="field">
-					<span>{t("解法名称")}</span>
+					<span>{t(wrongOnly ? "错误解名称" : "标程名称")}</span>
 					<input
 						value={solution.name}
 						maxLength={100}
@@ -40,7 +42,7 @@ export function SolutionSettings({
 						{Object.entries({
 							accepted: "正确解法",
 							brute: "暴力解法",
-							wrong: "已知 WA",
+							wrong: "已知错误",
 							slow: "预期 TLE",
 							partial: "部分分解法",
 						}).map(([value, name]) => (
@@ -61,15 +63,17 @@ export function SolutionSettings({
 								expectation:
 									event.target.value === "score"
 										? { kind: "score", min: 0, max: 50 }
-										: { kind: event.target.value as "AC" | "WA" | "TLE" },
+										: { kind: event.target.value as "AC" | "WA" | "TLE" | "MLE" | "RE" },
 							})
 						}
 					>
-						{["AC", "WA", "TLE", "score"].map((value) => (
-							<option key={value} value={value}>
-								{value === "score" ? t("总分区间") : value}
-							</option>
-						))}
+						{(wrongOnly ? ["WA", "TLE", "MLE", "RE", "score"] : ["AC", "WA", "TLE", "MLE", "RE", "score"]).map(
+							(value) => (
+								<option key={value} value={value}>
+									{value === "score" ? t("总分区间") : value}
+								</option>
+							),
+						)}
 					</select>
 				</label>
 				<label className="field">
@@ -105,21 +109,23 @@ export function SolutionSettings({
 					))}
 			</div>
 			<div className="heading-actions">
-				<button className="button secondary" type="button" disabled={primary} onClick={onPrimary}>
-					{t(primary ? "主标程" : "设为主标程")}
-				</button>
+				{!wrongOnly && (
+					<button className="button secondary" type="button" disabled={primary} onClick={onPrimary}>
+						{t(primary ? "主标程" : "设为主标程")}
+					</button>
+				)}
 				<button className="button secondary" type="button" disabled={!canCopy} onClick={onCopy}>
-					{t("复制解法")}
+					{t(wrongOnly ? "复制错误解" : "复制标程")}
 				</button>
 				<button className="button secondary" type="button" disabled={primary} onClick={onRemove}>
-					{t("删除解法")}
+					{t(wrongOnly ? "删除错误解" : "删除标程")}
 				</button>
 			</div>
 			<p className="manual-muted">
 				{t(
 					primary
 						? "主标程用于生成答案，必须全部测试点满分。"
-						: "WA / TLE 须至少命中一次，其余测试点为 AC；部分分按完整数据集判断。",
+						: "WA / TLE / MLE / RE 须至少命中一次，其余测试点为 AC 或同类错误；部分分按完整数据集判断。",
 				)}
 			</p>
 		</div>

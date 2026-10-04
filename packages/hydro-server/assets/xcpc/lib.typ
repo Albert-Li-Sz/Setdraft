@@ -179,14 +179,37 @@
 
   #if statement.at("interaction", default: "") != "" [
     #v(3.5pt)
-    #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#if language == "zh" { "交互描述" } else { "Interaction" }]
+    #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#if language == "zh" { "交互协议" } else { "Interaction" }]
     #v(3.5pt)
     #md(statement.interaction)
   ]
 
+  #for (key, zh, en) in (("communication", "通信说明", "Communication"), ("first_round", "第一轮协议", "First Round Protocol"), ("second_round", "第二轮协议", "Second Round Protocol")) {
+    if statement.at(key, default: "") != "" [
+      #v(3.5pt)
+      #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#if language == "zh" { zh } else { en }]
+      #v(3.5pt)
+      #md(statement.at(key))
+    ]
+  }
+
+  #if problem.at("interactive", default: false) and statement.at("notes", default: none) != none and statement.notes != "" [
+    #v(3.5pt)
+    #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#translations.at(language).note]
+    #v(3.5pt)
+    #if format == "latex" {
+      let res = mitex-convert(mode: "text", statement.notes)
+      eval(res, mode: "markup", scope: mitex-scope)
+    } else if format == "markdown" {
+      md(statement.notes)
+    } else {
+      eval(statement.notes, mode: "markup")
+    }
+  ]
+
   #if problem.samples.len() > 0 [
     #v(3.5pt)
-    #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#translations.at(language).examples]
+    #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#if problem.at("interactive", default: false) { if language == "zh" { "旧双栏样例（消息顺序未整理）" } else { "Legacy two-column examples (order unspecified)" } } else { translations.at(language).examples }]
     #v(3.5pt)
 
     #table(
@@ -195,7 +218,7 @@
       stroke: 0.4pt,
       inset: 4pt,
       table.header(
-        [#[#text(font: fonts.mono, weight: "bold", raw(if problem.at("interactive", default: false) { if language == "zh" { "交互器发送" } else { "Interactor sends" } } else { translations.at(language).stdin }))]],
+        [#[#text(font: fonts.mono, weight: "bold", raw(if problem.at("interactive", default: false) { if language == "zh" { "裁判发送" } else { "Judge sends" } } else { translations.at(language).stdin }))]],
         [#[#text(font: fonts.mono, weight: "bold", raw(if problem.at("interactive", default: false) { if language == "zh" { "选手发送" } else { "Contestant sends" } } else { translations.at(language).stdout }))]]
       ),
       ..problem.samples.map(s => (
@@ -205,7 +228,27 @@
     )
   ]
 
-  #if statement.at("notes", default: none) != none and statement.notes != "" [
+  #if problem.at("protocol_samples", default: ()).len() > 0 [
+    #v(3.5pt)
+    #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#if language == "zh" { "协议样例" } else { "Protocol Examples" }]
+    #for (i, sample) in problem.protocol_samples.enumerate() [
+      #v(3.5pt)
+      #text(font: fonts.sans, weight: "bold")[#if language == "zh" { "样例 " } else { "Example " }#(i + 1)]
+      #for group in sample.rounds [
+        #if problem.at("problem_type", default: "") == "communication" [
+          #v(3.5pt)
+          #strong[#if language == "zh" { "第 " + str(group.round) + " 轮" } else { "Round " + str(group.round) }]
+        ]
+        #for (j, message) in group.messages.enumerate() [
+          #v(3.5pt)
+          #text(font: fonts.sans, weight: "bold")[#(j + 1). #if message.sender == "judge" { if language == "zh" { "裁判发送" } else { "Judge sends" } } else { if language == "zh" { "选手发送" } else { "Contestant sends" } }]
+          #block(breakable: true, width: 100%, inset: 4pt, stroke: 0.4pt)[#raw(message.text, block: true)]
+        ]
+      ]
+    ]
+  ]
+
+  #if not problem.at("interactive", default: false) and statement.at("notes", default: none) != none and statement.notes != "" [
     #v(3.5pt)
     #text(font: fonts.sans, size: 17.28pt, weight: "bold")[#translations.at(language).note]
     #v(3.5pt)

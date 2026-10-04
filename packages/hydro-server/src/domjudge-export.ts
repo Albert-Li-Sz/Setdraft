@@ -3,8 +3,14 @@ import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
-import { isContestReadyRelease } from "@setdraft/contracts";
+import {
+	communicationCompileStandard,
+	isContestReadyRelease,
+	resolveProblemType,
+	usesProtocol,
+} from "@setdraft/contracts";
 import { awkCheckerProtocol } from "./checker-protocol.ts";
+import { communicationAdapter, communicationInitialInput } from "./communication-adapter.ts";
 import { exportFileName } from "./export-contract.ts";
 import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
@@ -207,10 +213,24 @@ export async function writeDomjudgeProblemArchive(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	const project = JSON.parse(await readFile(join(releaseRoot, "source", "project.json"), "utf8")) as ManualProject;
-	const interactive = release.judgingMode === "interactive";
-	if (interactive !== (project.judgingMode === "interactive")) throw new Error("发布记录与源快照题型不一致。");
+	const interactive = usesProtocol(release);
+	const communication = resolveProblemType(release) === "communication";
+	if (resolveProblemType(release) !== resolveProblemType(project)) throw new Error("发布记录与源快照题型不一致。");
+	if (communication && !project.communication) throw new Error("通信配置缺失。");
 	const role = interactive ? "interactor" : "checker";
-	const standard = interactive ? (project.interactorStandard ?? "cpp17") : project.checkerStandard;
+	const standard =
+		communication && project.communication
+			? communicationCompileStandard(project.communication, project.checkerStandard)
+			: interactive
+				? (project.interactorStandard ?? "cpp17")
+				: project.checkerStandard;
+	const communicationSource =
+		communication && project.communication
+			? communicationAdapter(project.communication, project.checkerSource, "domjudge")
+			: undefined;
+	const interactiveScript = communication
+		? interactiveRunScript.replace('"$1" "$3/transcript" "$2"', '"$1" "$2" "$3"')
+		: interactiveRunScript;
 	const manifest = JSON.parse(await readFile(join(releaseRoot, "source", "manifest.json"), "utf8")) as SourceManifest;
 	const problemId = domjudgeProblemId(release.id);
 	const stage = await mkdtemp(join(releaseRoot, ".domjudge-"));
@@ -231,10 +251,12 @@ export async function writeDomjudgeProblemArchive(
 			"problem.yaml",
 			[
 				"problem_format_version: legacy-icpc",
+				...(communication ? ["type: pass-fail interactive multi-pass"] : []),
 				`name: ${JSON.stringify(release.title)}`,
 				interactive ? "validation: custom interactive" : "validation: custom",
 				"limits:",
 				`  memory: ${Math.ceil(memory)}`,
+				...(communication ? ["  validation_passes: 2"] : []),
 				"",
 			].join("\n"),
 		);
@@ -250,11 +272,12 @@ export async function writeDomjudgeProblemArchive(
 		] as const) {
 			const relative = `output_validators/${role}/${name}`;
 			const path = join(stage, relative);
-			await copyFile(source, path);
+			if (name === "interactor.cc" && communicationSource) await writeFile(path, communicationSource);
+			else await copyFile(source, path);
 			files.set(relative, path);
 		}
 		await put(`output_validators/${role}/build`, buildScript(standard, role));
-		await put(`output_validators/${role}/run`, interactive ? interactiveRunScript : runScript);
+		await put(`output_validators/${role}/run`, interactive ? interactiveScript : runScript);
 		await chmod(join(validatorDir, "build"), 0o755);
 		await chmod(join(validatorDir, "run"), 0o755);
 		for (const [index, item] of manifest.cases.entries()) {
@@ -266,7 +289,10 @@ export async function writeDomjudgeProblemArchive(
 				const relative = `data/secret/${stem}.${extension}`;
 				const path = join(stage, relative);
 				await mkdir(join(path, ".."), { recursive: true });
-				await copyFile(join(releaseRoot, "hydro", release.slug, "testdata", name), path);
+				const source = join(releaseRoot, "hydro", release.slug, "testdata", name);
+				if (communication && extension === "in")
+					await writeFile(path, communicationInitialInput(await readFile(source)));
+				else await copyFile(source, path);
 				files.set(relative, path);
 			}
 		}
@@ -292,9 +318,11 @@ export async function writeDomjudgeProblemArchive(
 						emit() {},
 					},
 					reference: project.reference,
-					interactor: { language: standard, code: project.interactorSource ?? "" },
+					interactor: communication ? undefined : { language: standard, code: project.interactorSource ?? "" },
+					communication: communication ? project.communication : undefined,
+					checker: project.checkerSource,
 					generatorStandard: "cpp17",
-					checkerStandard: "cpp17",
+					checkerStandard: project.checkerStandard,
 					validatorStandard: "cpp17",
 					timeLimitMs,
 					memoryLimitMb: Math.ceil(memory),
@@ -303,11 +331,16 @@ export async function writeDomjudgeProblemArchive(
 						id: String(index + 1),
 						inputPath: join(stage, "data", "secret", `${String(index + 1).padStart(3, "0")}.in`),
 						outputName: item.outputFile,
+						outputPath: communication
+							? join(stage, "data", "secret", `${String(index + 1).padStart(3, "0")}.ans`)
+							: undefined,
 					})),
 				},
 				{
 					build: buildScript(standard, role),
-					run: interactiveRunScript,
+					run: interactiveScript,
+					source: communicationSource,
+					communicationInputEnvelope: communication,
 					testlibPath: join(validatorDir, "testlib.h"),
 				},
 			);

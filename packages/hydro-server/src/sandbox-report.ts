@@ -1,4 +1,4 @@
-import type { ManualCheck, ManualSandboxReport } from "@setdraft/contracts";
+import type { ManualCheck, ManualSandboxReport, RoundResult } from "@setdraft/contracts";
 
 function object(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("沙箱报告结构无效。");
@@ -24,7 +24,8 @@ export function readSandboxCheck(value: unknown): ManualCheck {
 	if (item.caseId !== undefined && item.caseId !== null) check.caseId = text(item.caseId, 200);
 	if (item.verdict !== undefined) {
 		const verdict = text(item.verdict);
-		if (!["AC", "WA", "CE", "RE", "TLE", "SYSTEM_ERROR"].includes(verdict)) throw new Error("沙箱报告判定无效。");
+		if (!["AC", "WA", "CE", "RE", "TLE", "MLE", "SYSTEM_ERROR"].includes(verdict))
+			throw new Error("沙箱报告判定无效。");
 		check.verdict = verdict as ManualCheck["verdict"];
 	}
 	if (item.score !== undefined) check.score = count(item.score, 100);
@@ -39,8 +40,46 @@ export function readSandboxCheck(value: unknown): ManualCheck {
 		check.scoreRatio = item.scoreRatio;
 	}
 	if (item.durationMs !== undefined) check.durationMs = count(item.durationMs, 86_400_000);
+	if (item.memoryBytes !== undefined) check.memoryBytes = count(item.memoryBytes, 1024 * 1024 * 1024 * 128);
 	if (item.logPath !== undefined) check.logPath = text(item.logPath, 500);
+	if (item.failedRound !== undefined) {
+		if (item.failedRound !== 1 && item.failedRound !== 2) throw new Error("失败轮次无效。");
+		check.failedRound = item.failedRound;
+	}
+	if (item.rounds !== undefined) check.rounds = readRoundResults(item.rounds);
 	return check;
+}
+
+export function readRoundResults(value: unknown): RoundResult[] {
+	if (!Array.isArray(value) || value.length !== 2) throw new Error("通信轮次结果无效。");
+	return value.map((raw, index) => {
+		const item = object(raw);
+		if (item.round !== index + 1 || (item.state !== "complete" && item.state !== "skipped"))
+			throw new Error("通信轮次结果无效。");
+		const check = readSandboxCheck({ ...item, rounds: undefined, stage: "round", passed: item.verdict === "AC" });
+		const paths = item.artifacts ?? [];
+		if (
+			(check.logPath !== undefined && !/^logs\/[A-Za-z0-9_.:-]+$/u.test(check.logPath)) ||
+			(index === 0 && item.state !== "complete") ||
+			(item.state === "complete" && !check.verdict) ||
+			(item.state === "skipped" && check.verdict !== undefined) ||
+			!Array.isArray(paths) ||
+			paths.length > 10 ||
+			paths.some((path) => typeof path !== "string" || !/^logs\/[A-Za-z0-9_.:-]+$/u.test(path))
+		)
+			throw new Error("通信诊断路径无效。");
+		return {
+			round: item.round as 1 | 2,
+			state: item.state,
+			verdict: check.verdict,
+			score: check.score,
+			message: check.message,
+			durationMs: check.durationMs,
+			memoryBytes: check.memoryBytes,
+			logPath: check.logPath,
+			artifacts: paths as string[],
+		};
+	});
 }
 
 export function readSandboxReport(value: unknown): ManualSandboxReport {
@@ -60,6 +99,8 @@ export function readSandboxReport(value: unknown): ManualSandboxReport {
 	};
 	if (report.success && (!checks.length || checks.some((check) => !check.passed)))
 		throw new Error("沙箱报告结果不一致。");
+	if (item.interactorUsed !== undefined) report.interactorUsed = flag(item.interactorUsed);
+	if (item.communicationUsed !== undefined) report.communicationUsed = flag(item.communicationUsed);
 	if (item.toolchain !== undefined) {
 		const toolchain = object(item.toolchain);
 		report.toolchain = { cpp: text(toolchain.cpp), python: text(toolchain.python), java: text(toolchain.java) };

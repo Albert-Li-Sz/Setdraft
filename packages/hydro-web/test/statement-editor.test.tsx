@@ -27,7 +27,7 @@ describe("sectioned statement editor", () => {
 			const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>(.*?)<\/button>/gu)].map((match) => match[1]);
 			expect(tabs).toEqual([
 				"描述",
-				...(judgingMode === "interactive" ? ["交互描述"] : ["输入", "输出"]),
+				...(judgingMode === "interactive" ? ["交互协议"] : ["输入", "输出"]),
 				"提示",
 				'样例<span class="tab-count">1</span>',
 			]);

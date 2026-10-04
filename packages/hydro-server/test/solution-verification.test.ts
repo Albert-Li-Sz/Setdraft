@@ -128,32 +128,29 @@ it("uses Hydro final-case remainder allocation and sum/min/max aggregation", () 
 		),
 	).toBe(15);
 });
-it("validates stress bounds, literal arguments and defaults without shell execution", () => {
-	expect(
+it("accepts pressure runs over complete data and disables random execution", () => {
+	expect(readVerificationOptions({ kind: "pressure", solutionIds: ["wrong"] })).toEqual({
+		kind: "pressure",
+		solutionIds: ["wrong"],
+		caseIds: undefined,
+	});
+	expect(() => readVerificationOptions({ kind: "pressure", caseIds: ["manual:1"] })).toThrow("完整数据集");
+	expect(() =>
 		readVerificationOptions({
 			kind: "stress",
 			baselineId: "reference",
-			solutionIds: ["wrong"],
 			command: "gen {seed}",
+			solutionIds: ["wrong"],
 		}),
-	).toMatchObject({ seed: 1, rounds: 100, budgetMs: 60000 });
-	for (const value of [
-		{ rounds: 1001 },
-		{ seed: -1 },
-		{ budgetMs: 0 },
-		{ solutionIds: ["reference"] },
-		{ command: "gen 1" },
-		{ command: "gen {seed}; rm -rf x" },
-	])
-		expect(() =>
-			readVerificationOptions({
-				kind: "stress",
-				baselineId: "reference",
-				solutionIds: ["wrong"],
-				command: "gen {seed}",
-				...value,
-			}),
-		).toThrow();
+	).toThrow("停用");
+});
+it.each(["WA", "TLE", "MLE", "RE"] as const)("matches %s only with target and AC verdicts", (verdict) => {
+	const wrong = { ...bad, expectation: { kind: verdict } };
+	expect(evaluateSolution(wrong, [cell("1", verdict), cell("2", "AC")], 2, 50, true).matches).toBe(true);
+	expect(evaluateSolution(wrong, [cell("1", "AC")], 1, 100, true).message).toContain("提醒出题人");
+	for (const unexpected of ["CE", "SYSTEM_ERROR", "WA", "TLE", "MLE", "RE"] as const)
+		if (unexpected !== verdict)
+			expect(evaluateSolution(wrong, [cell("1", verdict), cell("2", unexpected)], 2, 0, true).matches).toBe(false);
 });
 sandboxIt(
 	"runs a complete matrix with CE isolation, exact expectations, and observation-only failures",
@@ -184,74 +181,47 @@ sandboxIt(
 	},
 	120000,
 );
-sandboxIt(
-	"finds the first deterministic counterexample, preserves and replays its snapshot, and imports once",
-	async () => {
-		const project = await fixture();
-		const options = readVerificationOptions({
-			kind: "stress",
-			baselineId: "reference",
-			solutionIds: ["wrong"],
+it("keeps old random records readable and their bundles downloadable while disabling replay and import", async () => {
+	const project = await fixture();
+	const run = {
+		id: randomUUID(),
+		projectId: project.id,
+		revision: project.revision,
+		fingerprint: "legacy",
+		image: "old-image",
+		createdAt: new Date().toISOString(),
+		state: "complete" as const,
+		solutions: [bad],
+		options: {
+			kind: "stress" as const,
+			baselineId: good.id,
+			solutionIds: [bad.id],
 			command: "gen {seed}",
-			seed: 7,
+			seed: 1,
 			rounds: 100,
 			budgetMs: 60000,
-		});
-		const run = await store.runs.execute(project.id, options);
-		expect(run.stress, run.error).toMatchObject({
-			reason: "counterexample",
-			seed: 7,
-			args: ["7"],
-			completedRounds: 1,
-			inputPreview: "7 2\n",
-			outputPreview: "9\n",
-		});
-		const archive = await store.runs.archive(project.id, run.id);
-		expect((await readFile(archive)).subarray(0, 2).toString()).toBe("PK");
-		const extracted = join(root, "reproduction");
-		await promisify(execFile)("unzip", ["-q", archive, "-d", extracted]);
-		const bundle = join(extracted, "setdraft-reproduction");
-		await promisify(execFile)("sh", [join(bundle, "reproduce.sh")], { timeout: 60000 });
-		expect(JSON.parse(await readFile(join(bundle, "matrix-result.json"), "utf8")).stress).toMatchObject({
-			reason: "counterexample",
-			seed: 7,
-			args: ["7"],
-		});
-		await store.update(project.id, { solutions: [good, { ...bad, code: good.code }] });
-		const replay = await store.runs.execute(project.id, options, undefined, run.id);
-		expect(replay.stress?.reason).toBe("counterexample");
-		expect(replay.revision).toBe(run.revision);
-		const current = await store.get(project.id);
-		await expect(
-			store.runs.importCase(project.id, run.id, {
-				expectedRevision: current.revision - 1,
-				subtaskId: 1,
-				name: "new.in",
-			}),
-		).rejects.toThrow("版本");
-		await expect(
-			store.runs.importCase(project.id, run.id, { expectedRevision: current.revision, subtaskId: 1, name: "1.in" }),
-		).rejects.toThrow("已存在");
-		const imported = await store.runs.importCase(project.id, run.id, {
-			expectedRevision: current.revision,
-			subtaskId: 1,
-			name: "new.in",
-		});
-		expect(imported.cases).toHaveLength(2);
-		expect(imported.lastReport).toBeUndefined();
-		expect(await readFile(await store.dataFile(project.id, "manual", "new.in"), "utf8")).toBe("7 2\n");
-		await expect(
-			store.runs.importCase(project.id, run.id, {
-				expectedRevision: imported.revision,
-				subtaskId: 1,
-				name: "other.in",
-			}),
-		).rejects.toThrow("已加入");
-		const second = await store.create("acm");
-		await expect(store.runs.get(second.id, run.id)).rejects.toThrow("不存在");
-	},
-	120000,
-);
+		},
+		stress: { reason: "counterexample" as const, completedRounds: 1, cells: [cell("legacy", "WA")] },
+	};
+	await store.database.commitFiles(
+		[
+			{
+				ownerKind: "verification-file",
+				ownerId: run.id,
+				name: "reproduction.zip",
+				source: { bytes: Buffer.from("PK legacy bundle") },
+			},
+		],
+		() => store.database.put("verification-run", run.id, run),
+	);
+	expect((await store.runs.page(project.id, { kind: "stress" })).runs[0].id).toBe(run.id);
+	expect((await store.runs.get(project.id, run.id)).stress?.reason).toBe("counterexample");
+	expect(await readFile(await store.runs.archive(project.id, run.id), "utf8")).toBe("PK legacy bundle");
+	await expect(store.runs.execute(project.id, run.options)).rejects.toThrow("停用");
+	await expect(store.runs.execute(project.id, { kind: "matrix" }, undefined, run.id)).rejects.toThrow("停用");
+	await expect(store.runs.importCase(project.id, run.id, {})).rejects.toThrow("停用");
+	expect((await store.get(project.id)).cases).toHaveLength(1);
+});
 sandboxIt.each([
 	["acm", "provided"],
 	["acm", "empty"],
@@ -276,6 +246,11 @@ sandboxIt.each([
 			JSON.stringify(run),
 		).toEqual(["AC", "WA", "CE"]);
 		expect(run.matrix?.requiredPassed).toBe(true);
+		const pressure = await store.runs.execute(project.id, { kind: "pressure", solutionIds: [bad.id] });
+		expect(pressure.matrix?.full).toBe(true);
+		expect(pressure.matrix?.cells).toHaveLength(1);
+		expect(pressure.matrix?.cells[0].verdict).toBe("WA");
+		expect(pressure.matrix?.solutions[0].matches).toBe(true);
 	},
 	120000,
 );
@@ -342,6 +317,10 @@ sandboxIt(
 		expect(sampled.matrix?.full).toBe(false);
 		expect(sampled.matrix?.requiredPassed).toBe(false);
 		expect(sampled.matrix?.solutions.find((item) => item.solutionId === bad.id)?.matches).toBe(false);
+		const pressure = await store.runs.execute(project.id, { kind: "pressure", solutionIds: [bad.id] });
+		expect(pressure.matrix?.full).toBe(true);
+		expect(pressure.matrix?.cells).toHaveLength(3);
+		expect(pressure.matrix?.solutions[0]).toMatchObject({ score: 49, matches: true, complete: true });
 	},
 	60000,
 );
@@ -363,86 +342,42 @@ sandboxIt(
 	60000,
 );
 
-sandboxIt.each(["nondeterministic", "baseline", "checker", "validator", "rounds", "budget"] as const)(
-	"distinguishes stress outcome %s",
-	async (scenario) => {
+sandboxIt(
+	"judges wrong solutions independently over all data with real memory evidence and saved diagnostics",
+	async () => {
 		const project = await fixture();
-		if (scenario === "nondeterministic")
-			await store.update(project.id, {
-				generatorSource:
-					"#include <iostream>\n#include <chrono>\nint main(){std::cout << std::chrono::high_resolution_clock::now().time_since_epoch().count();}",
-			});
-		if (scenario === "baseline")
-			await store.update(project.id, {
-				reference: { language: "python3", code: 'raise RuntimeError("faux failure")' },
-			});
-		if (scenario === "checker")
-			await store.update(project.id, {
-				checkerMode: "custom",
-				checkerSource:
-					'#include "testlib.h"\nint main(int argc,char**argv){registerTestlibCmd(argc,argv);quitf(_fail,"faux checker failure");}',
-			});
-		if (scenario === "validator")
-			await store.update(project.id, {
-				validatorSource:
-					'#include "testlib.h"\nint main(int argc,char**argv){registerValidation(argc,argv);inf.readInt(100,200);}',
-			});
-		if (scenario === "rounds") await store.update(project.id, { solutions: [good, { ...bad, code: good.code }] });
-		if (scenario === "budget")
-			await store.update(project.id, {
-				solutions: [good, { ...bad, code: "import time; time.sleep(10)" }],
-				timeLimit: "10000ms",
-			});
-		const run = await store.runs.execute(
-			project.id,
-			readVerificationOptions({
-				kind: "stress",
-				baselineId: good.id,
-				solutionIds: [bad.id],
-				command: "gen {seed}",
-				rounds: 2,
-				budgetMs: scenario === "budget" ? 1000 : 60000,
-			}),
-		);
-		expect(run.stress?.reason, JSON.stringify(run)).toBe(
-			["rounds", "budget"].includes(scenario) ? scenario : "error",
-		);
-		if (scenario === "rounds") expect(run.stress?.completedRounds).toBe(2);
-		if (scenario === "nondeterministic") expect(run.error).toContain("不一致");
-		if (scenario === "baseline") expect(run.error).toContain("基准");
-	},
-	60000,
-);
-
-sandboxIt.each(["RE", "TLE"] as const)(
-	"preserves the first %s counterexample and its actual output",
-	async (verdict) => {
-		const project = await fixture();
-		await store.update(project.id, {
-			solutions: [
-				good,
-				{
-					...bad,
-					code:
-						verdict === "RE"
-							? "print('partial',flush=True)\nraise RuntimeError('faux')"
-							: "import time\nprint('partial',flush=True)\ntime.sleep(3)",
-				},
-			],
-		});
-		const run = await store.runs.execute(
-			project.id,
-			readVerificationOptions({ kind: "stress", baselineId: good.id, solutionIds: [bad.id], command: "gen {seed}" }),
-		);
-		expect(run.stress).toMatchObject({
-			reason: "counterexample",
-			completedRounds: 1,
-			seed: 1,
-			cells: [expect.objectContaining({ verdict })],
-		});
+		const wrongs = [
+			bad,
+			solution("slow", "import time\ntime.sleep(3)", { kind: "TLE" }),
+			solution("memory", "data=bytearray(256*1024*1024)\nprint(0)", { kind: "MLE" }),
+			solution("crash", "print('partial',flush=True)\nraise RuntimeError('faux')", { kind: "RE" }),
+			solution("undetected", good.code, { kind: "WA" }),
+			solution("broken", "invalid syntax!", { kind: "RE" }),
+		];
+		await store.update(project.id, { solutions: [good, ...wrongs], memoryLimit: "64m", timeLimit: "500ms" });
+		await store.addTextCase(project.id, { name: "2.in", input: "2 3\n", output: "5\n" });
+		const run = await store.runs.execute(project.id, { kind: "pressure" });
+		expect(run.state, JSON.stringify(run)).toBe("complete");
+		expect(run.matrix?.full).toBe(true);
+		expect(run.matrix?.cells).toHaveLength(12);
+		const outcomes = run.matrix!.solutions;
 		expect(
-			(await store.database.readBuffer("verification-file", run.id, "outputs/candidate0-stress.out")).toString(),
-		).toBe("partial\n");
+			outcomes.map((item) => item.matches),
+			JSON.stringify(run.matrix?.cells),
+		).toEqual([true, true, true, true, false, false]);
+		expect(outcomes[4].message).toContain("提醒出题人");
+		const memory = run.matrix!.cells.filter((item) => item.solutionId === "memory");
+		expect(memory.every((item) => item.verdict === "MLE" && item.memoryBytes! > 64 * 1048576)).toBe(true);
+		const crash = await store.runs.cell(project.id, run.id, "crash", "manual:1");
+		expect(crash.cell.output).toBe("partial\n");
+		expect(crash.cell.log).toContain("RuntimeError");
+		expect((await store.runs.get(project.id, run.id)).matrix?.cells).toHaveLength(12);
+		expect((await readFile(await store.runs.diagnosticFile(project.id, run.id))).subarray(0, 2).toString()).toBe(
+			"PK",
+		);
+		await expect(store.runs.execute(project.id, { kind: "pressure", solutionIds: [good.id] })).rejects.toThrow(
+			"错误解",
+		);
 	},
-	60000,
+	120000,
 );

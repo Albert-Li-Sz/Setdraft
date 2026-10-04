@@ -274,6 +274,8 @@ export class ContestStore {
 				title: release.title,
 				statement: project.statementSections ? "" : project.statement,
 				statementSections: project.statementSections,
+				problemType: project.problemType,
+				protocolSamples: project.protocolSamples,
 				judgingMode: project.judgingMode,
 				samples: project.samples,
 				attachments: project.attachments,

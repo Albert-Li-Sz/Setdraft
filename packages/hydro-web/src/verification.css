@@ -58,8 +58,7 @@
 	width: auto;
 	flex-shrink: 0;
 }
-.solution-settings,
-.stress-options {
+.solution-settings {
 	display: grid;
 	gap: 12px;
 }
@@ -170,27 +169,6 @@
 .manual-program-menu :where(button > span) {
 	overflow-wrap: anywhere;
 	min-width: 0;
-}
-.chat-search-query > span {
-	flex-shrink: 0;
-	white-space: nowrap;
-}
-.chat-search-query textarea {
-	flex: 1;
-	width: 100%;
-	min-width: 0;
-	min-height: 48px;
-	max-height: 120px;
-	border: 0;
-	background: transparent;
-	padding: 8px 0;
-	font: inherit;
-	resize: vertical;
-}
-.chat-actual-queries {
-	white-space: pre-wrap;
-	font-size: 13px;
-	overflow-wrap: anywhere;
 }
 @media (max-width: 600px) {
 	.matrix-scroll {

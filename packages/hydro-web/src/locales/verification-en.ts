@@ -18,8 +18,6 @@ export const verificationMessages: Record<string, string> = {
 	设为主标程: "Make primary",
 	复制解法: "Duplicate solution",
 	删除解法: "Delete solution",
-	添加解法: "Add solution",
-	新解法: "New solution",
 	副本: "copy",
 	"主标程用于生成答案，必须全部测试点满分。": "The primary generates answers and must earn full credit on every case.",
 	"WA / TLE 须至少命中一次，其余测试点为 AC；部分分按完整数据集判断。":
@@ -102,16 +100,9 @@ export const verificationMessages: Record<string, string> = {
 	部分搜索完成: "Search partially completed",
 	搜索失败: "Search failed",
 	"关键词生成：输入 {0} · 输出 {1} tokens": "Keyword planning: {0} input · {1} output tokens",
-	改词重搜: "Edit keywords and search again",
 	"正在生成搜索关键词…": "Generating search keywords…",
 	"实际关键词：{0}": "Search keywords: {0}",
-	"留空由 AI 生成 1–3 组关键词；手填每行一组，最多 3 组":
-		"Leave blank for AI planning, or enter up to 3 queries, one per line",
-	"使用新关键词创建请求，保留旧回答。": "Create a new request with these keywords and keep the previous answer.",
-	"搜索关键词（每行一组，最多 3 组）": "Search keywords (one per line, up to 3)",
 	重新搜索: "Search again",
-	"关键词生成失败，本次回复未使用网络资料；可填写关键词后重搜。":
-		"Keyword planning failed. This answer uses no web sources; enter keywords to search again.",
 	"未取得可用资料，本次回复未使用网络资料。": "No usable sources were retrieved. This answer uses no web sources.",
 	"部分搜索未成功，回答使用已取得的资料。": "Some searches failed. This answer uses the available sources.",
 	"发现反例。": "Counterexample found.",

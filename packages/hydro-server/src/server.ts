@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname } from "node:path";
 import { promisify } from "node:util";
+import { isProblemType } from "@setdraft/contracts";
 import { AuthHttp } from "./auth-http.ts";
 import { ChatError, type ChatImageUpload, type ChatService } from "./chat.ts";
 import { streamEvents } from "./event-stream.ts";
@@ -14,7 +15,6 @@ import { ManualProjectError, type ManualProjectStore } from "./manual-projects.t
 import { NOOP_OBSERVABILITY, type Observability } from "./observability.ts";
 import { copyProject, restoreProject } from "./project-history.ts";
 import { releaseName } from "./releases.ts";
-import { searchQueries } from "./search-planner.ts";
 import { serveStatic } from "./static-files.ts";
 import { readVerificationOptions } from "./verification-runs.ts";
 import { WorkspaceRegistry } from "./workspace-registry.ts";
@@ -112,8 +112,8 @@ async function readChatSubmission(
 		return typeof value === "string" ? value : undefined;
 	};
 	const images: ChatImageUpload[] = [];
-	if (field("searchQueries") !== undefined && field("searchQuery") !== undefined)
-		throw new ChatError("单组与多组关键词不能同时提供。", 422);
+	if (form.has("searchQueries") || form.has("searchQuery"))
+		throw new ChatError("搜索关键词由 AI 自动生成，不接受手动关键词。", 422);
 	for (const item of form.getAll("images")) {
 		if (typeof item === "string") throw new ChatError("图片格式无效。", 422);
 		images.push({
@@ -130,16 +130,7 @@ async function readChatSubmission(
 		profileId: field("profileId"),
 		images,
 		webSearch: field("webSearch") === "true",
-		searchQuery: field("searchQueries") ? readMultipleQueries(field("searchQueries")) : field("searchQuery"),
 	};
-}
-
-function readMultipleQueries(value: string | undefined): string {
-	try {
-		return searchQueries(JSON.parse(value ?? "[]")).join("\n");
-	} catch {
-		throw new ChatError("搜索关键词格式无效。", 422);
-	}
 }
 
 async function sendFile(
@@ -182,15 +173,8 @@ function readChatMessage(value: unknown): {
 	if (record.images !== undefined && !Array.isArray(record.images)) throw new ChatError("图片列表格式无效。");
 	if (record.webSearch !== undefined && typeof record.webSearch !== "boolean")
 		throw new ChatError("搜索开关无效。", 422);
-	if (record.searchQuery !== undefined && typeof record.searchQuery !== "string")
-		throw new ChatError("搜索关键词格式无效。", 422);
-	if (record.searchQuery !== undefined && record.searchQueries !== undefined)
-		throw new ChatError("请使用单个或多个关键词字段之一。", 422);
-	const query =
-		record.searchQueries !== undefined
-			? searchQueries(record.searchQueries).join("\n")
-			: (record.searchQuery as string | undefined);
-	if (query?.trim()) searchQueries(query.split("\n").filter((item) => item.trim()));
+	if ("searchQuery" in record || "searchQueries" in record)
+		throw new ChatError("搜索关键词由 AI 自动生成，不接受手动关键词。", 422);
 	const images = record.images as unknown[] | undefined;
 	if (
 		images?.some((image) => {
@@ -210,7 +194,6 @@ function readChatMessage(value: unknown): {
 		profileId: record.profileId as string | undefined,
 		images: images as ChatImageUpload[] | undefined,
 		webSearch: record.webSearch as boolean | undefined,
-		searchQuery: query,
 	};
 }
 
@@ -487,7 +470,9 @@ export async function createHydroServer(
 					if (scoringMode !== "acm" && scoringMode !== "oi") {
 						throw new ManualProjectError("新建题目时须选择 ACM 或 OI 赛制。");
 					}
-					sendJson(response, 201, await projects.create(scoringMode));
+					const problemType = (value as Record<string, unknown>).problemType ?? "standard";
+					if (!isProblemType(problemType)) throw new ManualProjectError("题型无效。", 422);
+					sendJson(response, 201, await projects.create(scoringMode, problemType));
 				} else sendJson(response, 405, { error: "METHOD_NOT_ALLOWED", message: "不支持该方法。" });
 				return;
 			}
@@ -534,10 +519,8 @@ export async function createHydroServer(
 				} else if (request.method === "GET" && runId && action === "download")
 					await sendFile(response, await projects.runs.archive(projectId, runId), "reproduction.zip");
 				else if (request.method === "POST" && runId && action === "replay") {
-					const original = await projects.runs.get(projectId, runId);
-					if (original.stress?.reason !== "counterexample")
-						throw new ManualProjectError("此运行没有可重放反例。", 422);
-					sendJson(response, 202, { task: await tasks.submitVerification(projectId, original.options, runId) });
+					await projects.runs.get(projectId, runId);
+					throw new ManualProjectError("随机对拍重放已停用，旧记录仍可查看和下载。", 410);
 				} else if (request.method === "POST" && (!runId || action === "import")) {
 					const value = await readJson(request, 64 * 1024);
 					if (!value || typeof value !== "object" || Array.isArray(value))

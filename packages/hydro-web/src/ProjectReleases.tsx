@@ -1,4 +1,4 @@
-import { requiresReverification } from "@setdraft/contracts";
+import { problemTypeNames, requiresReverification, resolveProblemType } from "@setdraft/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "./auth-client.ts";
 import { Dialog } from "./Dialog.tsx";
@@ -140,6 +140,7 @@ export function ProjectReleases({
 							<div>
 								<h3>{release.name || `v${release.revision}`}</h3>
 								<p>
+									{t(problemTypeNames[resolveProblemType(release)])} · {release.scoringMode.toUpperCase()} ·{" "}
 									{t("版本 {0} · {1} 个测试点", release.revision, release.report.caseCount)} ·{" "}
 									{new Date(release.createdAt).toLocaleString(locale)}
 								</p>
@@ -169,7 +170,7 @@ export function ProjectReleases({
 										>
 											DOMjudge
 										</button>
-										{release.judgingMode !== "interactive" && release.checkerMode === "text" && (
+										{resolveProblemType(release) === "standard" && (
 											<>
 												<button
 													type="button"
@@ -182,6 +183,24 @@ export function ProjectReleases({
 													type="button"
 													disabled={working || busy}
 													onClick={() => void exportOne(release, "qduoj")}
+												>
+													QDUOJ
+												</button>
+											</>
+										)}
+										{resolveProblemType(release) === "communication" && (
+											<>
+												<button
+													type="button"
+													disabled
+													title={t("通信题暂不支持 FPS／QDUOJ，请使用 Hydro 或 DOMjudge。")}
+												>
+													FPS
+												</button>
+												<button
+													type="button"
+													disabled
+													title={t("通信题暂不支持 FPS／QDUOJ，请使用 Hydro 或 DOMjudge。")}
 												>
 													QDUOJ
 												</button>
@@ -208,6 +227,9 @@ export function ProjectReleases({
 								))}
 							</div>
 						</div>
+						{resolveProblemType(release) === "communication" && (
+							<p className="manual-muted">{t("通信题暂不支持 FPS／QDUOJ，请使用 Hydro 或 DOMjudge。")}</p>
+						)}
 					</article>
 				))}
 			</div>

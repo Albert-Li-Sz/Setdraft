@@ -1,3 +1,4 @@
+import { problemTypeNames } from "@setdraft/contracts";
 import { useEffect, useRef, useState } from "react";
 import { requestJson } from "./api-client.ts";
 import { authClient } from "./auth-client.ts";
@@ -19,7 +20,8 @@ function checkDetails(data: unknown): { caseId?: string; passed?: boolean } {
 
 const taskNames: Record<BackgroundTask["kind"], string> = {
 	matrix: "验证矩阵",
-	stress: "随机对拍",
+	stress: "旧对拍记录",
+	pressure: "压力测试",
 	generate: "生成数据",
 	finalize: "完整验证与打包",
 	"contest-export": "竞赛导出",
@@ -253,7 +255,8 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 									<div className="eyebrow">{task.kind}</div>
 									<h2 id="task-detail-title">{t(taskNames[task.kind])}</h2>
 									<p>
-										{task.resourceTitle} · {new Date(task.createdAt).toLocaleString(locale)}
+										{task.resourceTitle} · {task.problemType && `${t(problemTypeNames[task.problemType])} · `}
+										{new Date(task.createdAt).toLocaleString(locale)}
 									</p>
 									<TaskState state={task.state} cleanupPending={task.cleanupPending} />
 									<QueueStatus task={task} detail />
@@ -272,26 +275,28 @@ export function TasksPage({ apiOrigin, paused }: { apiOrigin: string; paused: bo
 											{t("取消任务")}
 										</button>
 									)}
-									{["failed", "cancelled", "stale", "interrupted"].includes(task.state) && (
-										<button
-											className="button primary"
-											type="button"
-											disabled={busy}
-											onClick={() => void action("retry")}
-										>
-											{t("重试")}
-										</button>
-									)}
+									{task.kind !== "stress" &&
+										["failed", "cancelled", "stale", "interrupted"].includes(task.state) && (
+											<button
+												className="button primary"
+												type="button"
+												disabled={busy}
+												onClick={() => void action("retry")}
+											>
+												{t("重试")}
+											</button>
+										)}
 								</div>
 							</div>
-							{["matrix", "stress", "finalize"].includes(task.kind) && (
+							{["matrix", "pressure", "stress", "finalize"].includes(task.kind) && (
 								<a
 									className="button secondary button-link"
 									href={workspaceHash({
 										project: task.resource.split(":")[1],
 										tab: "validation",
 										task: task.id,
-										mode: task.kind === "stress" ? "stress" : "matrix",
+										mode:
+											task.kind === "stress" ? "stress" : task.kind === "pressure" ? "pressure" : "matrix",
 									})}
 								>
 									{t("打开对应运行")}

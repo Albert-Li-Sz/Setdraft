@@ -2,19 +2,25 @@ import {
 	interactiveReferenceTemplate,
 	interactorTemplate,
 	projectSolutions,
+	resolveProblemType,
 	type Solution,
 	synchronizeSolutions,
+	verificationContractVersion,
 } from "@setdraft/contracts";
 import { useEffect, useRef, useState } from "react";
 import { AuthenticationRequired, authFetch } from "./auth-client.ts";
 import { copyText, createClientId } from "./browser-capabilities.ts";
 import { CodeMirrorEditor } from "./CodeMirrorEditor.tsx";
+import { CommunicationSettings } from "./CommunicationSettings.tsx";
 import { type CheckerPreset, checkerPresets } from "./checker-presets.ts";
 import { Dialog } from "./Dialog.tsx";
 import { readSourceFile } from "./file-transfer.ts";
+import { GeneratorLibrary } from "./GeneratorLibrary.tsx";
 import { Icon } from "./Icon.tsx";
 import { type UiMessage, useLocale } from "./i18n.tsx";
 import { limitAmount } from "./limit-input.ts";
+import { ProblemTypeSelect } from "./ProblemTypeSelect.tsx";
+import { ProgramEditor } from "./ProgramEditor.tsx";
 import { ProjectReleases } from "./ProjectReleases.tsx";
 import {
 	apiUrl,
@@ -177,63 +183,6 @@ function CodeEditor(props: {
 	);
 }
 
-function ProgramEditor(props: {
-	label: string;
-	language: ProgramLanguage;
-	code: string;
-	optional?: boolean;
-	onChange(language: ProgramLanguage, code: string): void;
-	onImport(file: File): Promise<void>;
-}) {
-	const { t } = useLocale();
-	return (
-		<section className="manual-code-block">
-			<div className="manual-code-heading">
-				<div>
-					<h3>
-						{props.label}
-						{props.optional && <span className="manual-optional">{t("可选")}</span>}
-					</h3>
-				</div>
-				<div className="manual-code-actions">
-					<select
-						aria-label={t("{0}语言", props.label)}
-						value={props.language}
-						onChange={(event) => props.onChange(event.target.value as ProgramLanguage, props.code)}
-					>
-						{cppLanguageOptions.map((option) => (
-							<option value={option.value} key={option.value}>
-								{t(option.label)}
-							</option>
-						))}
-						<option value="python3">Python 3</option>
-						<option value="java">Java</option>
-					</select>
-					<label className="button secondary manual-file-button">
-						{t("上传程序")}
-						<input
-							type="file"
-							accept=".cpp,.cc,.cxx,.py,.java,.txt"
-							onChange={(event) => {
-								const file = event.currentTarget.files?.[0];
-								if (file) void props.onImport(file).catch(() => {});
-								event.currentTarget.value = "";
-							}}
-						/>
-					</label>
-				</div>
-			</div>
-			<CodeMirrorEditor
-				value={props.code}
-				language={props.language}
-				previewLines={20}
-				onChange={(code) => props.onChange(props.language, code)}
-				ariaLabel={t("{0}源码", props.label)}
-			/>
-		</section>
-	);
-}
-
 import { readWorkspaceLocation, replaceWorkspaceLocation, useLocationHash } from "./workspace-navigation.ts";
 
 export function ManualWorkspace(props: Props) {
@@ -262,16 +211,25 @@ export function ManualWorkspace(props: Props) {
 	const [selectedProgramSection, setProgramSection] = useState<ProgramSection>(
 		`solution:${project.referenceSolutionId ?? "reference"}`,
 	);
-	const interactive = project.judgingMode === "interactive";
+	const problemType = resolveProblemType(project);
+	const communication = problemType === "communication";
+	const interactive = problemType === "interactive" || communication;
+	const showChecker = !interactive || (communication && project.communication?.secondRound === "custom");
 	const emptyInput = interactive && project.interactionInputMode === "empty";
 	const tab = emptyInput && selectedTab === "generator" ? "data" : selectedTab;
 	const programSection =
-		(interactive && selectedProgramSection === "checker") ||
-		(!interactive && selectedProgramSection === "interactor") ||
+		(!showChecker && selectedProgramSection === "checker") ||
+		(problemType !== "interactive" && selectedProgramSection === "interactor") ||
+		(!communication && selectedProgramSection === "communication") ||
 		(emptyInput && selectedProgramSection === "validator")
 			? `solution:${project.referenceSolutionId ?? "reference"}`
 			: selectedProgramSection;
-	const missingProgram = !project.reference.code.trim() || (interactive && !project.interactorSource?.trim());
+	const missingProgram =
+		!project.reference.code.trim() ||
+		(problemType === "interactive" && !project.interactorSource?.trim()) ||
+		(communication &&
+			(!project.communication?.judgeSource.trim() ||
+				(project.communication.secondRound === "custom" && !project.checkerSource.trim())));
 	const [publishing, setPublishing] = useState(false);
 	const layoutRef = useRef<HTMLDivElement>(null);
 	const [compact, setCompact] = useState(false);
@@ -389,12 +347,13 @@ export function ManualWorkspace(props: Props) {
 		props.report === report &&
 		(report?.mode ?? "finalize") === "finalize" &&
 		report?.revision === project.revision &&
-		props.saveStatus === "已保存";
+		props.saveStatus === "已保存" &&
+		report?.verificationContractVersion === verificationContractVersion;
 	const tabItems: Array<{ id: Tab; label: string; count?: number }> = [
 		{ id: "statement", label: "题面" },
 		{ id: "data", label: "测试数据", count: emptyInput ? 1 : project.cases.length },
 		...(emptyInput ? [] : [{ id: "generator" as const, label: "Gen 生成" }]),
-		{ id: "programs", label: interactive ? "程序与交互器" : "程序与 SPJ" },
+		{ id: "programs", label: "程序与判题" },
 		{ id: "validation", label: "验证" },
 		{ id: "releases", label: "发布包" },
 	];
@@ -433,7 +392,7 @@ export function ManualWorkspace(props: Props) {
 			...items,
 			{
 				id,
-				name: t("新解法"),
+				name: t("新标程"),
 				language: "cpp17",
 				code: "",
 				purpose: "accepted",
@@ -452,19 +411,36 @@ export function ManualWorkspace(props: Props) {
 			filled: !!item.code.trim(),
 			required: item.required,
 		})),
-		interactive
-			? {
-					id: "interactor",
-					label: "交互器 · C++ testlib",
-					filled: !!project.interactorSource?.trim(),
-					required: true,
-				}
-			: {
-					id: "checker",
-					label: "SPJ · C++ testlib checker",
-					filled: project.checkerMode === "text" || !!project.checkerSource.trim(),
-					required: true,
-				},
+		...(problemType === "interactive"
+			? [
+					{
+						id: "interactor",
+						label: "Interactor · C++ testlib",
+						filled: !!project.interactorSource?.trim(),
+						required: true,
+					},
+				]
+			: []),
+		...(communication
+			? [
+					{
+						id: "communication",
+						label: "通信裁判 · C++ testlib",
+						filled: !!project.communication?.judgeSource.trim(),
+						required: true,
+					},
+				]
+			: []),
+		...(showChecker
+			? [
+					{
+						id: "checker",
+						label: problemType === "standard" ? "内置文本比较" : "Checker · C++ testlib",
+						filled: problemType === "standard" || !!project.checkerSource.trim(),
+						required: true,
+					},
+				]
+			: []),
 		...(emptyInput
 			? []
 			: [
@@ -481,7 +457,7 @@ export function ManualWorkspace(props: Props) {
 			setPendingCheckerPreset({ projectId: project.id, preset });
 			return;
 		}
-		props.onEdit((current) => ({ ...current, checkerMode: "custom", checkerSource: preset.source }));
+		props.onEdit((current) => ({ ...current, checkerSource: preset.source }));
 		setPendingCheckerPreset(undefined);
 	}
 
@@ -652,18 +628,18 @@ export function ManualWorkspace(props: Props) {
 						>
 							{interactive && (
 								<fieldset className="interaction-data-options" disabled={!!props.busy}>
-									<legend>{t("交互数据配置")}</legend>
+									<legend>{t("测试输入来源")}</legend>
 									{(
 										[
 											{
 												value: "empty",
-												label: "全交互",
-												detail: "输入与答案全空，交互器自行组织固定场景。",
+												label: "无测试输入",
+												detail: "使用一个严格空测试点，裁判自行组织固定场景。",
 											},
 											{
 												value: "provided",
-												label: "半对拍",
-												detail: "仅提供交互器私有输入，答案为空，仍使用双向交互。",
+												label: "使用私有测试数据",
+												detail: "Gen 或手动数据作为裁判私有输入，选手通过协议获取信息。",
 											},
 										] as const
 									).map((option) => (
@@ -685,17 +661,17 @@ export function ManualWorkspace(props: Props) {
 							)}
 							{emptyInput ? (
 								<div className="info-strip">
-									{t(
-										"自动使用一个严格空的 .in 和空答案，不注入 seed。已有数据与分组保留，切回有输入模式即可恢复。",
-									)}
+									{t("自动使用一个严格空的测试点。已有数据与分组保留，切回有输入模式即可恢复。")}
 								</div>
 							) : (
 								<>
 									<div className="info-strip">
 										{t(
-											interactive
-												? "上传 .in 作为交互器私有输入；无需答案，发布时自动补空答案。选手只能通过 stdin/stdout 与交互器通信。"
-												: "一次选择多个 .in、.out、.ans 文件，按同名主干配对。.in 必需；未提供输出时由标程生成，已提供输出时由标程核对。单文件上限 64 MiB，项目默认上限 512 MiB。",
+											communication
+												? "上传 .in 作为第一轮裁判私有输入；第二轮输入通过裁判显式交接，最终比较答案由主标程运行两轮生成。"
+												: interactive
+													? "上传 .in 作为交互器私有输入；无需答案，发布时自动补空答案。选手只能通过 stdin/stdout 与交互器通信。"
+													: "一次选择多个 .in、.out、.ans 文件，按同名主干配对。.in 必需；未提供输出时由标程生成，已提供输出时由标程核对。单文件上限 64 MiB，项目默认上限 512 MiB。",
 										)}
 									</div>
 									<label className="button secondary manual-file-button">
@@ -926,7 +902,12 @@ export function ManualWorkspace(props: Props) {
 															</td>
 															<td>
 																{interactive ? (
-																	t("自动补空答案")
+																	t(
+																		communication &&
+																			project.communication?.secondRound !== "interactive"
+																			? "两轮标程生成"
+																			: "自动补空答案",
+																	)
 																) : item.outputFile ? (
 																	<a
 																		href={apiUrl(
@@ -1148,22 +1129,19 @@ export function ManualWorkspace(props: Props) {
 						>
 							<div className="info-strip">
 								{t(
-									interactive
-										? "Gen 重跑确认输入可复现，再由标程与交互器双向验证。生成的答案文件为空。"
-										: "Gen 使用所选 C++ 标准编译，沙箱内提供 testlib.h。脚本每行一条 gen 命令，支持引号参数和 # 注释，不执行 Shell 管道或变量展开。相同参数会重跑并比对输入哈希；填写第二标准程序后还会交叉核验输出。",
+									communication
+										? "Gen 生成第一轮裁判私有输入；多 Gen 共用脚本，主标程运行两轮验证。第二轮文本或特判的答案由主标程生成。"
+										: interactive
+											? "Gen 重跑确认输入可复现，再由标程与交互器双向验证。生成的答案文件为空。"
+											: "Gen 支持 C++ testlib 和 Python 3 标准库；所有生成器共用下方脚本，按 gen、gen_1 等编号调用。支持引号参数和 # 注释，相同参数重跑确认输入可复现。",
 								)}
 							</div>
 							<div className="manual-generator-layout">
-								<CodeEditor
-									label={t("数据生成器 Gen")}
-									value={project.generatorSource}
-									onImport={(file) =>
-										importCode("generatorSource", file, (code) => set("generatorSource", code))
-									}
-									onChange={(value) => set("generatorSource", value)}
-									standard={project.generatorStandard}
-									onStandardChange={(standard) => set("generatorStandard", standard)}
-									help={t('可直接 #include "testlib.h"，编译后的命令固定为 gen。')}
+								<GeneratorLibrary
+									project={project}
+									disabled={!!props.busy}
+									onEdit={props.onEdit}
+									onImport={importCode}
 								/>
 								<CodeEditor
 									label={t("生成脚本")}
@@ -1174,7 +1152,7 @@ export function ManualWorkspace(props: Props) {
 									onChange={(value) => set("generatorScript", value)}
 									syntax="gen-script"
 									accept=".txt,.sh,.gen"
-									help={t("示例：gen large 1000000 100；每行生成一个测试点。")}
+									help={t("示例：gen large 1000000 100 或 gen_1 42；每行生成一个测试点。")}
 								/>
 							</div>
 							<div className="manual-generate-actions">
@@ -1182,12 +1160,7 @@ export function ManualWorkspace(props: Props) {
 									className="button primary"
 									type="button"
 									onClick={() => void props.onGenerate()}
-									disabled={
-										!!props.busy ||
-										!project.generatorSource.trim() ||
-										!project.generatorScript.trim() ||
-										missingProgram
-									}
+									disabled={!!props.busy || !project.generatorScript.trim() || missingProgram}
 								>
 									{props.busy === "generate" ? t("生成中…") : t("生成并验证")}
 								</button>
@@ -1203,13 +1176,17 @@ export function ManualWorkspace(props: Props) {
 						>
 							<div className="info-strip">
 								{t(
-									interactive
-										? "标准程序和交互器必填；第二标准程序可选，独立执行同一交互协议。发送消息后必须 flush。"
-										: "主标程生成答案；必检解法影响发布，仅观察解法提供提示。Checker 支持文本比较、预设与自定义代码。",
+									communication
+										? "主标程和通信裁判必填；每个标程独立完成两轮。发送消息后必须 flush。"
+										: interactive
+											? "标准程序和交互器必填；第二标准程序可选，独立执行同一交互协议。发送消息后必须 flush。"
+											: problemType === "standard"
+												? "主标程生成答案；标准题使用内置文本比较。必检解法影响发布，仅观察解法提供提示。"
+												: "主标程生成答案；特判题使用自定义 Checker。必检解法影响发布，仅观察解法提供提示。",
 								)}
 							</div>
 							<div className="manual-program-layout">
-								<nav className="manual-program-menu" aria-label={t("程序与 SPJ 分区")}>
+								<nav className="manual-program-menu" aria-label={t("程序与判题分区")}>
 									<div className="manual-program-menu-title">{t("程序文件")}</div>
 									<button
 										className="button secondary"
@@ -1217,7 +1194,7 @@ export function ManualWorkspace(props: Props) {
 										disabled={solutions.length >= 32}
 										onClick={() => addSolution()}
 									>
-										{t("添加解法")}
+										{t("添加标程")}
 									</button>
 									{programSections.map((section) => (
 										<button
@@ -1235,6 +1212,26 @@ export function ManualWorkspace(props: Props) {
 									))}
 								</nav>
 								<div className="manual-program-panel">
+									{programSection === "communication" && (
+										<CommunicationSettings
+											project={project}
+											disabled={!!props.busy}
+											onChange={(value) => set("communication", value)}
+											onReference={(language, code) => set("reference", { language, code })}
+											onImport={(file) =>
+												importCode("communication", file, (code) =>
+													props.onEdit((current) => ({
+														...current,
+														communication: {
+															judgeSource: code,
+															judgeStandard: current.communication?.judgeStandard ?? "cpp17",
+															secondRound: current.communication?.secondRound ?? "interactive",
+														},
+													})),
+												)
+											}
+										/>
+									)}
 									{programSection === "interactor" && (
 										<>
 											<div className="manual-checker-preset-list">
@@ -1330,62 +1327,63 @@ export function ManualWorkspace(props: Props) {
 									)}
 									{programSection === "checker" && (
 										<>
-											<div className="manual-checker-presets">
-												<div className="manual-checker-presets-heading">
-													<strong>{t("预设 Checker")}</strong>
-													<span>{t("点击导入可编辑的 testlib 源码，发布前仍需完整验证。")}</span>
-												</div>
-												<div className="manual-checker-preset-list">
-													{checkerPresets.map((preset) => (
-														<button
-															key={preset.id}
-															type="button"
-															onClick={() => importCheckerPreset(preset)}
-														>
-															<strong>{preset.label}</strong>
-															<span>{t(preset.description)}</span>
-														</button>
-													))}
-												</div>
-												{pendingCheckerPreset?.projectId === project.id && (
-													<div className="manual-checker-replace" role="alert">
-														<span>
-															{t("导入 {0} 会覆盖现有 SPJ 源码。", t(pendingCheckerPreset.preset.label))}
-														</span>
-														<button
-															className="button primary"
-															type="button"
-															onClick={() => {
-																props.onEdit((current) => ({
-																	...current,
-																	checkerMode: "custom",
-																	checkerSource: pendingCheckerPreset.preset.source,
-																}));
-																setPendingCheckerPreset(undefined);
-															}}
-														>
-															{t("确认覆盖")}
-														</button>
-														<button
-															className="button secondary"
-															type="button"
-															onClick={() => setPendingCheckerPreset(undefined)}
-														>
-															{t("取消")}
-														</button>
+											{problemType === "standard" && (
+												<p className="manual-muted">
+													{t(
+														"文本比较统一换行，忽略行尾空格、制表符和末尾空行；内部空格、大小写与数字写法必须一致。",
+													)}
+												</p>
+											)}
+											{problemType !== "standard" && (
+												<div className="manual-checker-presets">
+													<div className="manual-checker-presets-heading">
+														<strong>{t("预设 Checker")}</strong>
+														<span>{t("点击导入可编辑的 testlib 源码，发布前仍需完整验证。")}</span>
 													</div>
-												)}
-											</div>
-											<div className="manual-checker-preset-list">
-												<button type="button" onClick={() => set("checkerMode", "text")}>
-													<strong>{t("默认文本比对")}</strong>
-													<span>{t("统一换行，忽略行尾空格与末尾空行")}</span>
-												</button>
-												<button type="button" onClick={() => set("checkerMode", "custom")}>
-													<strong>{t("自定义 Checker")}</strong>
-													<span>{t("编辑 C++ testlib 判定代码")}</span>
-												</button>
-											</div>
+													<div className="manual-checker-preset-list">
+														{checkerPresets.map((preset) => (
+															<button
+																key={preset.id}
+																type="button"
+																onClick={() => importCheckerPreset(preset)}
+															>
+																<strong>{preset.label}</strong>
+																<span>{t(preset.description)}</span>
+															</button>
+														))}
+													</div>
+													{pendingCheckerPreset?.projectId === project.id && (
+														<div className="manual-checker-replace" role="alert">
+															<span>
+																{t(
+																	"导入 {0} 会覆盖现有 SPJ 源码。",
+																	t(pendingCheckerPreset.preset.label),
+																)}
+															</span>
+															<button
+																className="button primary"
+																type="button"
+																onClick={() => {
+																	props.onEdit((current) => ({
+																		...current,
+																		checkerSource: pendingCheckerPreset.preset.source,
+																	}));
+																	setPendingCheckerPreset(undefined);
+																}}
+															>
+																{t("确认覆盖")}
+															</button>
+															<button
+																className="button secondary"
+																type="button"
+																onClick={() => setPendingCheckerPreset(undefined)}
+															>
+																{t("取消")}
+															</button>
+														</div>
+													)}
+												</div>
+											)}
 											<p className="manual-muted">
 												{t("当前：")}
 												{project.checkerMode === "text"
@@ -1394,9 +1392,9 @@ export function ManualWorkspace(props: Props) {
 														? t("自定义 Checker")
 														: t("旧题目尚未选择 Checker")}
 											</p>
-											{project.checkerMode === "custom" && (
+											{problemType !== "standard" && (
 												<CodeEditor
-													label="SPJ · C++ testlib checker"
+													label="Checker · C++ testlib"
 													value={project.checkerSource}
 													onImport={(file) =>
 														importCode("checkerSource", file, (code) => set("checkerSource", code))
@@ -1440,9 +1438,11 @@ export function ManualWorkspace(props: Props) {
 									<h2>{t("完整验证")}</h2>
 									<p>
 										{t(
-											interactive
-												? "标程必须通过全部交互测试点才可发布；公开样例不参与普通输入输出比对。"
-												: "基础验证与全部必检解法预期满足后才发布；观察项不阻止发布。",
+											communication
+												? "主标程必须完整完成两轮且全点满分，全部必检程序须符合预期；公开协议样例不参与评测。"
+												: interactive
+													? "标程必须通过全部交互测试点才可发布；公开样例不参与普通输入输出比对。"
+													: "基础验证与全部必检解法预期满足后才发布；观察项不阻止发布。",
 										)}
 									</p>
 								</div>
@@ -1485,6 +1485,7 @@ export function ManualWorkspace(props: Props) {
 											{report.validatorUsed ? t(" · 输入校验器已运行") : t(" · 输入约束未经校验")}
 											{report.checkerUsed ? t(" · SPJ 已测试") : ""}
 											{report.interactorUsed ? t(" · 双向交互已测试") : ""}
+											{report.communicationUsed ? t(" · 两轮通信已测试") : ""}
 										</span>
 									</div>
 									<div className="manual-check-list">
@@ -1503,6 +1504,7 @@ export function ManualWorkspace(props: Props) {
 													<small className="manual-muted">
 														{[
 															check.verdict,
+															check.failedRound ? t("第 {0} 轮", check.failedRound) : undefined,
 															check.score !== undefined ? t("{0} 分", check.score) : undefined,
 															check.durationMs !== undefined ? `${check.durationMs} ms` : undefined,
 														]
@@ -1576,21 +1578,15 @@ export function ManualWorkspace(props: Props) {
 					<div className="manual-sidebar-scroll">
 						<section className="card manual-side-card">
 							<h2>{t("题目配置")}</h2>
-							<label className="authoring-toggle">
-								<span>{t("启用交互题")}</span>
-								<input
-									type="checkbox"
-									role="switch"
-									aria-checked={interactive}
-									checked={interactive}
-									disabled={!!props.busy}
-									onChange={(event) => set("judgingMode", event.target.checked ? "interactive" : "default")}
-								/>
-							</label>
+							<ProblemTypeSelect
+								value={problemType}
+								disabled={!!props.busy}
+								onChange={(value) => set("problemType", value)}
+							/>
 							<p>{t("切换题型会保留已有题面、程序和数据，发布前需重新验证。")}</p>
 							{interactive && (
 								<button type="button" className="text-button" onClick={() => setTab("data")}>
-									{t(emptyInput ? "全交互 · 输入与答案全空" : "半对拍 · 私有输入、空答案")}
+									{t(emptyInput ? "无测试输入" : "使用私有测试数据")}
 								</button>
 							)}
 							<p>

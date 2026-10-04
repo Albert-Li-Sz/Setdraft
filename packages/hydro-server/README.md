@@ -56,7 +56,7 @@ Security references: [OWASP password storage](https://cheatsheetseries.owasp.org
 
 | Route | Purpose |
 | --- | --- |
-| `GET/POST /api/projects` | List or create ACM/OI problems |
+| `GET/POST /api/projects` | List or create one of four problem types with independent ACM/OI scoring |
 | `GET/PUT/DELETE /api/projects/:id` | Read, edit or delete a problem |
 | `GET/PUT/DELETE /api/projects/:id/files/:name` | Stream private `.in/.out/.ans` files |
 | `POST /api/projects/:id/cases` | Add a text case, including empty input/output |
@@ -66,6 +66,9 @@ Security references: [OWASP password storage](https://cheatsheetseries.owasp.org
 | `DELETE /api/projects/:id/generated` | Remove the Gen batch |
 | `POST /api/projects/:id/generate` | Queue Gen compilation and reproducibility checks |
 | `POST /api/projects/:id/finalize` | Queue complete verification and packaging; optional `{ name }` is persisted across restart/retry |
+| `GET/POST /api/projects/:id/runs` | Page existing runs / queue a `matrix` or full-data `pressure` run |
+| `GET /api/projects/:id/runs/:runId` | Read immutable run snapshots, cells, expectations and progress |
+| `GET /api/projects/:id/runs/:runId/{cell,diagnostics,artifact}` | Read cell details or download saved diagnostic files |
 | `GET /api/people` | Enabled recipients, with only IDs and usernames |
 | `POST /api/projects/:id/copy` | Copy current content using `{ recipientId, expectedRevision }`; never copy history |
 | `GET /api/projects/:id/releases` | List this problem’s releases |
@@ -79,25 +82,41 @@ Security references: [OWASP password storage](https://cheatsheetseries.owasp.org
 | `POST /api/contests/:id/pdf-preview` | Compile the saved contest configuration and selected releases into a preview PDF; requires `{ expectedRevision }` |
 | `GET /api/contest-releases/:id/pdf` | Download a generated contest booklet from an immutable contest release |
 
-The three long-running POST routes return `202` with `{ task }`. `GET /api/tasks` and `GET /api/tasks/:id` show state; `GET /api/tasks/:id/events` is an SSE stream with event IDs and `Last-Event-ID` replay. `POST /api/tasks/:id/cancel` stops the matching Docker container, and `/retry` creates another task. A problem revision can be sent as `expectedRevision` on JSON edits and case operations or `x-expected-revision` on file operations; conflicts return `409` with the current snapshot.
+Long-running authoring POST routes return `202` with `{ task }`. `GET /api/tasks` and `GET /api/tasks/:id` show state; `GET /api/tasks/:id/events` is an SSE stream with event IDs and `Last-Event-ID` replay. `POST /api/tasks/:id/cancel` stops the matching Docker container, and `/retry` creates another task. Random differential runs can only be read and downloaded; new submissions, retries, replay and case import return `410`. A problem revision can be sent as `expectedRevision` on JSON edits and case operations or `x-expected-revision` on file operations; conflicts return `409` with the current snapshot.
+
+Projects store generators as `{ id, name, language, code, remark }`, with stable aliases `gen`, `gen_1`, etc. The shared script selects aliases and passes literal arguments; only referenced generators compile. C++ and Python 3 generators run in the same sandbox and must reproduce their output. Legacy generator fields map to `gen`. Pressure runs judge selected non-AC solutions over all active cases; WA/TLE/MLE/RE expectations require at least one matching verdict and no other verdict except AC. Compilation, system and incomplete results never meet expectations. Observations warn; required expectations gate publication under the current verification contract.
 
 Restoration checks the manifest and source hashes before replacing the editable document and all test/PDF file references in one transaction. It keeps the problem ID and creation date, increments the revision, and clears the current verification report. The release source tree must be present in backups. Copies use a fresh ID and timestamps, retain current code, attachments and both manual/generated tests, and omit releases, reports and tasks. Both operations reject stale revisions and recheck account access at commit.
 
 Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `SETDRAFT_CASE_MAX_BYTES`, `SETDRAFT_PROJECT_MAX_BYTES`, `SETDRAFT_TESTCASES_MAX` and `SETDRAFT_TOTAL_TIME_LIMIT_MS`.
 
-### Interactive problems
+### Problem types and communication
 
-Project updates accept `judgingMode: "default" | "interactive"`, `interactionInputMode: "provided" | "empty"`,
-`interactorSource` and `interactorStandard` (the existing C++ language keys). Missing legacy fields default to
-`default`, `provided`, an empty source and `cpp17`. These fields participate in source snapshots, fingerprints,
-history restoration and release metadata. Changing them invalidates the current report.
+`problemType: standard | special | interactive | communication` is canonical. Central conversion maps legacy
+`judgingMode/checkerMode` to it and derives compatibility views, preserving hidden code and data. Conflicting fields
+return 422; an old client attempting a legacy judging-field update on a communication problem receives 409.
+Input source remains `interactionInputMode: provided | empty`. Scoring is fixed after creation.
+
+Communication settings are `{ judgeSource, judgeStandard, secondRound: interactive | text | custom }`.
+A task compiles each contestant and jury once, then uses two fresh runtime environments. The task-local compiler
+cache is never persisted or shared between tasks/users. Round one validates interaction and saves a bounded binary
+handoff; round two either interacts again or receives the saved second input and compares final output. Custom
+checkers receive original private input, final output and the primary solution's two-round answer. Missing/illegal
+handoff and a third-round request are jury faults. A judged first-round failure scores zero and skips round two;
+cancellation and infrastructure errors cannot meet a solution expectation. Each round receives independent limits;
+local summaries use maximum time/memory and retain individual rounds and diagnostic references.
+Communication diagnostics are capped at 512 MiB per task; temporary jury directories are removed after each case.
+Source archives include `verification-summary.json` separately from the project snapshot, retaining the required
+run's version, image and solution outcomes without embedding its matrix cells. Communication manifests record
+the actual fixed image used by the task-local compiler cache.
 
 `interactive-sandbox.ts` owns the interactive execution path. It compiles each role in a separate container and
 mounts only that role's program at runtime. Two non-root, network-disabled, read-only containers exchange streams
 through a bounded relay. Startup is bounded separately from the dialogue deadline; stderr and each direction's
 saved transcript are capped at 64 KiB, while emitted stdout is limited by `maxFileBytes`. All role containers and
 attached Docker processes are removed before returning. Restart cleanup uses the same task-scoped role names.
-Interactor exceptions are `SYSTEM_ERROR`, contestant failures are `RE`/`TLE`, rejected answers are `WA`.
+Interactor exceptions are `SYSTEM_ERROR`, contestant failures are `RE`/`TLE`/`MLE`, rejected answers are `WA`.
+Memory verdicts use measured process-group peak memory and Docker OOM evidence, rather than killed signals alone.
 Partial scores do not pass the full-reference gate. Interactive reports use `interactorUsed`, not `checkerUsed`.
 
 Provided-input generation checks reproducibility and optional input validation before an actual dialogue.
@@ -109,11 +128,16 @@ restorable files. Explanatory public samples are never executed as batch tests.
 Hydro releases retain ACM/OI subtasks and use an interactor instead of a checker. Empty mode exports one 100-point
 subtask without mutating saved groups. DOMjudge exports accept only verified ACM releases and re-run the saved
 reference through the exact exported `build`/`run` adapter. Contest eligibility branches by judging mode.
-FPS/QDUOJ explicitly reject interactive releases. No new communication or multi-pass API is introduced.
+Communication exports add Hydro `multi_pass: 2` and DOMjudge 9.0.1 interactive/multi-pass configuration with
+`limits.validation_passes: 2`. Handoffs travel only through jury-private `nextpass.in`, never contestant-shared
+`state.txt`. FPS/QDUOJ reject communication and interactive releases. Local adapters do not replace real platform
+import/submission acceptance. Verification contract 7 and export contract 5 make older reports historical only.
 
 ### Structured statements and contest PDFs
 
-Projects may include `statementSections` with `description`, `input`, `output`, `interaction` and `notes`.
+Projects may include `statementSections` with `description`, `input`, `output`, `interaction`, `communication`,
+`firstRound`, `secondRound` and `notes`. Ordered `protocolSamples` group judge/contestant messages by round;
+legacy two-column samples are retained without guessing their order.
 The structured formatter includes the active ordinary/interactive fields and public samples in statement output.
 Absent sections retain legacy `statement` behavior; the editor offers the old text intact in the description field.
 Hidden sections survive mode switches. Structured content participates in validation, fingerprints, source snapshots,
@@ -168,7 +192,7 @@ process memory. Production deployments must retain container/cgroup memory limit
 the compiler process does not inherit the contestant Docker sandbox's isolation guarantees.
 
 The complete Chinese authoring guide is maintained in `docs/authoring-guide.md` and rendered by the web route
-`#authoring-guide`; it covers ordinary/interactive authoring, publication, contest covers and platform acceptance limits.
+`#authoring-guide`; it covers all four problem types, publication, contest covers and platform acceptance limits.
 
 ## AI API
 
@@ -177,6 +201,6 @@ Administrators use `PUT/DELETE /api/ai/config` to manage named profiles for Open
 
 ## Web search and database tests
 
-`GET /api/ai/search` returns availability (administrator responses include provider/quota settings); `PUT /api/ai/search` and `POST /api/ai/search` are administrator-only configuration and connectivity checks. Chat submissions accept `webSearch` and `searchQuery`. Persisted `search` events report searching, completion or failure. Search results belong to the requesting user and request; retries reuse them. SearXNG is the default, Tavily is optional. Credentials never enter client snapshots.
+`GET /api/ai/search` returns availability (administrator responses include provider/quota settings); `PUT /api/ai/search` and `POST /api/ai/search` are administrator-only configuration and connectivity checks. Chat submissions accept `webSearch`; `searchQuery` and `searchQueries` fields are rejected, including empty values. The current chat model plans 1–3 read-only queries, using necessary conversation context, before searching. Persisted `search` events include planning, per-query progress, partial failure and usage. Search results belong to the requesting user and request; retries reuse completed stages, while searching again creates a fresh plan and request. SearXNG is the default, Tavily is optional. Credentials never enter client snapshots.
 
 `npm test --workspace=@setdraft/server` starts a disposable PostgreSQL Docker container, creates a restricted application role and isolates each test in separate schemas, then removes the container. Docker is required. To use an existing dedicated test database, set `SETDRAFT_TEST_DATABASE_URL` (maintenance role) and `SETDRAFT_TEST_APP_PASSWORD` (for a pre-created `setdraft_app` role). Never point these variables at production. Model and search provider tests use mocks; sandbox integration tests require `setdraft/sandbox:local`.

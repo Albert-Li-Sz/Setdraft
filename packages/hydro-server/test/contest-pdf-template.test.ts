@@ -218,3 +218,67 @@ it("limits physical pages even when page numbering is reset", async () => {
 		),
 	).rejects.toThrow("1000 页");
 }, 30_000);
+
+it("renders communication protocols and long ordered messages across pages without losing legacy examples", async () => {
+	const first = pdfFixture.problems[0];
+	const source = buildContestPdfSources({
+		...pdfFixture,
+		problems: [
+			{
+				...first,
+				problemType: "communication",
+				judgingMode: "interactive",
+				statementSections: {
+					...first.statementSections!,
+					communication: "Start twice.",
+					firstRound: "Encode the private challenge.",
+					secondRound: "Decode the message.",
+				},
+				samples: [{ input: "legacy jury", output: "legacy contestant" }],
+				protocolSamples: [
+					{
+						rounds: [
+							{
+								round: 1,
+								messages: [
+									{
+										sender: "judge",
+										text: Array.from({ length: 150 }, (_, index) => `first-${index} private challenge`).join(
+											"\n",
+										),
+									},
+									{ sender: "contestant", text: "encoded" },
+								],
+							},
+							{
+								round: 2,
+								messages: [
+									{ sender: "judge", text: "second handoff" },
+									{ sender: "contestant", text: "decoded" },
+								],
+							},
+						],
+					},
+				],
+			},
+		],
+	}).problems.get("A")!;
+	const result = await render(source);
+	expect(result.pages).toBeGreaterThan(3);
+	const spans = await layoutSpans(source);
+	for (const label of [
+		"通信说明",
+		"第一轮协议",
+		"第二轮协议",
+		"旧双栏样例（消息顺序未整理）",
+		"协议样例",
+		"first-149 private challenge",
+		"second handoff",
+		"decoded",
+	])
+		expect(
+			spans.some((entry) => entry.text.includes(label)),
+			label,
+		).toBe(true);
+	expect(span(spans, "decoded").position.page).toBeGreaterThan(1);
+}, 60000);

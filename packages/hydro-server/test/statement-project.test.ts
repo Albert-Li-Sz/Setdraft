@@ -15,6 +15,9 @@ const sections = {
 	output: "Their sum.",
 	interaction: "Inactive protocol.",
 	notes: "Use integers.",
+	communication: "",
+	firstRound: "",
+	secondRound: "",
 };
 let dockerAvailable = false;
 try {
@@ -33,7 +36,16 @@ afterEach(async () => {
 
 it("persists sections, serializes active Markdown, and preserves inactive fields across mode changes", async () => {
 	const created = await projects.create("acm");
-	expect(created.statementSections).toEqual({ description: "", input: "", output: "", interaction: "", notes: "" });
+	expect(created.statementSections).toEqual({
+		description: "",
+		input: "",
+		output: "",
+		interaction: "",
+		notes: "",
+		communication: "",
+		firstRound: "",
+		secondRound: "",
+	});
 	const ordinary = await projects.update(created.id, {
 		statementSections: sections,
 		samples: [{ input: "1 2", output: "3" }],

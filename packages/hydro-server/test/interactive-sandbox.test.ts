@@ -273,3 +273,40 @@ it("generates reproducible private inputs, validates them and leaves empty answe
 	expect(await readFile(join(root, "stage", "generated", "1.in"), "utf8")).toBe("21\n");
 	expect(await readFile(join(root, "stage", "generated", "1.out"))).toHaveLength(0);
 }, 90_000);
+
+it("measures interactive contestant memory and distinguishes MLE from a signal failure", async () => {
+	const mle = await runManualSandbox(
+		sandbox({
+			memoryLimitMb: 64,
+			reference: { language: "python3", code: "input()\ndata=bytearray(256*1024*1024)\nprint(42,flush=True)" },
+		}),
+	);
+	const result = mle.checks.find((item) => item.stage === "interaction:reference");
+	expect(result).toMatchObject({ verdict: "MLE", passed: false, score: 0, scoreRatio: 0 });
+	expect(result?.memoryBytes).toBeGreaterThan(64 * 1048576);
+	const re = await runManualSandbox(
+		sandbox({ reference: { language: "python3", code: "import os,signal\nos.kill(os.getpid(),signal.SIGKILL)" } }),
+	);
+	expect(re.checks).toContainEqual(expect.objectContaining({ stage: "interaction:reference", verdict: "RE" }));
+}, 90000);
+it("runs Python private-input generators with numbered aliases", async () => {
+	const report = await runManualSandbox(
+		sandbox({
+			mode: "generate",
+			cases: undefined,
+			startNumber: 1,
+			generators: [
+				{
+					id: "g",
+					name: "gen_7",
+					language: "python3",
+					code: "import sys\nprint(int(sys.argv[1]))",
+					remark: "private input",
+				},
+			],
+			commands: [{ generator: "gen_7", args: ["21"], line: 1 }],
+		}),
+	);
+	expect(report.success, JSON.stringify(report)).toBe(true);
+	expect(await readFile(join(root, "stage", "generated", "1.in"), "utf8")).toBe("21\n");
+}, 90000);

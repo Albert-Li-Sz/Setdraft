@@ -65,14 +65,9 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"说明交互协议、消息格式、查询次数、结束条件和 flush 要求…":
 		"Describe the protocol, message format, query limit, termination, and flush requirements…",
 	"填写本栏内容，无需重复栏目标题…": "Write this section without repeating its heading…",
-	启用交互题: "Enable interactive judging",
 	"切换题型会保留已有题面、程序和数据，发布前需重新验证。":
 		"Switching modes preserves statement text, programs, and data. Verify again before release.",
 	交互数据配置: "Interaction test data",
-	全交互: "Fully interactive",
-	半对拍: "Input-driven interaction",
-	"全交互 · 输入与答案全空": "Fully interactive · Empty input and answer",
-	"半对拍 · 私有输入、空答案": "Input-driven · Private input, empty answer",
 	"输入与答案全空，交互器自行组织固定场景。": "Input and answer are empty. The interactor supplies a fixed scenario.",
 	"仅提供交互器私有输入，答案为空，仍使用双向交互。":
 		"Only the interactor receives private input. Answers are empty; communication remains bidirectional.",
@@ -455,7 +450,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	题面与样例: "Statement",
 	测试数据: "Test data",
 	"Gen 生成": "Generator",
-	"程序与 SPJ": "Solutions",
 	验证与发布: "Verify & publish",
 	标准程序: "Reference solution",
 	第二标准程序: "Second solution",
@@ -547,7 +541,6 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	生成并验证: "Generate & verify",
 	"标准程序和 Checker 必填；第二标准程序可选，用于独立核验输出。默认 Checker 按 Hydro 文本规则比较，也可选择预设或自定义 C++ testlib Checker。":
 		"A reference solution and checker are required. An optional second solution independently checks outputs. Use the default Hydro text checker, a preset, or a custom C++ testlib checker.",
-	"程序与 SPJ 分区": "Solution and checker sections",
 	程序文件: "Program files",
 	已填写: "Ready",
 	必填: "Required",

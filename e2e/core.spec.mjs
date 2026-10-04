@@ -86,7 +86,7 @@ test("ignores earlier project opens and abandoned creation callbacks", async ({ 
 	const creation = new Promise(resolve => { finish = resolve; }), creating = new Promise(resolve => { requested = resolve; });
 	await page.route("**/api/projects", async route => { if (route.request().method() !== "POST") return route.continue(); const response = await route.fetch(); requested(); await creation; await route.fulfill({ response }).catch(() => {}); });
 	await page.getByRole("button", { name: "新建题目", exact: true }).click();
-	await page.getByRole("dialog").getByRole("button", { name: /ACM/ }).click();
+	await page.getByRole("dialog").getByRole("button", { name: "创建题目", exact: true }).click();
 	await creating;
 	await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
 	finish();

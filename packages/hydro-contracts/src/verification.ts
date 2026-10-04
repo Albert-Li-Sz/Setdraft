@@ -1,8 +1,12 @@
 import type { ManualCaseSummary, ManualCheck, ManualProgram, ManualProject, ManualSubtask } from "./index.ts";
 import { cppLanguages } from "./languages.ts";
+import type { ProblemType, RoundResult } from "./problem-types.ts";
+import { isCompleteCommunicationResult } from "./problem-types.ts";
 
 export type SolutionPurpose = "accepted" | "brute" | "wrong" | "slow" | "partial";
-export type SolutionExpectation = { kind: "AC" | "WA" | "TLE" } | { kind: "score"; min: number; max: number };
+export type SolutionExpectation =
+	| { kind: "AC" | "WA" | "TLE" | "MLE" | "RE" }
+	| { kind: "score"; min: number; max: number };
 export interface Solution extends ManualProgram {
 	id: string;
 	name: string;
@@ -30,7 +34,7 @@ export function isSolution(value: unknown): value is Solution {
 	if (!item.expectation || typeof item.expectation !== "object") return false;
 	const expectation = item.expectation as Record<string, unknown>;
 	return (
-		["AC", "WA", "TLE"].includes(String(expectation.kind)) ||
+		["AC", "WA", "TLE", "MLE", "RE"].includes(String(expectation.kind)) ||
 		(expectation.kind === "score" &&
 			typeof expectation.min === "number" &&
 			typeof expectation.max === "number" &&
@@ -98,11 +102,14 @@ export interface MatrixCell {
 	points?: number;
 	fullPoints?: number;
 	durationMs: number;
+	memoryBytes?: number;
 	message: string;
 	output?: string;
 	expected?: string;
 	log?: string;
 	artifacts?: { output?: string; expected?: string; logs: string[] };
+	rounds?: RoundResult[];
+	failedRound?: 1 | 2;
 }
 export interface OutputDifference {
 	line: number;
@@ -139,6 +146,11 @@ export interface MatrixOptions {
 	solutionIds?: string[];
 	caseIds?: string[];
 }
+export interface PressureOptions {
+	kind: "pressure";
+	solutionIds?: string[];
+	caseIds?: string[];
+}
 export interface StressOptions {
 	kind: "stress";
 	baselineId: string;
@@ -148,7 +160,7 @@ export interface StressOptions {
 	rounds: number;
 	budgetMs: number;
 }
-export type VerificationOptions = MatrixOptions | StressOptions;
+export type VerificationOptions = MatrixOptions | PressureOptions | StressOptions;
 export interface StressReport {
 	completedRounds: number;
 	reason: "counterexample" | "rounds" | "budget" | "error";
@@ -164,6 +176,8 @@ export interface VerificationRun {
 	id: string;
 	taskId?: string;
 	projectId: string;
+	problemType?: ProblemType;
+	verificationContractVersion?: number;
 	revision: number;
 	fingerprint: string;
 	image: string;
@@ -232,7 +246,12 @@ export function evaluateSolution(
 	const complete =
 		count > 0 &&
 		cells.length === count &&
-		cells.every((item) => item.verdict !== "CE" && item.verdict !== "SYSTEM_ERROR");
+		cells.every(
+			(item) =>
+				item.verdict !== "CE" &&
+				item.verdict !== "SYSTEM_ERROR" &&
+				(!item.rounds || isCompleteCommunicationResult(item)),
+		);
 	const expectation = solution.expectation;
 	const matches =
 		complete &&
@@ -247,6 +266,12 @@ export function evaluateSolution(
 		complete,
 		matches,
 		score,
-		message: matches ? "符合预期" : complete ? "不符合预期" : "运行不完整",
+		message: matches
+			? "符合预期"
+			: !complete
+				? "运行不完整，不能判断预期"
+				: expectation.kind !== "AC" && cells.every((item) => item.verdict === "AC" && item.score === 100)
+					? "提醒出题人：错误解全部 AC，当前数据未检出此错误"
+					: `不符合预期：实际 ${[...new Set(cells.map((item) => item.verdict))].join(" / ")}`,
 	};
 }

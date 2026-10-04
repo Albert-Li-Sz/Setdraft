@@ -5,7 +5,7 @@ import type { ProjectSnapshot } from "./platform.ts";
 
 type PreviewProject = Pick<
 	ProjectSnapshot,
-	"statement" | "statementSections" | "judgingMode" | "samples" | "attachments"
+	"statement" | "statementSections" | "problemType" | "protocolSamples" | "judgingMode" | "samples" | "attachments"
 >;
 
 const attachmentMimeTypes: Readonly<Record<string, string>> = {

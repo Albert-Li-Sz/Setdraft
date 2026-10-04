@@ -21,12 +21,19 @@ import type {
 	ManualRelease,
 	ManualSandboxReport,
 	ManualVerificationReport,
+	VerificationRun,
 } from "@setdraft/contracts";
-import { verificationContractVersion } from "@setdraft/contracts";
+import {
+	communicationCompileStandard,
+	projectGenerators,
+	resolveProblemType,
+	verificationContractVersion,
+} from "@setdraft/contracts";
 import { effectiveChecker } from "./acm-checker.ts";
+import { communicationAdapter } from "./communication-adapter.ts";
 import type { ExecutionContext } from "./execution-context.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
-import { runManualSandbox, type SandboxCase } from "./manual-sandbox.ts";
+import { runManualSandbox, type SandboxCase, type SandboxCompilationCache } from "./manual-sandbox.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { caseOrder, fileEntries, hashFile, parseGeneratorScript } from "./project-files.ts";
 import { copySandboxFile } from "./sandbox-files.ts";
@@ -76,13 +83,24 @@ export class ProjectPipeline {
 		try {
 			const project = await this.projects.load(id);
 			if (project.judgingMode === "interactive" && project.interactionInputMode === "empty")
-				throw new ManualProjectError("无输入交互题自动使用一个空测试点，无需生成数据。", 422);
-			if (project.judgingMode === "interactive" && !project.interactorSource?.trim())
+				throw new ManualProjectError("无测试输入模式自动使用一个空测试点，无需生成数据。", 422);
+			if (resolveProblemType(project) === "interactive" && !project.interactorSource?.trim())
 				throw new ManualProjectError("请先添加 C++ testlib 交互器。", 422);
+			if (resolveProblemType(project) === "communication" && !project.communication?.judgeSource.trim())
+				throw new ManualProjectError("请先添加通信裁判。", 422);
 			if (!project.reference.code.trim()) throw new ManualProjectError("请先添加标准程序。", 422);
-			if (!project.generatorSource.trim()) throw new ManualProjectError("请上传或填写 Gen 源码。", 422);
 			const commands = parseGeneratorScript(project.generatorScript);
 			if (commands.length === 0) throw new ManualProjectError("生成脚本没有 gen 命令。", 422);
+			const generators = projectGenerators(project).filter((item) =>
+				commands.some((command) => command.generator === item.name),
+			);
+			for (const command of commands) {
+				const generator = generators.find((item) => item.name === command.generator);
+				if (!generator)
+					throw new ManualProjectError(`生成脚本第 ${command.line} 行引用了不存在的 ${command.generator}。`, 422);
+				if (!generator.code.trim())
+					throw new ManualProjectError(`请填写 ${generator.name} 的源码（生成脚本第 ${command.line} 行）。`, 422);
+			}
 			const { cases } = await this.projects.caseList(project);
 			const manual = cases.filter((item) => item.origin === "manual");
 			if (manual.length + commands.length > this.projects.judgeLimits.maxTestCases)
@@ -100,11 +118,12 @@ export class ProjectPipeline {
 				image: this.projects.image,
 				reference: project.reference,
 				interactor:
-					project.judgingMode === "interactive"
+					resolveProblemType(project) === "interactive"
 						? { language: project.interactorStandard ?? "cpp17", code: project.interactorSource ?? "" }
 						: undefined,
+				communication: resolveProblemType(project) === "communication" ? project.communication : undefined,
 				oracle: project.oracle,
-				generator: project.generatorSource,
+				generators,
 				generatorStandard: project.generatorStandard,
 				commands,
 				startNumber,
@@ -171,6 +190,8 @@ export class ProjectPipeline {
 			JSON.stringify({
 				slug: project.slug,
 				scoringMode: project.scoringMode,
+				problemType: resolveProblemType(project),
+				communication: project.communication,
 				judgingMode: project.judgingMode ?? "default",
 				interactionInputMode: project.interactionInputMode ?? "provided",
 				interactorSource: project.interactorSource ?? "",
@@ -180,11 +201,12 @@ export class ProjectPipeline {
 				statement: project.statement,
 				statementSections: project.statementSections,
 				samples: project.samples,
+				protocolSamples: project.protocolSamples,
 				timeLimit: project.timeLimit,
 				memoryLimit: project.memoryLimit,
 				reference: project.reference,
 				oracle: project.oracle,
-				generatorSource: project.generatorSource,
+				generators: projectGenerators(project),
 				solutions: project.solutions,
 				referenceSolutionId: project.referenceSolutionId,
 				generatorStandard: project.generatorStandard,
@@ -213,7 +235,7 @@ export class ProjectPipeline {
 		return hash.digest("hex");
 	}
 
-	private async generatedHash(id: string, project: ManualProject, manualCases: ManualCaseSummary[]): Promise<string> {
+	async generatedHash(id: string, project: ManualProject, manualCases: ManualCaseSummary[]): Promise<string> {
 		const inputs = await Promise.all(
 			manualCases
 				.slice()
@@ -224,16 +246,29 @@ export class ProjectPipeline {
 					hash: await hashFile(await this.projects.dataFile(id, item.origin, item.inputFile)),
 				})),
 		);
+		const generators = projectGenerators(project);
+		const generatorInputs =
+			generators.length === 1 && generators[0].name === "gen"
+				? [generators[0].code, generators[0].language]
+				: [
+						generators
+							.map(({ name, code, language }) => ({ name, code, language }))
+							.sort((left, right) => left.name.localeCompare(right.name)),
+					];
 		return createHash("sha256")
 			.update(
 				JSON.stringify([
-					project.generatorSource,
-					project.generatorStandard,
+					...generatorInputs,
 					project.generatorScript,
 					project.reference,
 					inputs,
 					...(project.judgingMode === "interactive"
-						? [project.judgingMode, project.interactorSource, project.interactorStandard]
+						? [
+								resolveProblemType(project),
+								project.interactorSource,
+								project.interactorStandard,
+								project.communication,
+							]
 						: []),
 				]),
 			)
@@ -247,7 +282,16 @@ export class ProjectPipeline {
 			type: interactive ? "interactive" : "default",
 			...(interactive
 				? {
-						interactor: project.interactorSource,
+						interactor:
+							resolveProblemType(project) === "communication" && project.communication
+								? communicationAdapter(
+										project.communication,
+										project.checkerSource,
+										"hydro",
+										this.projects.maxFileBytes,
+									)
+								: project.interactorSource,
+						...(resolveProblemType(project) === "communication" ? { multiPass: 2 } : {}),
 						interactorLanguage: "auto",
 					}
 				: {}),
@@ -293,8 +337,14 @@ export class ProjectPipeline {
 			const interactive = project.judgingMode === "interactive";
 			const emptyInput = interactive && project.interactionInputMode === "empty";
 			if (!project.reference.code.trim()) throw new ManualProjectError("标准程序是打包前的必填项。", 422);
-			if (interactive && !project.interactorSource?.trim())
+			if (resolveProblemType(project) === "interactive" && !project.interactorSource?.trim())
 				throw new ManualProjectError("请提供 C++ testlib 交互器源码。", 422);
+			if (
+				resolveProblemType(project) === "communication" &&
+				(!project.communication?.judgeSource.trim() ||
+					(project.communication.secondRound === "custom" && !project.checkerSource.trim()))
+			)
+				throw new ManualProjectError("请提供通信裁判及第二轮需要的 Checker。", 422);
 			if (!interactive && !effectiveChecker(project.checkerMode, project.checkerSource)) {
 				throw new ManualProjectError("请选择文本比对 Checker，或提供 C++ testlib Checker 源码。", 422);
 			}
@@ -371,15 +421,31 @@ export class ProjectPipeline {
 					outputName: item.outputFile ?? `${item.id}.out`,
 				})),
 			);
+			const compilationCache: SandboxCompilationCache | undefined =
+				resolveProblemType(project) === "communication"
+					? {
+							image: (
+								await promisify(execFile)(
+									"docker",
+									["image", "inspect", "--format", "{{.Id}}", this.projects.image],
+									{ timeout: 15000, signal: context?.signal },
+								)
+							).stdout.trim(),
+							programs: new Map(),
+						}
+					: undefined;
 			const sandbox = await runManualSandbox({
+				compilationCache,
 				mode: "finalize",
 				context,
 				stage,
 				image: this.projects.image,
 				reference: project.reference,
-				interactor: interactive
-					? { language: project.interactorStandard ?? "cpp17", code: project.interactorSource ?? "" }
-					: undefined,
+				interactor:
+					resolveProblemType(project) === "interactive"
+						? { language: project.interactorStandard ?? "cpp17", code: project.interactorSource ?? "" }
+						: undefined,
+				communication: resolveProblemType(project) === "communication" ? project.communication : undefined,
 				oracle: project.oracle,
 				generatorStandard: project.generatorStandard,
 				checker: effectiveChecker(project.checkerMode, project.checkerSource),
@@ -400,8 +466,10 @@ export class ProjectPipeline {
 				issues: structural.issues,
 				verifiedAt: new Date().toISOString(),
 			};
+			let requiredRun: VerificationRun | undefined;
 			if (report.success) {
-				const run = await this.projects.runs.required(project, context);
+				const run = await this.projects.runs.required(project, context, compilationCache);
+				requiredRun = run;
 				report.matrixRunId = run.id;
 				for (const result of run.matrix?.solutions ?? [])
 					report.checks.push({
@@ -460,13 +528,44 @@ export class ProjectPipeline {
 			const sourceTexts: Record<string, string> = {
 				"project.json": JSON.stringify(project, null, 2),
 				"report.json": JSON.stringify(report, null, 2),
+				...(requiredRun
+					? {
+							"verification-summary.json": JSON.stringify(
+								{
+									...requiredRun,
+									checks: undefined,
+									solutions: undefined,
+									matrix: requiredRun.matrix
+										? {
+												full: requiredRun.matrix.full,
+												requiredPassed: requiredRun.matrix.requiredPassed,
+												caseCount: requiredRun.matrix.cases.length,
+												solutions: requiredRun.matrix.solutions,
+											}
+										: undefined,
+								},
+								null,
+								2,
+							),
+						}
+					: {}),
 				"reference.txt": project.reference.code,
-				"generator.cc": project.generatorSource,
+				...Object.fromEntries(
+					projectGenerators(project).map((item) => [
+						`${item.name}.${item.language === "python3" ? "py" : "cc"}`,
+						item.code,
+					]),
+				),
 				"generate.txt": project.generatorScript,
 				"checker.cc": effectiveChecker(project.checkerMode, project.checkerSource) ?? "",
 				"validator.cc": project.validatorSource,
 				"oracle.txt": project.oracle?.code ?? "",
-				...(interactive ? { "interactor.cc": project.interactorSource ?? "" } : {}),
+				...(resolveProblemType(project) === "interactive"
+					? { "interactor.cc": project.interactorSource ?? "" }
+					: {}),
+				...(resolveProblemType(project) === "communication"
+					? { "communication.cc": project.communication?.judgeSource ?? "" }
+					: {}),
 			};
 			for (const [name, content] of Object.entries(sourceTexts)) {
 				const path = join(sourceRoot, name);
@@ -518,7 +617,15 @@ export class ProjectPipeline {
 				sourceFiles.set(relative, target);
 			}
 			const logBudget = { remainingBytes: 64 * 1024 * 1024 };
-			const logPaths = new Set(report.checks.flatMap((check) => (check.logPath ? [check.logPath] : [])));
+			const logPaths = new Set(
+				report.checks.flatMap((check) => [
+					...(check.logPath ? [check.logPath] : []),
+					...(check.rounds?.flatMap((round) => [
+						...(round.logPath ? [round.logPath] : []),
+						...(round.artifacts ?? []),
+					]) ?? []),
+				]),
+			);
 			if (interactive) {
 				for (const item of cases)
 					for (const role of project.oracle ? ["reference", "oracle"] : ["reference"])
@@ -539,9 +646,11 @@ export class ProjectPipeline {
 				revision: project.revision,
 				projectHash: report.projectHash,
 				sandboxImage: this.projects.image,
-				imageDigest: (
-					await promisify(execFile)("docker", ["image", "inspect", "--format", "{{.Id}}", this.projects.image])
-				).stdout.trim(),
+				imageDigest:
+					compilationCache?.image ??
+					(
+						await promisify(execFile)("docker", ["image", "inspect", "--format", "{{.Id}}", this.projects.image])
+					).stdout.trim(),
 				toolchain: report.toolchain,
 				environment: {
 					locale: "C.UTF-8",
@@ -555,9 +664,17 @@ export class ProjectPipeline {
 					reference: project.reference.language,
 					oracle: project.oracle?.language,
 					generator: project.generatorStandard,
+					generators: Object.fromEntries(projectGenerators(project).map((item) => [item.name, item.language])),
 					checker: project.checkerStandard,
 					validator: project.validatorStandard,
-					...(interactive ? { interactor: project.interactorStandard ?? "cpp17" } : {}),
+					...(interactive
+						? {
+								interactor:
+									resolveProblemType(project) === "communication" && project.communication
+										? communicationCompileStandard(project.communication, project.checkerStandard)
+										: (project.interactorStandard ?? "cpp17"),
+							}
+						: {}),
 				},
 				testlibCommit: "1e4e8a24c79c6bad3becbdb5a332ffc352b7d5dd",
 				testlibSha256: fileHashes["testlib/testlib.h"],
@@ -584,6 +701,8 @@ export class ProjectPipeline {
 				name: name ?? `v${project.revision}`,
 				id: releaseId,
 				scoringMode: project.scoringMode,
+				problemType: resolveProblemType(project),
+				communication: project.communication,
 				judgingMode: project.judgingMode ?? "default",
 				interactionInputMode: project.interactionInputMode ?? "provided",
 				projectId: id,

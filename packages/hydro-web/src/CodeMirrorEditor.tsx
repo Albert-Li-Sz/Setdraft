@@ -7,25 +7,30 @@ import { basicSetup } from "codemirror";
 import { useEffect, useId, useRef } from "react";
 import { codeHighlightStyle, codeLanguageSupport, type EditorLanguage } from "./code-language.ts";
 import { useLocale } from "./i18n.tsx";
+import { useTheme } from "./theme.tsx";
 
 interface Props {
 	value: string;
 	language: EditorLanguage;
 	ariaLabel: string;
 	previewLines?: number;
+	readOnly?: boolean;
 	onChange(value: string): void;
 }
 
-export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props) {
+export function CodeMirrorEditor({ value, language, ariaLabel, onChange, readOnly = false }: Props) {
 	const { t } = useLocale();
+	const { dark } = useTheme();
 	const hintId = useId();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const languageRef = useRef(new Compartment());
 	const labelRef = useRef(new Compartment());
+	const themeRef = useRef(new Compartment());
+	const writableRef = useRef(new Compartment());
 	const onChangeRef = useRef(onChange);
 	const applyingExternalRef = useRef(false);
-	const initialPropsRef = useRef({ value, language, ariaLabel });
+	const initialPropsRef = useRef({ value, language, ariaLabel, dark, readOnly });
 	onChangeRef.current = onChange;
 
 	useEffect(() => {
@@ -35,6 +40,8 @@ export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props
 			doc: initialPropsRef.current.value,
 			extensions: [
 				basicSetup,
+				themeRef.current.of(EditorView.theme({}, { dark: initialPropsRef.current.dark })),
+				writableRef.current.of(EditorState.readOnly.of(initialPropsRef.current.readOnly)),
 				syntaxHighlighting(codeHighlightStyle),
 				EditorState.tabSize.of(4),
 				indentUnit.of("    "),
@@ -77,6 +84,12 @@ export function CodeMirrorEditor({ value, language, ariaLabel, onChange }: Props
 			effects: labelRef.current.reconfigure(EditorView.contentAttributes.of({ "aria-label": ariaLabel })),
 		});
 	}, [ariaLabel]);
+	useEffect(() => {
+		viewRef.current?.dispatch({ effects: themeRef.current.reconfigure(EditorView.theme({}, { dark })) });
+	}, [dark]);
+	useEffect(() => {
+		viewRef.current?.dispatch({ effects: writableRef.current.reconfigure(EditorState.readOnly.of(readOnly)) });
+	}, [readOnly]);
 
 	return (
 		<div className="manual-code-editor">

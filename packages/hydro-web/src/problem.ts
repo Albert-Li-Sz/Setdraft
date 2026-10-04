@@ -1,4 +1,5 @@
 import { formatHydroStatement } from "@setdraft/authoring/statement";
+import { problemTypeNames, resolveProblemType } from "@setdraft/contracts";
 import type { ProjectSnapshot } from "./platform.ts";
 
 export function parseTags(value: string): string[] {
@@ -14,7 +15,9 @@ export function parseTags(value: string): string[] {
 
 export function editableProject(project: ProjectSnapshot) {
 	return {
-		judgingMode: project.judgingMode ?? "default",
+		problemType: resolveProblemType(project),
+		communication: project.communication,
+		protocolSamples: project.protocolSamples,
 		interactionInputMode: project.interactionInputMode ?? "provided",
 		interactorSource: project.interactorSource ?? "",
 		interactorStandard: project.interactorStandard ?? "cpp17",
@@ -29,11 +32,11 @@ export function editableProject(project: ProjectSnapshot) {
 		...(project.solutions
 			? { solutions: project.solutions, referenceSolutionId: project.referenceSolutionId }
 			: { reference: project.reference, oracle: project.oracle ?? null }),
-		generatorSource: project.generatorSource,
-		generatorStandard: project.generatorStandard,
+		...(project.generators
+			? { generators: project.generators }
+			: { generatorSource: project.generatorSource, generatorStandard: project.generatorStandard }),
 		generatorScript: project.generatorScript,
 		checkerSource: project.checkerSource,
-		checkerMode: project.checkerMode,
 		checkerStandard: project.checkerStandard,
 		validatorSource: project.validatorSource,
 		validatorStandard: project.validatorStandard,
@@ -50,7 +53,7 @@ export function projectContextSnapshot(project: ProjectSnapshot): string {
 	return [
 		`标题：${project.title || "未命名"}`,
 		`时间限制：${project.timeLimit}；内存限制：${project.memoryLimit}`,
-		`判题方式：${project.judgingMode === "interactive" ? `交互题（${project.interactionInputMode === "empty" ? "无输入" : "交互器私有输入"}）` : "普通题"}`,
+		`判题方式：${problemTypeNames[resolveProblemType(project)]}${project.judgingMode === "interactive" ? `（${project.interactionInputMode === "empty" ? "无测试输入" : "私有测试数据"}）` : ""}`,
 		`题面：\n${formatHydroStatement(project).slice(0, 50_000)}`,
 		`样例：\n${sampleText.slice(0, 8_000)}`,
 		`标准程序（${project.reference.language}）：\n${project.reference.code.slice(0, 18_000)}`,

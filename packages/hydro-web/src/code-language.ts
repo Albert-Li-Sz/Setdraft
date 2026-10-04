@@ -18,7 +18,7 @@ const genScriptLanguage = StreamLanguage.define<void>({
 			return "comment";
 		}
 		if (stream.match(/^(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?)/)) return "string";
-		if (stream.match(/^gen\b/)) return "keyword";
+		if (stream.match(/^gen(?:_[1-9]\d*)?\b/)) return "keyword";
 		if (stream.match(/^[+-]?\d+(?:\.\d+)?\b/)) return "number";
 		stream.next();
 		return null;

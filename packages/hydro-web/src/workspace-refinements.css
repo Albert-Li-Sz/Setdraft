@@ -233,22 +233,6 @@
 	margin: 0;
 }
 
-.chat-search-query {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	margin: 0 12px 8px;
-	color: #737373;
-	font-size: 12px;
-}
-.chat-search-query input {
-	flex: 1;
-	min-width: 0;
-	border: 0;
-	background: transparent;
-	padding: 8px 0;
-	font-size: 12px;
-}
 .chat-search-sources {
 	border-top: 1px solid #e6e6e6;
 	margin-top: 18px;
@@ -274,16 +258,6 @@
 	display: block;
 	padding: 10px 0;
 	color: #777;
-}
-@media (max-width: 640px) {
-	.chat-search-query {
-		align-items: flex-start;
-		flex-direction: column;
-		gap: 0;
-	}
-	.chat-search-query input {
-		width: 100%;
-	}
 }
 
 .search-settings-form {

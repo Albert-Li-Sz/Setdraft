@@ -1,10 +1,11 @@
-import { editableStatementSections, formatHydroStatement } from "@setdraft/authoring/statement";
-import type { ProjectSnapshot, StatementSections } from "@setdraft/contracts";
+import { editableStatementSections, formatHydroStatement, statementSectionList } from "@setdraft/authoring/statement";
+import { type ProjectSnapshot, resolveProblemType, type StatementSections, usesProtocol } from "@setdraft/contracts";
 import { useId, useRef, useState } from "react";
 import { createClientId } from "./browser-capabilities.ts";
 import { EditorSplit } from "./EditorSplit.tsx";
 import { useLocale } from "./i18n.tsx";
 import { ProblemPreview } from "./ProblemPreview.tsx";
+import { ProtocolSamples } from "./ProtocolSamples.tsx";
 
 type Section = keyof StatementSections | "samples";
 
@@ -20,16 +21,9 @@ export function StatementEditor({
 	const { t } = useLocale();
 	const prefix = useId();
 	const [selected, setSelected] = useState<Section>("description");
-	const interactive = project.judgingMode === "interactive";
+	const interactive = usesProtocol(project);
 	const tabs: Array<{ id: Section; label: string }> = [
-		{ id: "description", label: "描述" },
-		...(interactive
-			? [{ id: "interaction" as const, label: "交互描述" }]
-			: [
-					{ id: "input" as const, label: "输入" },
-					{ id: "output" as const, label: "输出" },
-				]),
-		{ id: "notes", label: "提示" },
+		...statementSectionList(project).map(({ key, title }) => ({ id: key, label: title })),
 		{ id: "samples", label: "样例" },
 	];
 	const active = tabs.find((item) => item.id === selected) ?? tabs[0];
@@ -73,7 +67,11 @@ export function StatementEditor({
 						}}
 					>
 						{t(item.label)}
-						{item.id === "samples" && <span className="tab-count">{project.samples.length}</span>}
+						{item.id === "samples" && (
+							<span className="tab-count">
+								{project.samples.length + (interactive ? (project.protocolSamples?.length ?? 0) : 0)}
+							</span>
+						)}
 					</button>
 				))}
 			</div>
@@ -98,14 +96,46 @@ export function StatementEditor({
 							<p className="manual-muted">
 								{t(
 									interactive
-										? "交互样例仅说明通信过程，不作为普通输入输出测试；请在交互描述中说明消息顺序。"
+										? "旧双栏内容保持原样；请手动整理为有序消息，确认后可删除旧样例。"
 										: "样例会展示在题面和 PDF 中；普通题发布时会运行标程核验样例。",
 								)}
 							</p>
+							{interactive && (
+								<ProtocolSamples
+									samples={project.protocolSamples ?? []}
+									communication={resolveProblemType(project) === "communication"}
+									disabled={disabled}
+									onChange={(protocolSamples) => change((current) => ({ ...current, protocolSamples }))}
+								/>
+							)}
 							{project.samples.map((sample, index) => (
 								<section className="test-card" key={keys.current[index]}>
 									<div className="test-card-heading">
-										<strong>{t("样例 {0}", index + 1)}</strong>
+										<strong>{t(interactive ? "旧双栏样例 {0}（顺序未整理）" : "样例 {0}", index + 1)}</strong>
+										{interactive && (
+											<button
+												type="button"
+												className="button secondary small"
+												disabled={disabled || (project.protocolSamples?.length ?? 0) >= 20}
+												onClick={() =>
+													change((current) => ({
+														...current,
+														protocolSamples: [
+															...(current.protocolSamples ?? []),
+															{
+																id: createClientId(),
+																rounds: [
+																	{ round: 1, messages: [] },
+																	{ round: 2, messages: [] },
+																],
+															},
+														],
+													}))
+												}
+											>
+												{t("手动整理消息顺序")}
+											</button>
+										)}
 										<button
 											type="button"
 											className="text-button danger"
@@ -128,7 +158,7 @@ export function StatementEditor({
 													{t(
 														interactive
 															? field === "input"
-																? "交互器发送"
+																? "裁判发送"
 																: "选手发送"
 															: field === "input"
 																? "输入"
@@ -155,25 +185,27 @@ export function StatementEditor({
 									</div>
 								</section>
 							))}
-							<button
-								type="button"
-								className="button secondary"
-								disabled={disabled || project.samples.length >= 20}
-								onClick={() =>
-									change((current) => ({
-										...current,
-										samples: [...current.samples, { input: "", output: "" }],
-									}))
-								}
-							>
-								{t("添加样例")}
-							</button>
+							{!interactive && (
+								<button
+									type="button"
+									className="button secondary"
+									disabled={disabled || project.samples.length >= 20}
+									onClick={() =>
+										change((current) => ({
+											...current,
+											samples: [...current.samples, { input: "", output: "" }],
+										}))
+									}
+								>
+									{t("添加样例")}
+								</button>
+							)}
 						</div>
 					) : (
 						<textarea
 							className="statement-editor"
 							aria-label={t("{0} · Markdown", t(active.label))}
-							value={sections[active.id]}
+							value={sections[active.id] ?? ""}
 							spellCheck={false}
 							disabled={disabled}
 							maxLength={1_000_000}

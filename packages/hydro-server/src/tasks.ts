@@ -11,7 +11,7 @@ import type {
 	TaskState,
 	VerificationOptions,
 } from "@setdraft/contracts";
-import { exportContractVersion, isContestReadyRelease } from "@setdraft/contracts";
+import { exportContractVersion, isContestReadyRelease, resolveProblemType } from "@setdraft/contracts";
 import { sandboxBuildArgs } from "../sandbox/build-args.mjs";
 import type { ContestStore } from "./contests.ts";
 import { EventWriter } from "./event-writer.ts";
@@ -129,6 +129,10 @@ export class TaskQueue {
 			resume?.();
 		}
 		for (const task of await this.list()) {
+			if (task.kind === "stress" && task.state === "queued") {
+				await this.finish(task.id, "cancelled", undefined, "随机对拍已停用，旧记录仍可查看。", true);
+				continue;
+			}
 			if (task.state === "queued") this.reserve(task, true);
 			if (task.state === "running") {
 				const options = await this.database.get<{ telemetry?: TraceCarrier }>("task-options", task.id);
@@ -141,7 +145,14 @@ export class TaskQueue {
 						async (span) => {
 							await removeTaskContainer(task.id);
 							await this.projects.runs.interrupt(task.id);
-							await this.finish(task.id, "interrupted", undefined, "服务进程中断；可以重试此任务。");
+							await this.finish(
+								task.id,
+								"interrupted",
+								undefined,
+								task.kind === "stress"
+									? "服务进程中断；随机对拍已停用，可查看旧记录。"
+									: "服务进程中断；可以重试此任务。",
+							);
 							span.setAttributes({ "task.state": "interrupted" });
 							span.setStatus({ status: "error" });
 							this.observability.metric("setdraft.task.results", 1, {
@@ -248,8 +259,9 @@ export class TaskQueue {
 		replayOf?: string,
 		expectedRevision?: number,
 	): Promise<TaskRecord> {
-		if (replayOf) await this.projects.runs.get(resourceId, replayOf);
-		else await this.projects.runs.validate(resourceId, verification);
+		if (replayOf || verification.kind === "stress")
+			throw new ManualProjectError("随机对拍已停用，旧记录仍可查看和下载。", 410);
+		await this.projects.runs.validate(resourceId, verification);
 		return this.submitTask(
 			verification.kind,
 			resourceId,
@@ -270,6 +282,7 @@ export class TaskQueue {
 		replayOf?: string,
 		expectedRevision?: number,
 	): Promise<TaskRecord> {
+		if (kind === "stress" || replayOf) throw new ManualProjectError("随机对拍已停用。", 410);
 		await this.ready;
 		await this.assertWritable();
 		const resourceTitle =
@@ -280,6 +293,14 @@ export class TaskQueue {
 					: kind === "contest-export"
 						? (await this.contests.get(resourceId)).title
 						: (await this.projects.get(resourceId)).title;
+		const problemType =
+			kind === "image-build" || kind === "contest-export"
+				? undefined
+				: resolveProblemType(
+						kind === "release-export"
+							? await this.projects.releases.release(resourceId)
+							: await this.projects.get(resourceId),
+					);
 		if (kind === "release-export") {
 			if (format !== "domjudge") throw new ManualProjectError("发布格式无效。", 422);
 			const release = await this.projects.releases.release(resourceId);
@@ -302,6 +323,7 @@ export class TaskQueue {
 			format,
 			releaseName,
 			resourceTitle,
+			problemType,
 			state: "queued",
 			fingerprint: await this.fingerprint(kind, resourceId, expectedRevision),
 			createdAt: now,
@@ -318,6 +340,7 @@ export class TaskQueue {
 				await this.database.put("task-options", task.id, {
 					releaseName,
 					resourceTitle,
+					problemType,
 					verification,
 					replayOf,
 					telemetry: this.observability.capture(),
@@ -349,6 +372,7 @@ export class TaskQueue {
 		const options = await this.database.get<{
 			releaseName?: string;
 			resourceTitle?: string;
+			problemType?: TaskRecord["problemType"];
 			verification?: VerificationOptions;
 			replayOf?: string;
 		}>("task-options", id);
@@ -382,6 +406,7 @@ export class TaskQueue {
 		return {
 			id: String(row.id),
 			resourceTitle: title ?? options?.resourceTitle,
+			problemType: options?.problemType,
 			releaseName: options?.releaseName,
 			verification: options?.verification,
 			replayOf: options?.replayOf,
@@ -519,6 +544,7 @@ export class TaskQueue {
 	async retry(id: string): Promise<TaskRecord> {
 		await this.assertWritable();
 		const task = await this.get(id);
+		if (task.kind === "stress") throw new ManualProjectError("随机对拍重试已停用。", 410);
 		if (!["failed", "cancelled", "stale", "interrupted"].includes(task.state))
 			throw new ManualProjectError("当前任务不可重试。", 409);
 		if (task.verification)
@@ -777,7 +803,8 @@ export class TaskQueue {
 			};
 			let result: unknown;
 			if (task.kind === "generate") result = await this.projects.pipeline.generate(resourceId, context);
-			else if (task.kind === "matrix" || task.kind === "stress") {
+			else if (task.kind === "stress") throw new ManualProjectError("随机对拍已停用。", 410);
+			else if (task.kind === "matrix" || task.kind === "pressure") {
 				if (!task.verification || task.verification.kind !== task.kind)
 					throw new ManualProjectError("验证任务配置缺失。", 422);
 				const run = await this.projects.runs.execute(resourceId, task.verification, context, task.replayOf);

@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSafeFlatName } from "@setdraft/authoring";
-import { isProjectSnapshot, type ManualProjectSnapshot, synchronizeSolutions } from "@setdraft/contracts";
+import {
+	isProjectSnapshot,
+	type ManualProjectSnapshot,
+	synchronizeGenerators,
+	synchronizeProblemType,
+	synchronizeSolutions,
+} from "@setdraft/contracts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import { ManualProjectError } from "./project-error.ts";
 import { hashFile } from "./project-files.ts";
@@ -155,7 +161,7 @@ export async function restoreProject(
 				item.inputFile === "interactive-empty.in"
 			) {
 				if ((await readFile(await checked("data/automatic/interactive-empty.in"))).length !== 0)
-					throw new ManualProjectError("无输入交互题的测试输入必须严格为空。", 422);
+					throw new ManualProjectError("无测试输入模式的测试输入必须严格为空。", 422);
 				continue;
 			}
 			if (
@@ -195,10 +201,17 @@ export async function restoreProject(
 			oracle: content.oracle,
 			solutions: content.solutions,
 			referenceSolutionId: content.referenceSolutionId,
+			generators: content.generators,
+			generatorSequence: content.generatorSequence,
 			statementSections: content.statementSections,
 			generatedFromHash: content.generatedFromHash,
 		});
+		current.problemType = candidate.problemType;
+		current.communication = candidate.communication;
+		current.protocolSamples = candidate.protocolSamples;
+		synchronizeProblemType(current);
 		synchronizeSolutions(current);
+		synchronizeGenerators(current);
 		await projects.database.commitFiles(
 			files,
 			async () => {

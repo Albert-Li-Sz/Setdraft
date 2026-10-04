@@ -30,11 +30,13 @@ it.each(["provided", "empty"] as const)(
 				onDelete={async () => {}}
 			/>,
 		);
-		expect(html).toContain("启用交互题");
-		expect(html).toMatch(/role="switch"[^>]*checked=""/u);
-		expect(html).toContain("交互描述");
-		expect(html).toContain("程序与交互器");
-		expect(html).toContain(interactionInputMode === "empty" ? "全交互" : "半对拍");
+		expect(html).toContain('value="interactive" selected=""');
+		expect(html).toContain("交互协议");
+		expect(html).toContain("程序与判题");
+		expect(html).toContain(interactionInputMode === "empty" ? "无测试输入" : "使用私有测试数据");
+		expect(html).not.toContain("启用交互题");
+		expect(html).not.toContain("全交互");
+		expect(html).not.toContain("半对拍");
 		expect(html).not.toContain("上传 PDF");
 		expect(html).toContain('href="#contests">配置竞赛 PDF</a>');
 		expect(html).toMatch(/href="#authoring-guide"[^>]*target="_blank"[^>]*>出题文档<\/a>/u);

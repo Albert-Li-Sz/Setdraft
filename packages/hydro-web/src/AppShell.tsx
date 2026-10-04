@@ -5,6 +5,8 @@ import { Icon } from "./Icon.tsx";
 import { LocaleSwitcher, useLocale } from "./i18n.tsx";
 import { Navigation, pageLabels } from "./Navigation.tsx";
 import type { PageRoute, ProjectSnapshot } from "./platform.ts";
+import { ThemeSwitcher } from "./theme.tsx";
+import { appVersion } from "./version.ts";
 
 const SidebarContext = createContext<{ target: HTMLDivElement | null; close(): void }>({ target: null, close() {} });
 export const useAppSidebar = () => useContext(SidebarContext);
@@ -212,6 +214,10 @@ export function AppShell({
 						</button>
 						<span className="shell-page-title">{t(pageLabels[page])}</span>
 						<div className="shell-toolbar-tools">
+							<a className="toolbar-brand" href="#workspace">
+								Setdraft <small>{appVersion}</small>
+							</a>
+							<ThemeSwitcher />
 							<LocaleSwitcher />
 						</div>
 					</header>

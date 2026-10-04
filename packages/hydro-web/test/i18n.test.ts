@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { localeStorageKey, readLocale, translate, uiMessage } from "../src/i18n.tsx";
 import { englishMessages } from "../src/locales/en.ts";
+import { improvementsMessages } from "../src/locales/improvements-en.ts";
+import { problemTypeMessages } from "../src/locales/problem-types-en.ts";
 
 describe("interface localization", () => {
 	it("renders stored notifications in the current language without translating user content", () => {
@@ -32,7 +34,11 @@ describe("interface localization", () => {
 
 	it("preserves all message parameters in the English catalog", () => {
 		const placeholders = (text: string) => [...text.matchAll(/\{\d+\}/gu)].map(([match]) => match).sort();
-		for (const [source, english] of Object.entries(englishMessages)) {
+		for (const [source, english] of Object.entries({
+			...englishMessages,
+			...improvementsMessages,
+			...problemTypeMessages,
+		})) {
 			expect(placeholders(english), source).toEqual(placeholders(source));
 		}
 	});

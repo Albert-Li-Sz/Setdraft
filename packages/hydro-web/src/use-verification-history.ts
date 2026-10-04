@@ -129,7 +129,7 @@ export function useVerificationHistory(apiOrigin: string, projectId: string) {
 			replaceWorkspaceLocation(projectId, { tab: "validation", run: id || undefined, task: undefined });
 			setRefreshVersion((current) => current + 1);
 		},
-		selectMode: (value: "matrix" | "stress") => {
+		selectMode: (value: "matrix" | "pressure" | "stress") => {
 			replaceWorkspaceLocation(projectId, {
 				tab: "validation",
 				mode: value,

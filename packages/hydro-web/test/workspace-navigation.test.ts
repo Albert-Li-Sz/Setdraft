@@ -17,6 +17,18 @@ it("round trips a matrix link and its filters without interfering with other pag
 	expect(pageFromHash(workspaceHash(location))).toBe("workspace");
 	expect(readWorkspaceLocation("#tasks?project=example")).toEqual({});
 });
+
+it("keeps pressure records and filters addressable after refresh", () => {
+	const location = {
+		project: "project-id",
+		run: "run-id",
+		mode: "pressure" as const,
+		tab: "validation",
+		solution: "wrong",
+		abnormal: true,
+	};
+	expect(readWorkspaceLocation(workspaceHash(location))).toMatchObject(location);
+});
 it("rejects malformed identifiers and preserves links to queued tasks", () => {
 	expect(readWorkspaceLocation("#workspace?project=..%2Fsecret&run=%3Cscript%3E").project).toBeUndefined();
 	expect(

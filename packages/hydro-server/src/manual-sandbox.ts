@@ -3,11 +3,21 @@ import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { CppLanguage, ManualProgram, ManualSandboxReport } from "@setdraft/contracts";
+import type {
+	CommunicationConfig,
+	CppLanguage,
+	Generator,
+	GeneratorCommand,
+	GeneratorLanguage,
+	ManualProgram,
+	ManualSandboxReport,
+} from "@setdraft/contracts";
 import { pythonCheckerProtocol } from "./checker-protocol.ts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { sandboxGeneratorCommands, sandboxGenerators } from "./generator-sandbox.ts";
 import { interactiveContainerNames, runInteractiveSandbox } from "./interactive-sandbox.ts";
 import { NOOP_OBSERVABILITY } from "./observability.ts";
+import { pythonProcessMonitor } from "./process-monitor.ts";
 import { readSandboxFile } from "./sandbox-files.ts";
 import { readSandboxCheck, readSandboxReport } from "./sandbox-report.ts";
 import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
@@ -19,6 +29,12 @@ export interface SandboxCase {
 	outputName: string;
 }
 
+/** Task-local compiler results; never persisted or shared across users or tasks. */
+export interface SandboxCompilationCache {
+	image: string;
+	programs: Map<string, { directory: string; passed: boolean; log: string; message: string }>;
+}
+
 export interface SandboxInput {
 	context?: ExecutionContext;
 	mode: "generate" | "finalize";
@@ -26,11 +42,16 @@ export interface SandboxInput {
 	image: string;
 	reference: ManualProgram;
 	interactor?: { language: CppLanguage; code: string };
+	communication?: CommunicationConfig;
+	compilationCache?: SandboxCompilationCache;
+	primaryId?: string;
 	oracle?: ManualProgram;
 	contestants?: Array<{ id: string; program: ManualProgram }>;
 	generator?: string;
-	generatorStandard: CppLanguage;
-	commands?: string[][];
+	/** Legacy single-generator input, normalized before execution. */
+	generatorStandard: GeneratorLanguage;
+	generators?: Generator[];
+	commands?: GeneratorCommand[] | string[][];
 	startNumber?: number;
 	checker?: string;
 	checkerStandard: CppLanguage;
@@ -57,11 +78,14 @@ file_limit = payload['maxFileBytes']
 cpp_standards = {'cpp11':'c++11', 'cpp14':'c++14', 'cpp17':'c++17',
                  'cpp20':'c++20', 'cpp23':'c++23', 'cpp26':'c++26'}
 
-def check(stage, passed, message, case_id=None, verdict=None, score=None, duration_ms=None, log_path=None):
+${pythonProcessMonitor}
+
+def check(stage, passed, message, case_id=None, verdict=None, score=None, duration_ms=None, log_path=None, memory_bytes=None):
     item = {'stage': stage, 'caseId': case_id, 'passed': bool(passed), 'message': str(message)[:3000]}
     if verdict is not None: item['verdict'] = verdict
     if score is not None: item['score'] = score
     if duration_ms is not None: item['durationMs'] = duration_ms
+    if memory_bytes is not None: item['memoryBytes'] = memory_bytes
     if log_path is not None: item['logPath'] = log_path
     checks.append(item)
     print('SETDRAFT_CHECK ' + json.dumps(item, ensure_ascii=False), flush=True)
@@ -76,28 +100,18 @@ def run(command, input_path, output_path, timeout, memory_mb, cwd):
         resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_CPU, (math.ceil(timeout) + 1, math.ceil(timeout) + 1))
-        if memory_mb is not None:
-            cap = memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
     started = time.monotonic()
     with open(input_path, 'rb') if input_path else open(os.devnull, 'rb') as stdin, \
          open(output_path, 'wb') as stdout, open(error_path, 'wb') as stderr:
         process = subprocess.Popen(command, stdin=stdin, stdout=stdout, stderr=stderr, cwd=cwd,
             env={'PATH':'/usr/local/bin:/usr/bin:/bin', 'LANG':'C.UTF-8', 'LC_ALL':'C.UTF-8', 'TZ':'UTC', 'HOME':'/tmp'},
             start_new_session=True, preexec_fn=limits)
-        status = 'ok'
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            status = 'time_limit'
-        finally:
-            try: os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
-            process.wait()
+        result = wait_program(process, timeout, memory_mb)
+        status = result['status']
     size = output_path.stat().st_size
     if status == 'ok' and size >= file_limit: status = 'output_limit'
     elif status == 'ok' and process.returncode != 0: status = 'runtime_error'
-    return {'status':status, 'code':process.returncode, 'stderr':error_path.open('rb').read(12000).decode('utf-8', errors='replace')[:3000],
+    return {'status':status, 'code':process.returncode, 'memoryBytes':result['memoryBytes'], 'stderr':error_path.open('rb').read(12000).decode('utf-8', errors='replace')[:3000],
             'durationMs':round((time.monotonic()-started)*1000), 'bytes':size,
             'logPath':str(error_path.relative_to(root)), 'stderrBytes':error_path.stat().st_size}
 
@@ -125,11 +139,11 @@ def program(role, input_path, output_path, case_id):
     memory = payload['memoryLimitMb']
     cmd = commands[role][:]
     if languages[role] == 'java': cmd.insert(1, '-Xmx' + str(memory) + 'm')
-    result = run(cmd, input_path, output_path, timeout, None if languages[role] == 'java' else memory,
+    result = run(cmd, input_path, output_path, timeout, memory,
                  root / 'run' / role / case_id)
-    verdict = {'ok':'AC', 'time_limit':'TLE', 'runtime_error':'RE', 'output_limit':'RE'}.get(result['status'], 'SYSTEM_ERROR')
+    verdict = {'ok':'AC', 'time_limit':'TLE', 'memory_limit':'MLE', 'runtime_error':'RE', 'output_limit':'RE'}.get(result['status'], 'SYSTEM_ERROR')
     check(role, result['status'] == 'ok', result['stderr'] or (result['status'] + ', ' + str(result['durationMs']) + ' ms'), case_id,
-          verdict=verdict, duration_ms=result['durationMs'], log_path=result['logPath'])
+          verdict=verdict, duration_ms=result['durationMs'], log_path=result['logPath'], memory_bytes=result['memoryBytes'])
     return result['status'] == 'ok'
 
 def same_file(left, right):
@@ -217,24 +231,26 @@ def verify_case(case_id, input_path, supplied_output, output_name):
 
 def main():
     programs = {'reference':payload['reference']}
-    for role in ('oracle','generator','checker','validator'):
+    for role in ('oracle','checker','validator'):
         if payload.get(role): programs[role] = payload[role]
+    for item in payload.get('generators', []): programs[item['name']] = item
     for role, item in programs.items():
         if not source(role, item['language'], item['code']): return
     if payload['mode'] == 'generate':
         global generated_count
         (root / 'generated').mkdir(exist_ok=True)
-        for index, args in enumerate(payload['commands']):
+        for index, item in enumerate(payload['commands']):
             number = payload['startNumber'] + index
             case_id = str(number)
             first = root / 'generated' / (case_id + '.in')
             second = root / 'run' / 'repeat' / (case_id + '.in')
-            command = commands['generator'] + args
+            command = commands[item['generator']] + item['args']
             left = run(command, None, first, 30, 512, root / 'run' / 'generate' / case_id)
             right = run(command, None, second, 30, 512, root / 'run' / 'regenerate' / case_id)
             if not check('generator', left['status'] == 'ok' and right['status'] == 'ok',
                          left['stderr'] or right['stderr'] or left['status'], case_id): return
-            if not check('reproducibility', same_file(first, second), '固定参数重跑一致', case_id): return
+            reproducible = same_file(first, second)
+            if not check('reproducibility', reproducible, '固定参数重跑一致' if reproducible else '生成器重跑结果不一致', case_id): return
             verify_case(case_id, first, None, case_id + '.out')
             if any(not item['passed'] for item in checks): return
             shutil.copyfile(root / 'verified' / (case_id + '.out'), root / 'generated' / (case_id + '.out'))
@@ -407,7 +423,7 @@ export async function runManualSandbox(input: SandboxInput): Promise<ManualSandb
 }
 
 async function runManualSandboxImpl(input: SandboxInput): Promise<ManualSandboxReport> {
-	if (input.interactor) return runInteractiveSandbox(input);
+	if (input.interactor || input.communication) return runInteractiveSandbox(input);
 	const context = input.context;
 	const taskId = context?.id ?? randomUUID();
 	context?.signal.throwIfAborted();
@@ -430,10 +446,10 @@ async function runManualSandboxImpl(input: SandboxInput): Promise<ManualSandboxR
 		mode: input.mode,
 		reference: input.reference,
 		oracle: input.oracle,
-		generator: input.generator ? { language: input.generatorStandard, code: input.generator } : undefined,
+		generators: sandboxGenerators(input),
 		checker: input.checker ? { language: input.checkerStandard, code: input.checker } : undefined,
 		validator: input.validator ? { language: input.validatorStandard, code: input.validator } : undefined,
-		commands: input.commands,
+		commands: sandboxGeneratorCommands(input),
 		startNumber: input.startNumber,
 		timeLimitMs: input.timeLimitMs,
 		memoryLimitMb: input.memoryLimitMb,
