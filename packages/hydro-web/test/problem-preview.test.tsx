@@ -108,15 +108,20 @@ describe("Hydro-style statement preview", () => {
 			);
 			expect(html).toContain("<h2>描述</h2>");
 			expect(html).toContain("<h2>提示</h2>");
-			expect(html).toContain("<h2>样例</h2>");
-			expect(html).toContain('class="language-input1"');
-			expect(html).toContain('class="language-output1"');
 			expect(html).not.toContain("OLD_RENDERED_MARKDOWN");
 			if (judgingMode === "interactive") {
-				expect(html).toContain("<h2>交互描述</h2>");
+				expect(html).toContain("<h2>交互协议</h2>");
+				expect(html).toContain("<h2>旧双栏样例（消息顺序未整理）</h2>");
+				expect(html).toContain("裁判发送");
+				expect(html).toContain("选手发送");
+				expect(html).not.toContain('class="language-input1"');
+				expect(html).not.toContain('class="language-output1"');
 				expect(html).not.toContain("BATCH_INPUT_ONLY");
 				expect(html).not.toContain("BATCH_OUTPUT_ONLY");
 			} else {
+				expect(html).toContain("<h2>样例</h2>");
+				expect(html).toContain('class="language-input1"');
+				expect(html).toContain('class="language-output1"');
 				expect(html).toContain("<h2>输入</h2>");
 				expect(html).toContain("<h2>输出</h2>");
 				expect(html).not.toContain("INTERACTION_ONLY");

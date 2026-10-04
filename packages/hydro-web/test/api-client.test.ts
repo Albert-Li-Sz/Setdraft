@@ -17,9 +17,14 @@ describe("shared API client", () => {
 			.mockResolvedValueOnce(Response.json({ message: "conflict", current: projectFixture() }, { status: 409 }))
 			.mockResolvedValueOnce(Response.json({ message: "conflict", current: { id: "project" } }, { status: 409 }));
 		vi.stubGlobal("fetch", fetcher);
-		await expect(requestJson("/api/projects/project", undefined, readProjectSnapshot)).resolves.toEqual(
-			projectFixture(),
-		);
+		await expect(requestJson("/api/projects/project", undefined, readProjectSnapshot)).resolves.toMatchObject({
+			...projectFixture(),
+			problemType: "standard",
+			judgingMode: "default",
+			checkerMode: "text",
+			interactionInputMode: "provided",
+			communication: { judgeSource: "", judgeStandard: "cpp17", secondRound: "interactive" },
+		});
 		await expect(requestJson("/api/projects/project", undefined, readProjectSnapshot)).rejects.toThrow(
 			"题目格式无效",
 		);

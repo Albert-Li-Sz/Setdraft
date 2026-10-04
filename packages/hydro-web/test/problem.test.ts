@@ -44,7 +44,7 @@ describe("manual problem editor helpers", () => {
 				generatorSource: "saved generator",
 			}),
 		).toMatchObject({
-			judgingMode: "interactive",
+			problemType: "interactive",
 			interactionInputMode: "empty",
 			interactorSource: "interactive source",
 			interactorStandard: "cpp20",
@@ -87,15 +87,15 @@ describe("manual problem editor helpers", () => {
 		const editable = editableProject(structured);
 		expect(editable.statementSections).toEqual(structured.statementSections);
 		expect(editable.statement).toBe(formatHydroStatement(structured));
-		expect(editable.statement).toContain("## 交互描述");
-		expect(editable.statement).toContain("## 样例");
+		expect(editable.statement).toContain("## 交互协议");
+		expect(editable.statement).toContain("## 旧双栏样例（消息顺序未整理）");
 		expect(editable.statement).not.toContain("OUTDATED_MARKDOWN");
 		expect(editable.statement).not.toContain("SAVED_BATCH_INPUT");
 		expect(projectContextSnapshot(structured)).toContain("发送两个整数，收到它们的和。");
 		expect(projectContextSnapshot(structured)).not.toContain("OUTDATED_MARKDOWN");
 		const batch = editableProject({ ...structured, judgingMode: "default" });
 		expect(batch.statement).toContain("SAVED_BATCH_INPUT");
-		expect(batch.statement).not.toContain("## 交互描述");
+		expect(batch.statement).not.toContain("## 交互协议");
 		expect(batch.statementSections?.interaction).toBe(structured.statementSections.interaction);
 	});
 });
