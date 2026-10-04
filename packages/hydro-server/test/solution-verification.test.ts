@@ -277,7 +277,8 @@ sandboxIt(
 					expect((await exec("docker", ["top", `setdraft-task-${id}`, "-eo", "pid,args"])).stdout).toContain(
 						"sleep 60",
 					),
-				{ timeout: 12000, interval: 150 },
+				// Wait for actual contestant execution, including the sandbox's compilation budget.
+				{ timeout: 60000, interval: 150 },
 			);
 			controller.abort();
 			expect((await work)[0].status).toBe("rejected");
@@ -288,7 +289,7 @@ sandboxIt(
 			await work;
 		}
 	},
-	30000,
+	90000,
 );
 
 sandboxIt(

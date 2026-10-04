@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ManualRelease } from "@setdraft/contracts";
-import { isContestReadyRelease, requiresReverification, verificationContractVersion } from "@setdraft/contracts";
+import {
+	exportContractVersion,
+	isContestReadyRelease,
+	requiresReverification,
+	verificationContractVersion,
+} from "@setdraft/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ContestStore } from "../src/contests.ts";
 import { ExecutionScheduler } from "../src/execution-scheduler.ts";
@@ -65,12 +70,11 @@ it("does not serve an old cached DOMjudge adapter after the export contract chan
 	const current = join(root, "current-export.zip");
 	await writeFile(old, "old adapter");
 	await writeFile(current, "current adapter");
-	await projects.database.indexFile("release-file", release.id, "domjudge.v1.zip", old);
-	await projects.database.indexFile("release-file", release.id, "domjudge.v2.zip", old);
-	await projects.database.indexFile("release-file", release.id, "domjudge.v3.zip", old);
+	for (let version = 1; version < exportContractVersion; version++)
+		await projects.database.indexFile("release-file", release.id, `domjudge.v${version}.zip`, old);
 	await expect(projects.releases.releaseFile(release.id, "domjudge")).rejects.toMatchObject({ statusCode: 404 });
 	const name = exportFileName("domjudge");
-	expect(name).toBe("domjudge.v4.zip");
+	expect(name).toBe(`domjudge.v${exportContractVersion}.zip`);
 	await projects.database.indexFile("release-file", release.id, name, current);
 	expect(await projects.releases.releaseFile(release.id, "domjudge")).toMatchObject({ size: 15 });
 });

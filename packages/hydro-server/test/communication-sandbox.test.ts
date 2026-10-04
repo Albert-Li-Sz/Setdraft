@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import {
 	type ProgramLanguage,
 	type Solution,
 } from "@setdraft/contracts";
-import { afterEach, beforeEach, expect, it as test } from "vitest";
+import { afterEach, beforeEach, expect, it as test, vi } from "vitest";
 import { defaultTextChecker } from "../src/acm-checker.ts";
 import { communicationAdapter } from "../src/communication-adapter.ts";
 import { runInteractiveSandbox } from "../src/interactive-sandbox.ts";
@@ -170,6 +170,61 @@ it("isolates compilation and reports WA/TLE/MLE/RE in either round, retaining va
 		}
 	expect(result.cells.find((cell) => cell.solutionId === "compile-failed")).toMatchObject({ verdict: "CE" });
 }, 120000);
+
+it.each(["first", "second"] as const)(
+	"retains %s-round RE when Docker attachment closes after the time limit",
+	async (round) => {
+		const dockerPath = execFileSync("/bin/sh", ["-c", "command -v docker"], { encoding: "utf8" }).trim();
+		const bin = join(root, "bin");
+		await mkdir(bin);
+		const wrapper = join(bin, "docker");
+		// Delay only the client exit, after the real contestant container has stopped.
+		await writeFile(
+			wrapper,
+			`#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { setTimeout } from 'node:timers/promises';
+const args = process.argv.slice(2);
+const child = spawn(${JSON.stringify(dockerPath)}, args, { stdio: 'inherit' });
+const code = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+});
+if (args[0] === 'start' && args.includes('--interactive') && args.at(-1)?.endsWith('-candidate1') && code !== 0) {
+    writeFileSync(${JSON.stringify(join(root, "attachment-delayed"))}, 'delayed');
+    await setTimeout(650);
+}
+process.exitCode = code ?? 125;
+`,
+		);
+		await chmod(wrapper, 0o755);
+		vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+		try {
+			const code = communicationReferenceTemplate("python3").replace(
+				"print(",
+				`if phase == '${round}': raise RuntimeError('failure')\nprint(`,
+			);
+			const result = await runSolutionSandbox({
+				...sandbox("interactive", "python3", { timeLimitMs: 400, memoryLimitMb: 64 }),
+				solutions: [candidate("primary", communicationReferenceTemplate("python3")), candidate("broken", code)],
+				primaryId: "primary",
+			});
+			expect(await readFile(join(root, "attachment-delayed"), "utf8")).toBe("delayed");
+			expect(
+				result.cells.find((cell) => cell.solutionId === "broken"),
+				JSON.stringify(result.checks),
+			).toMatchObject({
+				verdict: "RE",
+				failedRound: round === "first" ? 1 : 2,
+				score: 0,
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	},
+	90000,
+);
 
 it.each(['quitf(_ok, "accepted");', 'quit(_ok, "accepted");', 'quitp(1.0, "accepted");'])(
 	"rejects missing handoff through %s",

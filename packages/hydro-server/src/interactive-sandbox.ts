@@ -25,8 +25,10 @@ const roles = ["reference", "oracle", "interactor", "validator", "generator"] as
 type Role = (typeof roles)[number] | `candidate${number}` | `generator${number}`;
 const captureLimit = 64 * 1024;
 const readyMarker = "SETDRAFT_INTERACTIVE_READY\n";
+const contestantExitCodes = { TLE: 124, MLE: 125, RE: 126 } as const;
 const launcher = String.raw`import json, math, os, pathlib, resource, signal, subprocess, sys, time
 timeout, memory, file_limit = map(int, sys.argv[1:4])
+role = sys.argv[4]
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
 resource.setrlimit(resource.RLIMIT_CPU, (math.ceil(timeout / 1000) + 1, math.ceil(timeout / 1000) + 1))
@@ -34,13 +36,15 @@ ${pythonProcessMonitor}
 os.chdir('/tmp')
 os.write(2, b'SETDRAFT_INTERACTIVE_READY\n')
 if os.read(0, 1) != b'\n': sys.exit(125)
-process = subprocess.Popen(sys.argv[4:], start_new_session=True,
+process = subprocess.Popen(sys.argv[5:], start_new_session=True,
     env={'PATH':'/usr/local/bin:/usr/bin:/bin', 'LANG':'C.UTF-8', 'LC_ALL':'C.UTF-8', 'TZ':'UTC', 'HOME':'/tmp'})
 path = pathlib.Path('/metrics/result.json')
 def sample(peak):
     if path.parent.exists(): path.write_text(json.dumps({'memoryBytes':peak}))
 result = wait_program(process, timeout / 1000, memory or None, sample)
 if path.parent.exists(): path.write_text(json.dumps(result))
+if role == 'contestant':
+    sys.exit({'ok':0, 'time_limit':${contestantExitCodes.TLE}, 'memory_limit':${contestantExitCodes.MLE}, 'runtime_error':${contestantExitCodes.RE}}[result['status']])
 sys.exit(0 if result['status'] == 'ok' else result['code'] if result['code'] > 0 else 1)
 `;
 
@@ -78,6 +82,25 @@ function docker(
 		});
 		if (signal?.aborted) abort();
 	});
+}
+
+async function containerState(name: string): Promise<{ running: boolean; exitCode: number; oomKilled: boolean }> {
+	const inspected = await docker(["inspect", "--format", "{{json .State}}", name]);
+	if (inspected.code !== 0) throw new Error(inspected.stderr || "无法读取交互容器状态。");
+	const state: unknown = JSON.parse(inspected.stdout);
+	if (
+		!state ||
+		typeof state !== "object" ||
+		!("Running" in state) ||
+		typeof state.Running !== "boolean" ||
+		!("ExitCode" in state) ||
+		typeof state.ExitCode !== "number" ||
+		!Number.isSafeInteger(state.ExitCode) ||
+		!("OOMKilled" in state) ||
+		typeof state.OOMKilled !== "boolean"
+	)
+		throw new Error("交互容器状态不完整。");
+	return { running: state.Running, exitCode: state.ExitCode, oomKilled: state.OOMKilled };
 }
 
 async function remove(names: string[], stage?: string): Promise<void> {
@@ -166,6 +189,7 @@ async function runSingle(
 			"30000",
 			"512",
 			String(input.maxFileBytes),
+			"auxiliary",
 			...program.command,
 			...args,
 		]);
@@ -282,6 +306,7 @@ async function dialogue(
 				String(input.timeLimitMs),
 				String(isJury ? juryMemory : input.memoryLimitMb),
 				String(input.maxFileBytes),
+				isJury ? "jury" : "contestant",
 				...command,
 			]);
 			if (result.code !== 0) throw new Error(result.stderr || "无法创建交互容器。");
@@ -422,10 +447,8 @@ async function dialogue(
 				memoryExceeded = value.memoryBytes > input.memoryLimitMb * 1048576;
 			}
 		} catch {}
-		const states = await Promise.all(
-			names.map((name) => docker(["inspect", "--format", "{{.State.OOMKilled}}", name])),
-		);
-		if (states[1].stdout.trim() === "true")
+		const states = await Promise.all(names.map(containerState));
+		if (states[1].oomKilled)
 			return {
 				...result,
 				passed: false,
@@ -435,7 +458,11 @@ async function dialogue(
 				message: "Interactor 容器内存超限。",
 				memoryBytes,
 			};
-		if (memoryExceeded || states[0].stdout.trim() === "true")
+		if (
+			memoryExceeded ||
+			states[0].oomKilled ||
+			(!states[0].running && states[0].exitCode === contestantExitCodes.MLE)
+		)
 			return {
 				...result,
 				passed: false,
@@ -445,6 +472,30 @@ async function dialogue(
 				message: "选手程序实际内存使用超过限制。",
 				memoryBytes,
 			};
+		// Docker attachment may close after the program's deadline. Use the trusted
+		// launcher's container exit status, rather than contestant-writable metrics.
+		if (!states[0].running && result.verdict !== "SYSTEM_ERROR") {
+			const verdict =
+				states[0].exitCode === contestantExitCodes.TLE
+					? "TLE"
+					: states[0].exitCode === contestantExitCodes.RE
+						? "RE"
+						: undefined;
+			if (verdict)
+				return {
+					...result,
+					passed: false,
+					verdict,
+					score: 0,
+					scoreRatio: 0,
+					message:
+						verdict === "RE"
+							? `选手程序异常退出：${participants[0].stderr}`.slice(0, 3000)
+							: "选手程序运行超过时限。",
+					memoryBytes,
+					logPath: `logs/${contestant.role}-${test.id}.json`,
+				};
+		}
 		return { ...result, memoryBytes, logPath: `logs/${contestant.role}-${test.id}.json` };
 	} finally {
 		try {
