@@ -123,7 +123,7 @@ test("@sandbox reports compilation failures, cancels real running work and retri
 				const { done, value } = await reader.read();
 				if (done) throw new Error("Task finished before generator compilation");
 				buffer += decoder.decode(value, { stream: true });
-				if (buffer.includes('"stage":"compile:generator"')) break;
+				if (buffer.includes('"stage":"compile:gen"')) break;
 			}
 		} finally { await reader.cancel(); }
 	}, slow.task.id);
