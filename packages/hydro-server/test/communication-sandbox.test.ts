@@ -175,6 +175,7 @@ it("isolates compilation and reports WA/TLE/MLE/RE in either round, retaining va
 it.each(["first", "second"] as const)(
 	"retains %s-round RE when Docker attachment closes after the time limit",
 	async (round) => {
+		const timeLimitMs = 2000;
 		const dockerPath = execFileSync("/bin/sh", ["-c", "command -v docker"], { encoding: "utf8" }).trim();
 		const bin = join(root, "bin");
 		await mkdir(bin);
@@ -194,7 +195,7 @@ const code = await new Promise((resolve, reject) => {
 });
 if (args[0] === 'start' && args.includes('--interactive') && args.at(-1)?.endsWith('-candidate1') && code !== 0) {
     writeFileSync(${JSON.stringify(join(root, "attachment-delayed"))}, 'delayed');
-    await setTimeout(650);
+    await setTimeout(${timeLimitMs + 250});
 }
 process.exitCode = code ?? 125;
 `,
@@ -207,11 +208,19 @@ process.exitCode = code ?? 125;
 				`if phase == '${round}': raise RuntimeError('failure')\nprint(`,
 			);
 			const result = await runSolutionSandbox({
-				...sandbox("interactive", "python3", { timeLimitMs: 400, memoryLimitMb: 64 }),
+				...sandbox("interactive", "python3", { timeLimitMs, memoryLimitMb: 64 }),
 				solutions: [candidate("primary", communicationReferenceTemplate("python3")), candidate("broken", code)],
 				primaryId: "primary",
 			});
 			expect(await readFile(join(root, "attachment-delayed"), "utf8")).toBe("delayed");
+			const metrics: { status: string; code: number; durationMs: number } = JSON.parse(
+				await readFile(
+					join(root, "stage", "metrics", `candidate1-1-round${round === "first" ? 1 : 2}`, "result.json"),
+					"utf8",
+				),
+			);
+			expect(metrics).toMatchObject({ status: "runtime_error", code: 1 });
+			expect(metrics.durationMs).toBeLessThan(timeLimitMs);
 			expect(
 				result.cells.find((cell) => cell.solutionId === "broken"),
 				JSON.stringify(result.checks),
