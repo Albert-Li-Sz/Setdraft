@@ -36,7 +36,8 @@ test("bundled SearXNG enables its fallback engines and starts without bot-detect
   }
   assert.ok(config, "SearXNG did not become ready");
   const enabled = config.engines.filter(engine => engine.enabled).map(engine => engine.name).sort();
-  assert.deepEqual(enabled, ["360search", "bing"]);
+  assert.deepEqual(enabled, ["360search", "arxiv", "bing"]);
+  assert.ok(config.engines.find(engine => engine.name === "arxiv").categories.includes("general"), "arXiv must participate in the queries sent by Setdraft");
   await exec("docker", ["exec", name, "/usr/local/searxng/.venv/bin/python", "/etc/searxng/healthcheck.py"], { timeout: 5000 });
   const logs = await exec("docker", ["logs", name]);
   assert.doesNotMatch(logs.stdout + logs.stderr, /missing config file|X-Forwarded-For nor X-Real-IP/u);

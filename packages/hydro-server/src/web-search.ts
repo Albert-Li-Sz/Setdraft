@@ -161,11 +161,18 @@ export class WebSearch {
 		const probe = async (engine?: string): Promise<SearchDiagnostics> => {
 			const id = randomUUID();
 			try {
-				const result = await this.search(database, userId, id, query, signal, {
-					bypassCache: true,
-					engine,
-					language,
-				});
+				const result = await this.search(
+					database,
+					userId,
+					id,
+					engine === "arxiv" ? "graph shortest path" : query,
+					signal,
+					{
+						bypassCache: true,
+						engine,
+						language,
+					},
+				);
 				return result.diagnostics!;
 			} catch (error) {
 				if (error instanceof SearchFailure) return error.diagnostics;

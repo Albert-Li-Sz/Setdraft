@@ -1,6 +1,6 @@
 use_default_settings:
   engines:
-    keep_only: [bing, 360search]
+    keep_only: [bing, 360search, arxiv]
 engines:
   - name: bing
     disabled: false
@@ -8,6 +8,11 @@ engines:
     base_url: https://cn.bing.com
   - name: 360search
     disabled: false
+    timeout: 8.0
+  - name: arxiv
+    disabled: false
+    # Include papers in the general queries sent by Setdraft and its deployment preflight.
+    categories: [general, science, scientific publications]
     timeout: 8.0
 search:
   formats: [json]

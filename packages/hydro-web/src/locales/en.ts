@@ -141,8 +141,8 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"留空使用本条消息前 500 字；不会发送题目和附件":
 		"Leave blank to search the first 500 characters of this message. Problems and attachments are excluded.",
 	"正在搜索网络资料…": "Searching the web…",
-	"默认使用随部署启动的 SearXNG，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。":
-		"Use the bundled SearXNG service or Tavily. Only the search query is sent; problems, attachments and chat history are excluded.",
+	"默认使用随部署启动的 SearXNG，聚合 Bing、360 和 arXiv 论文，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。":
+		"The bundled SearXNG service searches Bing, 360 and arXiv papers. Tavily is also available. Only search queries are sent; problems, attachments and chat history are excluded.",
 	"搜索配置已保存。": "Search settings saved.",
 	"搜索连接正常。": "Search connection successful.",
 	"搜索配置读取失败。": "Could not load search settings.",

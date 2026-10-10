@@ -100,6 +100,40 @@ it("uses surviving engines without exposing upstream failure details", async () 
 	});
 	expect(JSON.stringify(snapshot)).not.toContain("fake-secret");
 });
+it("accepts arXiv paper abstracts in the default search when general web engines fail", async () => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async (input) => {
+		const url = new URL(String(input));
+		expect(url.searchParams.get("categories")).toBe("general");
+		expect(url.searchParams.get("q")).toBe("graph shortest path");
+		return Response.json({
+			results: [
+				{
+					template: "paper.html",
+					engine: "arxiv",
+					title: "A <b>shortest path</b> algorithm",
+					url: "https://arxiv.org/abs/2501.00001",
+					content: "An algorithm for finding shortest paths in graphs.",
+					pdf_url: "https://arxiv.org/pdf/2501.00001",
+				},
+			],
+			unresponsive_engines: [
+				["bing", "timeout"],
+				["360search", "HTTP error"],
+			],
+		});
+	});
+	const snapshot = await search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "graph shortest path");
+	expect(snapshot.results).toEqual([
+		{
+			id: 1,
+			title: "A shortest path algorithm",
+			url: "https://arxiv.org/abs/2501.00001",
+			snippet: "An algorithm for finding shortest paths in graphs.",
+		},
+	]);
+	expect(snapshot.diagnostics).toMatchObject({ status: "partial", candidateCount: 1, acceptedCount: 1 });
+});
 it.each([
 	["HTTP connection error", "network"],
 	["HTTP error", "http"],
@@ -145,14 +179,21 @@ it("probes enabled engines independently, redacts reports and uses the existing 
 				engines: [
 					{ name: "bing", categories: ["general"], enabled: true },
 					{ name: "duckduckgo", categories: ["general"], enabled: true },
+					{ name: "arxiv", categories: ["general", "science", "scientific publications"], enabled: true },
 					{ name: "disabled", categories: ["general"], enabled: false },
 				],
 			});
 		if (url.searchParams.get("engines") === "duckduckgo")
 			return Response.json({ results: [], unresponsive_engines: [["duckduckgo", "fake-secret timeout"]] });
+		if (url.searchParams.get("engines") === "arxiv") {
+			expect(url.searchParams.get("q")).toBe("graph shortest path");
+			return Response.json({
+				results: [{ title: "Paper", url: "https://arxiv.org/abs/2501.00001", content: "Paper abstract" }],
+			});
+		}
 		return result();
 	});
-	await search.configure({ enabled: true, provider: "searxng", dailyLimit: 3 });
+	await search.configure({ enabled: true, provider: "searxng", dailyLimit: 4 });
 	const database = new WorkspaceDatabase(root),
 		user = randomUUID();
 	const report = await search.diagnose(database, user, "zh");
@@ -160,10 +201,13 @@ it("probes enabled engines independently, redacts reports and uses the existing 
 	expect(report.engines.map(({ name, diagnostics }) => [name, diagnostics.status])).toEqual([
 		["bing", "healthy"],
 		["duckduckgo", "engines-unavailable"],
+		["arxiv", "healthy"],
 	]);
 	for (const url of calls.filter((url) => url.searchParams.has("engines")))
 		expect(url.searchParams.has("categories")).toBe(false);
-	expect(JSON.stringify(report)).not.toMatch(/fake-secret|Python|example.com|External reference/u);
+	expect(JSON.stringify(report)).not.toMatch(
+		/fake-secret|Python|example.com|External reference|graph shortest path|arxiv.org|Paper abstract/u,
+	);
 	expect((await search.status()).health).toEqual(report.aggregate);
 	await expect(search.diagnose(database, user, "en")).rejects.toMatchObject({ statusCode: 429 });
 	expect(

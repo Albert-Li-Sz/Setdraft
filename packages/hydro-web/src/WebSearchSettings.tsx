@@ -102,7 +102,9 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 		<section className="card settings-card search-settings-card">
 			<h2>{t("联网搜索")}</h2>
 			<p className="settings-help">
-				{t("默认使用随部署启动的 SearXNG，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。")}
+				{t(
+					"默认使用随部署启动的 SearXNG，聚合 Bing、360 和 arXiv 论文，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。",
+				)}
 			</p>
 			{config && (
 				<form
