@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,11 +10,13 @@ import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, save
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { fileURLToPath } from "node:url";
 import { processHasExited, processIdentity } from "../packages/hydro-server/src/process-identity.ts";
+import { createServer as createHttpServer } from "node:http";
+import { promisify } from "node:util";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function copyInstaller(fixture) {
-	for (const file of ["scripts/hydro-local.mjs", "scripts/deployment-config.mjs", "scripts/private-file.mjs", "scripts/data-path.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/src/process-identity.ts", "packages/hydro-server/sandbox/build-args.mjs"]) {
+	for (const file of ["scripts/hydro-local.mjs", "scripts/check-search.mjs", "scripts/deployment-config.mjs", "scripts/private-file.mjs", "scripts/data-path.mjs", "scripts/workspace-integrity.mjs", "packages/hydro-server/src/process-identity.ts", "packages/hydro-server/sandbox/build-args.mjs"]) {
 		mkdirSync(dirname(join(fixture, file)), { recursive: true });
 		copyFileSync(join(root, file), join(fixture, file));
 	}
@@ -288,6 +290,50 @@ async function freePort() {
 	await new Promise((accept) => server.close(accept));
 	return port;
 }
+
+test("native install, start and upgrade preserve a running API when search preflight fails", {skip:process.platform==="win32"}, async()=>{
+ const fixture=mkdtempSync(join(tmpdir(),"setdraft-native-search-"));
+ copyInstaller(fixture);
+ const script=join(fixture,"scripts/hydro-local.mjs"), port=await freePort();
+ writeFileSync(script,readFileSync(script,"utf8").replaceAll("4321",String(port)));
+ mkdirSync(join(fixture,"bin"));
+ mkdirSync(join(fixture,"packages/hydro-web/dist"),{recursive:true});
+ writeFileSync(join(fixture,"packages/hydro-web/dist/index.html"),"fixture");
+ for(const name of ["npm","docker"])writeFileSync(join(fixture,"bin",name),'#!/bin/sh\nexit 0\n',{mode:0o755});
+ writeFileSync(join(fixture,"bin/git"),'#!/bin/sh\ncase "$1" in branch) echo main;; remote) echo https://example.org/project.git;; esac\n',{mode:0o755});
+ const search=createHttpServer((req,res)=>res.end(JSON.stringify({results:[],unresponsive_engines:[["bing","captcha fake-secret"]]})));
+ await new Promise(accept=>search.listen(0,"127.0.0.1",accept));
+ const child=spawn(process.execPath,["-e",`require('node:http').createServer((req,res)=>res.end('existing API')).listen(${port},'127.0.0.1',()=>console.log('Ready'));`],{detached:true,stdio:["ignore","pipe","ignore"]});
+ const closed=new Promise(accept=>child.once("close",accept));
+ await new Promise((accept,reject)=>{child.stdout.once("data",accept);child.once("error",reject);});
+ try {
+  const identity=processIdentity(child.pid);assert.ok(identity);
+  const runtime=join(fixture,".setdraft/runtime");mkdirSync(runtime,{recursive:true});
+  const pid=join(runtime,"api.pid.json");writeFileSync(pid,JSON.stringify({pid:child.pid,identity}));
+  const marker=join(fixture,".setdraft/project.txt");writeFileSync(marker,"preserve");
+  const env={...process.env,PATH:`${join(fixture,"bin")}:${process.env.PATH}`};
+  for(const key of Object.keys(env))if(key.startsWith("SETDRAFT_")||key.startsWith("HYDRO_")||key==="PORT")delete env[key];
+  env.SETDRAFT_DATABASE_URL="postgresql://test:test@localhost/test";
+  env.SETDRAFT_SEARCH_URL=`http://127.0.0.1:${search.address().port}`;
+  const exec=promisify(execFile);
+  for(const command of ["install","start","upgrade"]){
+   await assert.rejects(exec(process.execPath,[script,command,...(command==="install"?["--keep-data"]:[])],{cwd:fixture,env,timeout:10000}),error=>{
+    assert.equal(error.code,1);
+    assert.match(error.stderr,/上游引擎要求验证/u);
+    assert.doesNotMatch(error.stdout+error.stderr,/fake-secret|npm ci|git fetch/u);
+    return true;
+   });
+   process.kill(child.pid,0);
+   assert.ok(existsSync(pid));
+   assert.equal(readFileSync(marker,"utf8"),"preserve");
+   assert.equal(await fetch(`http://127.0.0.1:${port}`).then(response=>response.text()),"existing API");
+  }
+ } finally {
+  child.kill("SIGTERM");await closed;
+  search.closeAllConnections();await new Promise(accept=>search.close(accept));
+  rmSync(fixture,{recursive:true,force:true});
+ }
+});
 
 test("native stop clears an exited Linux process even before its parent reaps it", { skip: process.platform !== "linux" }, async () => {
 	const fixture = mkdtempSync(join(tmpdir(), "setdraft-native-zombie-"));

@@ -10,6 +10,7 @@ import { createInterface } from "node:readline/promises";
 import { sandboxBuildArgs } from "../packages/hydro-server/sandbox/build-args.mjs";
 import { processHasExited, processIdentity, sameProcess } from "../packages/hydro-server/src/process-identity.ts";
 import { deploymentEnvironment, loadDeployment, networkEnvironment, redact, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
+import { checkSearch } from "./check-search.mjs";
 
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -293,6 +294,15 @@ async function startAll() {
 	} catch { console.log("首次初始化的安装码见 API 启动日志；也可运行 account setup-code 重新生成。"); }
 }
 
+async function checkConfiguredSearch() {
+	if (!deployment.values.SETDRAFT_SEARCH_URL) {
+		console.log("联网搜索未配置；原生部署需通过 SETDRAFT_SEARCH_URL 指定可用的 SearXNG 服务。");
+		return;
+	}
+	const report = await checkSearch(deployment.values.SETDRAFT_SEARCH_URL);
+	console.log(`搜索预检通过：${report.map(item => `${item.language} ${item.candidateCount}/${item.acceptedCount}`).join("，")}（候选/接受）。`);
+}
+
 function installDependencies() {
 	runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
 	if (!hasValidModelData()) {
@@ -343,6 +353,7 @@ function printDryRun(command, options) {
 		if (deployment.values.SETDRAFT_DOWNLOAD_PROXY) console.log("下载代理：已配置（地址不显示）。");
 		if (deployment.values.SETDRAFT_PUBLIC_ORIGIN) console.log(`浏览器访问来源：${deployment.values.SETDRAFT_PUBLIC_ORIGIN}。`);
 		console.log("不安装或托管反向代理；可自行将代理指向 Web/API 的 4321 端口。");
+		console.log("已配置的 SearXNG 会在停止服务前执行中英文真实检索预检；故障时保留现有服务和数据。");
 	}
 	if (command === "upgrade") console.log("将检查 main 工作区、执行 git fetch origin main 和 git merge --ff-only FETCH_HEAD。");
 	if (command === "install" || command === "upgrade") {
@@ -466,6 +477,7 @@ async function main() {
 		checkDependencies();
 		if (currentMode === "production" && !(await stat(join(root, "packages", "hydro-web", "dist", "index.html")).catch(() => undefined))) throw new Error("生产网页尚未构建，请先运行 ./install.sh。");
 		await checkPorts();
+		await checkConfiguredSearch();
 		await stopAll();
 		await saveDeployment(deployment);
 		await startAll();
@@ -511,6 +523,7 @@ async function main() {
 	checkDependencies();
 	if (command === "upgrade") checkUpgrade();
 	await checkPorts();
+	await checkConfiguredSearch();
 	if (command === "upgrade") {
 		run("git", ["fetch", "origin", "main"], networkEnvironment(deployment));
 		const result = spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"], { cwd: root });

@@ -1314,15 +1314,19 @@ export function ManualWorkspace(props: Props) {
 												: "主标程生成答案；特判题使用自定义 Checker。必检解法影响发布，仅观察解法提供提示。",
 								)}
 							</div>
-							<div className="manual-program-layout">
-								<nav className="manual-program-menu" aria-label={t("程序与判题分区")}>
-									<div className="manual-program-menu-title">{t("程序文件")}</div>
+							<div className="manual-program-toolbar">
+								<div className="manual-program-heading">
+									<h2>{t("程序文件")}</h2>
+									<span className="manual-program-count">{programSections.length}</span>
+								</div>
+								<fieldset className="manual-program-actions" aria-label={t("程序文件")}>
 									<button
-										className="button secondary"
+										className="button primary"
 										type="button"
 										disabled={solutions.length >= 32}
 										onClick={() => addSolution()}
 									>
+										<Icon name="plus" />
 										{t("添加标程")}
 									</button>
 									<button
@@ -1331,8 +1335,13 @@ export function ManualWorkspace(props: Props) {
 										disabled={solutions.length >= 32}
 										onClick={() => addSolution(undefined, true)}
 									>
+										<Icon name="plus" />
 										{t("添加错误解")}
 									</button>
+								</fieldset>
+							</div>
+							<div className="manual-program-layout">
+								<nav className="manual-program-menu" aria-label={t("程序与判题分区")}>
 									{programSections.map((section) => (
 										<button
 											key={section.id}
@@ -1342,10 +1351,17 @@ export function ManualWorkspace(props: Props) {
 											aria-current={programSection === section.id ? "true" : undefined}
 											onClick={() => selectProgram(section.id)}
 										>
-											<span>{t(section.label)}</span>
-											<small>
-												{section.filled ? t("已填写") : section.required ? t("必填") : t("可选")}
-											</small>
+											<Icon name={section.id.startsWith("solution:") ? "code" : "settings"} />
+											<span className="manual-program-menu-copy">
+												<span>{t(section.label)}</span>
+												<small
+													className={
+														section.filled ? "is-filled" : section.required ? "is-required" : undefined
+													}
+												>
+													{section.filled ? t("已填写") : section.required ? t("必填") : t("可选")}
+												</small>
+											</span>
 										</button>
 									))}
 								</nav>

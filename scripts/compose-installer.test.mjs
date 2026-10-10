@@ -8,7 +8,7 @@ import test from "node:test";
 async function fixture() {
  const root = await mkdtemp(join(tmpdir(), "setdraft-compose-install-"));
  await mkdir(join(root,"scripts")); await mkdir(join(root,"bin"));
- for(const file of ["install.sh","upgrade.sh","uninstall.sh","backup.sh","scripts/setdraft-compose.sh","scripts/compose-config.mjs","scripts/deployment-config.mjs", "scripts/private-file.mjs", "scripts/data-path.mjs"])
+ for(const file of ["install.sh","upgrade.sh","uninstall.sh","backup.sh","scripts/setdraft-compose.sh","scripts/check-search.mjs","scripts/compose-config.mjs","scripts/deployment-config.mjs", "scripts/private-file.mjs", "scripts/data-path.mjs"])
   await cp(new URL(`../${file}`,import.meta.url),join(root,file));
  await writeFile(join(root,"bin/docker"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$COMMAND_LOG"
@@ -18,6 +18,7 @@ case "$*" in
  *'ps --status running -q database'*) echo database-id ;;
  *'maintenance backup '*--preflight) [ "\${FAIL_PREFLIGHT:-no}" != yes ] || exit 43 ;;
  *'maintenance backup '*) [ "\${FAIL_BACKUP:-no}" != yes ] || exit 44 ;;
+ *'--exit-code-from search-check search-check'*) [ "\${FAIL_SEARCH:-no}" != yes ] || exit 45 ;;
 esac
 `, {mode:0o755});
  const environment = {...process.env, PATH:`${join(root,"bin")}:${process.env.PATH}`,COMMAND_LOG:join(root,"commands.log")};
@@ -66,6 +67,30 @@ test("upgrade preserves storage and credentials, and never invokes reset",async(
   assert.notEqual(f.run(["upgrade","--purge-data"]).status,0);
   assert.equal(await f.log(),"");
  }finally{await rm(f.root,{recursive:true,force:true});}
+});
+
+test("install, upgrade and start check real search before stopping web or resetting data", async () => {
+ const f=await fixture();
+ try {
+  assert.equal(f.run(["install","--keep-data"]).status,0);
+  await writeFile(join(f.root,"bin/git"), '#!/bin/sh\nprintf "git %s\\n" "$*" >> "$COMMAND_LOG"\ncase "$1" in branch) echo main;; esac\n', {mode:0o755});
+  for (const args of [["install"],["install","--keep-data"],["upgrade"],["start"]]) {
+   await f.clear();
+   const failed=f.run(args,{FAIL_SEARCH:"yes"});
+   assert.equal(failed.status,45,failed.stderr);
+   const log=await f.log();
+   assert.match(log,/up -d --no-deps --no-build --pull never --wait --wait-timeout 120 search/u);
+   assert.match(log,/--exit-code-from search-check search-check/u);
+   assert.doesNotMatch(log,/stop web|maintenance reset| up .* web|--exit-code-from migrate/u);
+  }
+  await f.clear();
+  const success=f.run(["install","--keep-data"]);assert.equal(success.status,0,success.stderr);
+  const log=await f.log();
+  assert.ok(log.indexOf("--exit-code-from search-check")<log.indexOf("stop web"));
+  assert.equal([...log.matchAll(/--exit-code-from search-check/gu)].length,1);
+  assert.ok(log.indexOf("--exit-code-from migrate")>log.indexOf("stop web"));
+  assert.ok(log.indexOf("--exit-code-from migrate")<log.indexOf("--wait-timeout 120 web"));
+ } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
 test("uninstall requires a data choice and only purges when explicitly selected",async()=>{
@@ -132,6 +157,9 @@ test("installation without host Node forwards the entire OTLP allowlist to the b
   assert.equal(keys.length,13);
   for(const key of keys)
    assert.ok(bootstrap.includes(`-e ${key} `),`Missing bootstrap environment: ${key}`);
+  for(const key of ["SETDRAFT_SEARCH_DNS_PRIMARY","SETDRAFT_SEARCH_DNS_SECONDARY"])
+   assert.ok(bootstrap.includes(`-e ${key} `),`Missing bootstrap search DNS: ${key}`);
+  assert.ok(bootstrap.includes("-e SETDRAFT_BOOTSTRAP_DNS="));
   assert.doesNotMatch(log,/Bearer|test-only/u);
  }finally{await rm(f.root,{recursive:true,force:true});}
 });

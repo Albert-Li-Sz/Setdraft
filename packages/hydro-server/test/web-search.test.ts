@@ -100,6 +100,21 @@ it("uses surviving engines without exposing upstream failure details", async () 
 	});
 	expect(JSON.stringify(snapshot)).not.toContain("fake-secret");
 });
+it.each([
+	["HTTP connection error", "network"],
+	["HTTP error", "http"],
+	["HTTP 403", "http"],
+])("classifies the SearXNG engine failure %s as %s", async (reason, category) => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () =>
+		Response.json({ results: [], unresponsive_engines: [["bing", reason]] }),
+	);
+	await expect(
+		search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "public query"),
+	).rejects.toMatchObject({
+		diagnostics: { status: "engines-unavailable", engines: [{ name: "bing", category }] },
+	});
+});
 it("distinguishes filtered-empty and malformed responses from a valid no-match result", async () => {
 	const identity = new IdentityStore(root);
 	const database = new WorkspaceDatabase(root);

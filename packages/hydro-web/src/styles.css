@@ -1839,13 +1839,6 @@ a svg {
 	background: var(--panel);
 	overflow: hidden;
 }
-.manual-program-menu-title {
-	padding: 13px 14px 10px;
-	color: var(--muted);
-	font-size: 12px;
-	font-weight: 600;
-	letter-spacing: 0.04em;
-}
 .manual-program-menu button {
 	display: flex;
 	width: 100%;
@@ -2799,9 +2792,6 @@ a svg {
 	.manual-program-menu {
 		display: flex;
 		overflow-x: auto;
-	}
-	.manual-program-menu-title {
-		display: none;
 	}
 	.manual-program-menu button {
 		min-width: 132px;

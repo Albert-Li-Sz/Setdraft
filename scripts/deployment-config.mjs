@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { parseEnv } from "node:util";
 
@@ -10,6 +11,7 @@ const sourceDirectories = ["packages", "scripts", "deploy", "docs", "fixtures", 
 const fields = [
 	"SETDRAFT_IMAGE_MODE", "SETDRAFT_IMAGE_NAMESPACE", "SETDRAFT_IMAGE_TAG", "SETDRAFT_WEB_IMAGE", "SETDRAFT_MAINTENANCE_IMAGE",
 	"SETDRAFT_DATABASE_URL", "SETDRAFT_DATABASE_ADMIN_URL", "SETDRAFT_SEARCH_URL", "SETDRAFT_SEARCH_IMAGE", "SETDRAFT_SEARCH_PROXY", "SETDRAFT_POSTGRES_IMAGE", "SETDRAFT_WORKSPACE_ROOT", "SETDRAFT_HOST", "SETDRAFT_PORT", "SETDRAFT_PUBLIC_ORIGIN",
+	"SETDRAFT_SEARCH_DNS_PRIMARY", "SETDRAFT_SEARCH_DNS_SECONDARY",
 	"SETDRAFT_NETWORK", "SETDRAFT_NPM_REGISTRY", "SETDRAFT_DOWNLOAD_PROXY",
 	"SETDRAFT_DOCKER_REGISTRY", "SETDRAFT_DEBIAN_MIRROR",
 	"SETDRAFT_SANDBOX_IMAGE", "SETDRAFT_TESTCASES_MAX", "SETDRAFT_TOTAL_TIME_LIMIT_MS",
@@ -67,6 +69,22 @@ function origin(value) {
 	return value;
 }
 
+function searchDnsAddress(value) {
+	if (typeof value !== "string" || !isIP(value) || value.includes("%")) return false;
+	const normalized = isIP(value) === 6 ? new URL(`http://[${value}]/`).hostname.slice(1, -1) : value;
+	return !/^(?:127\.|0\.0\.0\.0$|255\.255\.255\.255$|::(?:1)?$|::ffff:(?:7f[0-9a-f]{2}:|0:0$))/u.test(normalized);
+}
+
+// Persist concrete upstreams so Docker never snapshots an empty DHCP resolver at boot.
+export function resolveSearchDns(values, servers, previous = {}) {
+	let available = [...new Set(servers.filter(searchDnsAddress))];
+	if (!available.length) available = [...new Set([previous.SETDRAFT_SEARCH_DNS_PRIMARY, previous.SETDRAFT_SEARCH_DNS_SECONDARY].filter(searchDnsAddress))];
+	const defaults = values.SETDRAFT_NETWORK === "global" ? ["1.1.1.1", "1.0.0.1"] : ["223.5.5.5", "223.6.6.6"];
+	const primary = values.SETDRAFT_SEARCH_DNS_PRIMARY || available[0] || defaults[0];
+	const secondary = values.SETDRAFT_SEARCH_DNS_SECONDARY || (values.SETDRAFT_SEARCH_DNS_PRIMARY ? primary : available[1] || available[0] || defaults[1]);
+	return { SETDRAFT_SEARCH_DNS_PRIMARY: primary, SETDRAFT_SEARCH_DNS_SECONDARY: secondary };
+}
+
 // Read a dedicated allowlist, never evaluate .env as shell code or import NODE_OPTIONS/PATH from it.
 export async function loadDeployment(root, environment = process.env, overrides = {}) {
 	const path = join(root, ".env");
@@ -96,6 +114,8 @@ export async function loadDeployment(root, environment = process.env, overrides 
 	values.SETDRAFT_PUBLIC_ORIGIN = origin(values.SETDRAFT_PUBLIC_ORIGIN);
 	if (values.SETDRAFT_DOWNLOAD_PROXY) safeUrl(values.SETDRAFT_DOWNLOAD_PROXY, "SETDRAFT_DOWNLOAD_PROXY", { proxy: true });
 	if (values.SETDRAFT_SEARCH_PROXY) safeUrl(values.SETDRAFT_SEARCH_PROXY, "SETDRAFT_SEARCH_PROXY", { proxy: true });
+	for (const key of ["SETDRAFT_SEARCH_DNS_PRIMARY", "SETDRAFT_SEARCH_DNS_SECONDARY"])
+		if (values[key] && !searchDnsAddress(values[key])) throw new Error(`${key} 需要容器可访问的 DNS IP 地址，不能使用回环或未指定地址。`);
 	if (values.SETDRAFT_DOCKER_REGISTRY && !/^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?(?:\/[a-zA-Z0-9._-]+)*$/u.test(values.SETDRAFT_DOCKER_REGISTRY))
 		throw new Error("SETDRAFT_DOCKER_REGISTRY 需要仓库主机及可选路径，不含协议、凭据或末尾斜杠。");
 	if (environment.PORT && environment.PORT !== "4321") throw new Error("托管服务固定使用 PORT=4321；请取消其他 PORT 设置。");

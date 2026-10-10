@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
+import { getServers } from "node:dns";
 import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writePrivateFile } from "./private-file.mjs";
-import { loadDeployment, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
+import { loadDeployment, resolveSearchDns, saveDeployment, takeDeploymentOptions } from "./deployment-config.mjs";
 
 export async function composeConfiguration(root, args, environment = process.env) {
 	const remaining = [...args];
@@ -20,6 +21,13 @@ export async function composeConfiguration(root, args, environment = process.env
 	}
 	if (remaining.length) throw new Error(`未知部署参数：${remaining.join(" ")}`);
 	const config = await loadDeployment(root, environment, overrides);
+	const resolvers = environment.SETDRAFT_BOOTSTRAP_DNS === undefined
+		? await Promise.all(["/etc/resolv.conf", "/run/systemd/resolve/resolv.conf"].map(path => readFile(path, "utf8").catch(error => { if (error.code !== "ENOENT") throw error; return undefined; }))) : [];
+	const servers = environment.SETDRAFT_BOOTSTRAP_DNS === undefined
+		? resolvers.some(source => source !== undefined)
+			? resolvers.flatMap(source => [...(source || "").matchAll(/^\s*nameserver\s+([^\s#]+)/gmu)].map(match => match[1]))
+			: getServers()
+		: environment.SETDRAFT_BOOTSTRAP_DNS.split(/\s+/u);
 	if (config.values.SETDRAFT_AI_CONFIG_PATH) throw new Error("Docker 部署请将旧 AI 配置复制到数据目录的 ai-config.json，并清空 SETDRAFT_AI_CONFIG_PATH；已初始化的团队配置保存在身份库中。");
 	const prefix = config.values.SETDRAFT_DOCKER_REGISTRY ? `${config.values.SETDRAFT_DOCKER_REGISTRY}/library/` : "";
 	const port = config.values.SETDRAFT_PORT || "4321";
@@ -27,6 +35,7 @@ export async function composeConfiguration(root, args, environment = process.env
 	config.values.SETDRAFT_WORKSPACE_ROOT = config.dataRoot;
 	config.values.SETDRAFT_PORT = port;
 	const previous=parseEnv(await readFile(join(root,".env.compose"),"utf8").catch(error => { if (error.code !== "ENOENT") throw error; return ""; }));
+	const searchDns = resolveSearchDns(config.values, servers, previous);
  // Changing storage or database credentials is a migration, not a preserving reinstall.
  if (previous.SETDRAFT_DATA_PATH && previous.SETDRAFT_DATA_PATH !== config.dataRoot)
   throw new Error("已有部署的数据目录不能通过安装或升级切换；请先备份并按恢复流程迁移。");
@@ -38,15 +47,21 @@ export async function composeConfiguration(root, args, environment = process.env
 	const tag = config.values.SETDRAFT_IMAGE_TAG || "latest";
 	const image = (name, local) => config.values.SETDRAFT_IMAGE_MODE === "source" ? `setdraft/${local}:local` : `${namespace}/${name}:${tag}`;
 	const searchRevision = createHash("sha256");
-	for (const name of ["settings.yml", "limiter.toml"]) {
+	for (const name of ["settings.yml", "limiter.toml", "healthcheck.py"]) {
 		const bytes = await readFile(join(root, "deploy/searxng", name)).catch((error) => {
 			if (error.code !== "ENOENT") throw error;
 			return Buffer.from("missing");
 		});
 		searchRevision.update(name).update("\0").update(bytes).update("\0");
 	}
+	const checker = await readFile(join(root, "scripts/check-search.mjs")).catch(error => { if (error.code !== "ENOENT") throw error; return Buffer.from("missing"); });
+	searchRevision.update(checker).update("\0").update(JSON.stringify({
+		primary: searchDns.SETDRAFT_SEARCH_DNS_PRIMARY, secondary: searchDns.SETDRAFT_SEARCH_DNS_SECONDARY,
+		proxy: config.values.SETDRAFT_SEARCH_PROXY,
+	}));
 	const values = {
 		...config.values,
+		...searchDns,
 		SETDRAFT_SEARCH_CONFIG_REVISION: searchRevision.digest("hex"),
 		SETDRAFT_WEB_IMAGE: config.values.SETDRAFT_WEB_IMAGE || image("setdraft", "web"),
 		SETDRAFT_SANDBOX_IMAGE: config.values.SETDRAFT_SANDBOX_IMAGE || image("setdraft-sandbox", "sandbox"),

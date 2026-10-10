@@ -8,7 +8,9 @@ services:
       migrate:
         condition: service_completed_successfully
       search:
-        condition: service_started
+        condition: service_healthy
+      search-check:
+        condition: service_completed_successfully
     init: true
     restart: unless-stopped
     stop_grace_period: 40s
@@ -98,6 +100,9 @@ services:
       org.setdraft.search-config: ${SETDRAFT_SEARCH_CONFIG_REVISION:-legacy}
     image: ${SETDRAFT_SEARCH_IMAGE:-searxng/searxng@sha256:5286edb35782454ab8a102c5eff6b54bff745853191b46aeead95f225aa6dfb6}
     restart: unless-stopped
+    dns:
+      - ${SETDRAFT_SEARCH_DNS_PRIMARY:-223.5.5.5}
+      - ${SETDRAFT_SEARCH_DNS_SECONDARY:-223.6.6.6}
     environment:
       SEARXNG_SECRET: ${SETDRAFT_SEARCH_SECRET:?Run ./install.sh}
       HTTP_PROXY: ${SETDRAFT_SEARCH_PROXY:-}
@@ -109,7 +114,30 @@ services:
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
       - ./deploy/searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+      - ./deploy/searxng/healthcheck.py:/etc/searxng/healthcheck.py:ro
       - search-cache:/var/cache/searxng
+    healthcheck:
+      test: ["CMD", "/usr/local/searxng/.venv/bin/python", "/etc/searxng/healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+  search-check:
+    labels:
+      org.setdraft.search-config: ${SETDRAFT_SEARCH_CONFIG_REVISION:-legacy}
+    image: ${SETDRAFT_WEB_IMAGE:-ghcr.io/albert-li-sz/setdraft:latest}
+    entrypoint: ["node", "/app/scripts/check-search.mjs"]
+    init: true
+    environment:
+      SETDRAFT_SEARCH_URL: http://search:8080
+    volumes:
+      - ./scripts/check-search.mjs:/app/scripts/check-search.mjs:ro
+    depends_on:
+      search:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
   maintenance:
     image: ${SETDRAFT_MAINTENANCE_IMAGE:-ghcr.io/albert-li-sz/setdraft-maintenance:latest}
     profiles: ["maintenance"]

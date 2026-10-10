@@ -15,6 +15,88 @@
 .manual-code-editor .cm-cursor {
 	border-left: 1.5px solid #202020;
 }
+.manual-program-toolbar {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px 20px;
+	padding-bottom: 14px;
+	margin-bottom: 16px;
+	border-bottom: 1px solid var(--line);
+}
+.manual-program-heading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.manual-program-heading h2 {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+}
+.manual-program-count {
+	min-width: 24px;
+	padding: 2px 7px;
+	border-radius: 999px;
+	background: var(--accent-soft);
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 600;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+.manual-program-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.manual-program-actions .button {
+	min-height: 36px;
+}
+.manual-program-actions svg {
+	width: 16px;
+	height: 16px;
+}
+.manual-program-menu {
+	overflow: auto;
+	overscroll-behavior: contain;
+}
+.manual-program-menu button {
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 10px;
+	color: var(--ink);
+}
+.manual-program-menu button > svg {
+	flex: none;
+	width: 17px;
+	height: 17px;
+	color: var(--muted);
+}
+.manual-program-menu-copy {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+.manual-program-menu small.is-filled {
+	color: var(--success);
+}
+.manual-program-menu small.is-required {
+	color: var(--warning);
+}
+.manual-program-menu button.active {
+	background: var(--accent-soft);
+}
+.manual-program-menu button.active > svg {
+	color: var(--accent);
+}
 .chat-code-block {
 	border-radius: 8px;
 	background: #fafafa;

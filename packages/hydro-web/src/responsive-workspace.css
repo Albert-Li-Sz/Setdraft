@@ -366,10 +366,8 @@
 	}
 	#workspace .manual-program-menu button {
 		min-width: 132px;
+		width: auto;
 		flex: none;
-	}
-	#workspace .manual-program-menu-title {
-		display: none;
 	}
 }
 @container (max-width: 850px) {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parseEnv } from "node:util";
 import test from "node:test";
 import { composeConfiguration } from "./compose-config.mjs";
-import { deploymentEnvironment, loadDeployment, redact } from "./deployment-config.mjs";
+import { deploymentEnvironment, loadDeployment, redact, resolveSearchDns } from "./deployment-config.mjs";
 
 test("regeneration replaces broad Compose credential permissions without changing secrets", async () => {
  const root=await mkdtemp(join(tmpdir(),"setdraft-private-config-"));
@@ -70,7 +70,14 @@ test("changes to mounted search settings change the Compose service revision", a
   const settings=await revision();
   assert.notEqual(settings,first);
   await writeFile(join(root,"deploy/searxng/limiter.toml"),"[botdetection.ip_limit]\nfilter_link_local=true\n");
-  assert.notEqual(await revision(),settings);
+  const limiter=await revision();assert.notEqual(limiter,settings);
+  await writeFile(join(root,"deploy/searxng/healthcheck.py"),"print('ready')\n");
+  const health=await revision();assert.notEqual(health,limiter);
+  await mkdir(join(root,"scripts"));
+  await writeFile(join(root,"scripts/check-search.mjs"),"console.log('probe');\n");
+  const checker=await revision();assert.notEqual(checker,health);
+  await composeConfiguration(root,[],{SETDRAFT_SEARCH_DNS_PRIMARY:"10.0.0.53"});
+  assert.notEqual(parseEnv(await readFile(join(root,".env.compose"),"utf8")).SETDRAFT_SEARCH_CONFIG_REVISION,checker);
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -135,6 +142,40 @@ test("search proxy is validated and survives Compose regeneration separately fro
   for (const proxy of ["not-a-url", "file:///tmp/proxy", "http://proxy.example.org/path", "http://proxy.example.org#fragment"])
    await assert.rejects(loadDeployment(root, { SETDRAFT_SEARCH_PROXY: proxy }), /SETDRAFT_SEARCH_PROXY/u);
  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("explicit search DNS survives upgrades and rejects container loopback resolvers", async () => {
+ const root = await mkdtemp(join(tmpdir(), "setdraft-search-dns-"));
+ try {
+  const settings = { SETDRAFT_SEARCH_DNS_PRIMARY: "10.0.0.53", SETDRAFT_SEARCH_DNS_SECONDARY: "2001:db8::53" };
+  await composeConfiguration(root, [], settings);
+  await composeConfiguration(root, ["--keep-data"], {});
+  const environment = parseEnv(await readFile(join(root, ".env.compose"), "utf8"));
+  for (const [key, value] of Object.entries(settings)) assert.equal(environment[key], value);
+  for (const value of ["127.0.0.1", "127.0.0.11", "::1", "0.0.0.0", "::", "dns.example.org", "10.0.0.53:53"])
+   await assert.rejects(loadDeployment(root, { SETDRAFT_SEARCH_DNS_PRIMARY: value }), /SETDRAFT_SEARCH_DNS_PRIMARY/u);
+ } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("empty or loopback-only host DNS produces explicit resolver addresses for every network profile", async () => {
+ assert.deepEqual(resolveSearchDns({SETDRAFT_NETWORK:"cn"},[]), {SETDRAFT_SEARCH_DNS_PRIMARY:"223.5.5.5",SETDRAFT_SEARCH_DNS_SECONDARY:"223.6.6.6"});
+ assert.deepEqual(resolveSearchDns({SETDRAFT_NETWORK:"global"},["127.0.0.53","::1","0:0:0:0:0:0:0:1"]), {SETDRAFT_SEARCH_DNS_PRIMARY:"1.1.1.1",SETDRAFT_SEARCH_DNS_SECONDARY:"1.0.0.1"});
+ assert.deepEqual(resolveSearchDns({SETDRAFT_NETWORK:"cn"},["127.0.0.1","10.0.0.53","10.0.0.53"]), {SETDRAFT_SEARCH_DNS_PRIMARY:"10.0.0.53",SETDRAFT_SEARCH_DNS_SECONDARY:"10.0.0.53"});
+ const root=await mkdtemp(join(tmpdir(),"setdraft-empty-host-dns-"));
+ try {
+  await composeConfiguration(root,[],{SETDRAFT_BOOTSTRAP_DNS:"",SETDRAFT_NETWORK:"global"});
+  await composeConfiguration(root,["--keep-data"],{SETDRAFT_BOOTSTRAP_DNS:""});
+  const saved=parseEnv(await readFile(join(root,".env.compose"),"utf8"));
+  assert.equal(saved.SETDRAFT_SEARCH_DNS_PRIMARY,"1.1.1.1");
+  assert.equal(saved.SETDRAFT_SEARCH_DNS_SECONDARY,"1.0.0.1");
+  await composeConfiguration(root,["--keep-data"],{SETDRAFT_BOOTSTRAP_DNS:"10.0.0.53"});
+  const refreshed=parseEnv(await readFile(join(root,".env.compose"),"utf8"));
+  assert.equal(refreshed.SETDRAFT_SEARCH_DNS_PRIMARY,"10.0.0.53");
+  assert.equal(refreshed.SETDRAFT_SEARCH_DNS_SECONDARY,"10.0.0.53");
+  const source=parseEnv(await readFile(join(root,".env"),"utf8"));
+  assert.equal(source.SETDRAFT_SEARCH_DNS_PRIMARY,"");
+  assert.equal(source.SETDRAFT_SEARCH_DNS_SECONDARY,"");
+ } finally {await rm(root,{recursive:true,force:true});}
 });
 
 test("sandbox scheduling options survive Compose generation and environment loading", async () => {

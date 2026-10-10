@@ -1,5 +1,15 @@
 :root {
 	color-scheme: light;
+	--accent: #315fd1;
+	--accent-soft: #edf2ff;
+	--primary: #315fd1;
+	--primary-hover: #274db0;
+	--on-primary: #ffffff;
+	--success: #22734f;
+	--success-soft: #eaf7ef;
+	--warning: #926014;
+	--warning-soft: #fff4dd;
+	--focus-ring: #6c91eb;
 }
 :root[data-theme="dark"] {
 	color-scheme: dark;
@@ -11,15 +21,55 @@
 	--muted: #b0b0b0;
 	--faint: #a1a1a1;
 	--line: #3a3a3a;
-	--accent: #ededed;
-	--accent-soft: #333333;
-	--success: #dedede;
-	--success-soft: #404040;
+	--accent: #9ebbff;
+	--accent-soft: #25324c;
+	--primary: #8eafff;
+	--primary-hover: #adc5ff;
+	--on-primary: #152342;
+	--success: #83d6ae;
+	--success-soft: #20392d;
 	--danger: #ffb4af;
 	--danger-soft: #573735;
-	--warning: #e1ca92;
+	--warning: #f0c77e;
 	--warning-soft: #383124;
-	--focus-ring: #bcbcbc;
+	--focus-ring: #91b1ff;
+}
+:is(.button.primary, .chat-send, .auth-mark) {
+	background: var(--primary);
+	color: var(--on-primary);
+	border-color: var(--primary);
+}
+:is(.button.primary:hover:not(:disabled), .chat-send:hover:not(:disabled)) {
+	background: var(--primary-hover);
+	color: var(--on-primary);
+	border-color: var(--primary-hover);
+}
+input[type="checkbox"],
+input[type="radio"],
+progress {
+	accent-color: var(--accent);
+}
+.sidebar-nav a.active,
+.sidebar-project.active,
+.sidebar-settings.active,
+.manual-chat-list-item.active,
+.tabs button.active,
+.statement-tabs button[aria-selected="true"],
+.list-filter-buttons button[aria-pressed="true"] {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+.sidebar-project.active > svg {
+	color: var(--accent);
+}
+.sidebar-task-dot {
+	background: var(--accent);
+}
+.info-strip {
+	background: var(--accent-soft);
+}
+.upload-progress-dialog progress {
+	accent-color: var(--accent);
 }
 .shell-toolbar-tools {
 	gap: 12px;
@@ -174,15 +224,11 @@
 }
 :root[data-theme="dark"]
 	:is(
-		.sidebar-nav a.active,
-		.sidebar-project.active,
-		.sidebar-settings.active,
 		.sidebar-new:hover,
 		.sidebar-nav a:hover,
 		.sidebar-project:hover,
 		.sidebar-settings:hover,
 		.manual-chat-list-item:hover,
-		.manual-chat-list-item.active,
 		.home-project-row:hover:not(:disabled),
 		.home-create:hover:not(:disabled),
 		.icon-button:hover:not(:disabled),
@@ -193,18 +239,10 @@
 	background: var(--surface-hover);
 	border-color: var(--line);
 }
-:root[data-theme="dark"] :is(.button.primary, .chat-send, .auth-mark) {
-	background: var(--ink);
-	color: var(--canvas);
-}
-:root[data-theme="dark"] :is(.button.primary:hover:not(:disabled), .chat-send:hover:not(:disabled)) {
-	background: #d3d3d3;
-	color: var(--canvas);
-	border-color: #d3d3d3;
-}
-:root[data-theme="dark"] .chat-send:disabled {
+.chat-send:disabled {
 	background: var(--surface-hover);
 	color: var(--faint);
+	border-color: var(--surface-hover);
 }
 :root[data-theme="dark"]
 	:is(
@@ -260,9 +298,6 @@
 :root[data-theme="dark"] .output-difference mark {
 	background: #665124;
 	color: #ffe9b0;
-}
-:root[data-theme="dark"] .upload-progress-dialog progress {
-	accent-color: var(--accent);
 }
 
 @media (max-width: 540px) {

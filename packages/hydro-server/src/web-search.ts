@@ -66,10 +66,10 @@ function engineFailures(raw: Record<string, unknown>): SearchDiagnostics["engine
 			? "timeout"
 			: reason.includes("captcha") || reason.includes("验证")
 				? "captcha"
-				: /http|403|429|500|502|503/u.test(reason)
-					? "http"
-					: /network|connection|connect/u.test(reason)
-						? "network"
+				: /network|connection|connect/u.test(reason)
+					? "network"
+					: /http|403|429|500|502|503/u.test(reason)
+						? "http"
 						: "other";
 		return [{ name, category }];
 	});

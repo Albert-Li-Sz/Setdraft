@@ -92,7 +92,7 @@ if [ "$COMMAND" = upgrade ]; then
   if [ "$KEEP_DATA" = yes ]; then exec "$ROOT/scripts/setdraft-compose.sh" install "$@"; fi
   exec "$ROOT/scripts/setdraft-compose.sh" install --keep-data "$@"
 fi
-if [ "$COMMAND" = install ]; then
+configure() {
   if command -v node >/dev/null 2>&1 && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
     node scripts/compose-config.mjs "$@"
   else
@@ -103,10 +103,17 @@ if [ "$COMMAND" = install ]; then
       [ "$arg" != --docker-registry ] || NEXT_REGISTRY=yes
     done
     echo "使用 $BOOTSTRAP_IMAGE 生成配置；无需在宿主机安装 Node.js。"
+    SETDRAFT_DNS_FILE=/etc/resolv.conf
+    [ ! -r /run/systemd/resolve/resolv.conf ] || SETDRAFT_DNS_FILE=/run/systemd/resolve/resolv.conf
+    SETDRAFT_BOOTSTRAP_DNS=
+    if [ -r "$SETDRAFT_DNS_FILE" ]; then
+      SETDRAFT_BOOTSTRAP_DNS=$(sed -n 's/^[[:space:]]*nameserver[[:space:]][[:space:]]*\([^[:space:]#]*\).*/\1/p' "$SETDRAFT_DNS_FILE" | tr '\n' ' ')
+    fi
     docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" \
       -e SETDRAFT_WORKSPACE_ROOT -e SETDRAFT_PORT -e SETDRAFT_HOST -e SETDRAFT_PUBLIC_ORIGIN \
       -e SETDRAFT_NETWORK -e SETDRAFT_NPM_REGISTRY -e SETDRAFT_DOCKER_REGISTRY -e SETDRAFT_DEBIAN_MIRROR \
       -e SETDRAFT_DOWNLOAD_PROXY -e SETDRAFT_SEARCH_PROXY -e SETDRAFT_NODE_IMAGE -e SETDRAFT_DOCKER_CLI_IMAGE \
+      -e SETDRAFT_SEARCH_DNS_PRIMARY -e SETDRAFT_SEARCH_DNS_SECONDARY \
       -e SETDRAFT_IMAGE_MODE -e SETDRAFT_IMAGE_NAMESPACE -e SETDRAFT_IMAGE_TAG \
       -e SETDRAFT_WEB_IMAGE -e SETDRAFT_SANDBOX_IMAGE -e SETDRAFT_MAINTENANCE_IMAGE \
       -e SETDRAFT_TESTCASES_MAX -e SETDRAFT_TOTAL_TIME_LIMIT_MS -e SETDRAFT_CASE_MAX_BYTES -e SETDRAFT_PROJECT_MAX_BYTES \
@@ -121,8 +128,23 @@ if [ "$COMMAND" = install ]; then
       -e OTEL_EXPORTER_OTLP_TRACES_ENDPOINT -e OTEL_EXPORTER_OTLP_TRACES_HEADERS -e OTEL_EXPORTER_OTLP_TRACES_PROTOCOL \
       -e OTEL_EXPORTER_OTLP_METRICS_ENDPOINT -e OTEL_EXPORTER_OTLP_METRICS_HEADERS -e OTEL_EXPORTER_OTLP_METRICS_PROTOCOL \
       -e SETDRAFT_POSTGRES_IMAGE -e SETDRAFT_SEARCH_IMAGE -e SETDRAFT_DB_ADMIN_PASSWORD -e SETDRAFT_DB_APP_PASSWORD -e SETDRAFT_SEARCH_SECRET \
+      -e "SETDRAFT_BOOTSTRAP_DNS=$SETDRAFT_BOOTSTRAP_DNS" \
       "$BOOTSTRAP_IMAGE" node scripts/compose-config.mjs "$@"
   fi
+}
+check_search() {
+  compose up -d --no-deps --no-build --pull never --wait --wait-timeout 120 search
+  compose rm -f search-check
+  compose up --no-deps --no-build --pull never --abort-on-container-exit --exit-code-from search-check search-check
+}
+start_web() {
+  compose up -d --no-deps --no-build --pull never --wait --wait-timeout 120 database
+  compose up --no-deps --no-build --pull never --abort-on-container-exit --exit-code-from migrate migrate
+  # Dependencies are already checked. Compose would otherwise replay search-check after stopping web.
+  compose up -d --no-deps --no-build --pull never --wait --wait-timeout 120 web
+}
+if [ "$COMMAND" = install ]; then
+  configure "$@"
   # Prepare every image before stopping the current service. A failed pull leaves it running.
   if grep -q "^SETDRAFT_IMAGE_MODE='source'$" "$ROOT/.env.compose"; then
     compose build web sandbox maintenance
@@ -130,19 +152,24 @@ if [ "$COMMAND" = install ]; then
   else
     compose pull web sandbox maintenance database search
   fi
+  check_search
   if [ "$KEEP_DATA" = yes ]; then
     compose stop web
   else
     echo '全新安装：清空 Setdraft 数据库和用户文件，保留部署配置。'
     reset_data
   fi
-  compose up -d --no-build --pull never --wait --wait-timeout 120 web
+  start_web
   compose logs --tail 15 web
   exit 0
 fi
 [ -f "$ROOT/.env.compose" ] || { echo '请先运行 ./install.sh 生成 Compose 配置。' >&2; exit 1; }
 case "$COMMAND" in
-  start) [ "$#" -eq 0 ]; compose up -d --no-build --pull never --wait --wait-timeout 120 web;;
+  start)
+    [ "$#" -eq 0 ]
+    configure
+    check_search
+    start_web;;
   stop) [ "$#" -eq 0 ]; compose stop web;;
   status) [ "$#" -eq 0 ]; compose ps;;
   logs) compose logs --tail 100 "$@" web;;
