@@ -4,6 +4,7 @@ import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { type PluggableList, unified } from "unified";
+import { remarkLatexMath } from "./remark-latex-math.ts";
 
 export type MarkdownProfile = "statement" | "chat" | "guide";
 export interface MarkdownDiagnostic {
@@ -24,7 +25,7 @@ export class MarkdownProcessingError extends Error {
 		this.diagnostic = diagnostic;
 	}
 }
-const richPlugins: PluggableList = [remarkGfm, remarkMath];
+const richPlugins: PluggableList = [remarkGfm, remarkMath, remarkLatexMath];
 const guidePlugins: PluggableList = [remarkGfm];
 export function markdownRemarkPlugins(profile: MarkdownProfile): PluggableList {
 	return profile === "guide" ? guidePlugins : richPlugins;

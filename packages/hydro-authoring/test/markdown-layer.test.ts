@@ -5,7 +5,9 @@ import {
 	markdownAttachmentName,
 	markdownReferences,
 	parseMarkdown,
+	serializeMarkdown,
 	splitMarkdownSections,
+	walkMarkdown,
 } from "../src/markdown.ts";
 import { validateMarkdownAttachments } from "../src/validation.ts";
 
@@ -56,4 +58,74 @@ it("uses AST text for Setext and formatted top-level guide headings", () => {
 		"First chapter",
 		"Second code",
 	]);
+});
+
+it.each(["statement", "chat"] as const)("parses LaTeX delimiters with source positions in %s", (profile) => {
+	const source = String.raw`行内 \(p\nmid a\)。
+
+\[
+\sum_{k=1}^{p-1} k
+=
+\frac{p(p-1)}{2}
+\]
+
+![图](file://figure.svg)`;
+	const tree = parseMarkdown(source, profile);
+	const formulas: Array<{ type: string; value: string; source: string }> = [];
+	walkMarkdown(tree, (node) => {
+		if (node.type === "inlineMath" || node.type === "math")
+			formulas.push({
+				type: node.type,
+				value: node.value,
+				source: source.slice(node.position?.start.offset, node.position?.end.offset),
+			});
+	});
+	expect(formulas).toEqual([
+		{ type: "inlineMath", value: String.raw`p\nmid a`, source: String.raw`\(p\nmid a\)` },
+		{
+			type: "math",
+			value: "\\sum_{k=1}^{p-1} k\n=\n\\frac{p(p-1)}{2}",
+			source: "\\[\n\\sum_{k=1}^{p-1} k\n=\n\\frac{p(p-1)}{2}\n\\]",
+		},
+	]);
+	const reference = markdownReferences(source)[0];
+	expect(source.slice(reference.node.position?.start.offset, reference.node.position?.end.offset)).toBe(
+		"![图](file://figure.svg)",
+	);
+	expect(serializeMarkdown(tree)).toContain("$p\\nmid a$");
+	expect(serializeMarkdown(tree)).toContain("$$\n\\sum_{k=1}^{p-1} k\n=\n\\frac{p(p-1)}{2}\n$$");
+});
+
+it("keeps escaped, code and guide delimiters literal and leaves dollar math intact", () => {
+	const source = String.raw`\\(literal\\) \`\(code\)\` $x+1$
+
+~~~tex
+\[not math\]
+~~~
+
+$$
+\frac{1}{2}
+$$`.replaceAll("\\`", "`");
+	const math: string[] = [];
+	walkMarkdown(parseMarkdown(source), (node) => {
+		if (node.type === "math" || node.type === "inlineMath") math.push(node.value);
+	});
+	expect(math).toEqual(["x+1", String.raw`\frac{1}{2}`]);
+	expect(parseMarkdown(String.raw`\(x\)`, "guide").children[0]).toMatchObject({
+		children: [{ type: "text", value: "(x)" }],
+	});
+});
+
+it("retains ordinary Markdown escapes and entities in image alt text", () => {
+	const source = String.raw`![a\[b\_c&copy;\]\\d](file://figure.svg) \(p\)`;
+	const reference = markdownReferences(source)[0];
+	expect(reference.node).toMatchObject({ type: "image", alt: "a[b_c©]\\d" });
+	const tree = parseMarkdown(source);
+	expect(tree.children[0]).toMatchObject({
+		children: [
+			{ type: "image", alt: "a[b_c©]\\d" },
+			{ type: "text", value: " " },
+			{ type: "inlineMath", value: "p" },
+		],
+	});
 });
