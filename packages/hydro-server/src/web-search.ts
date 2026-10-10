@@ -293,8 +293,9 @@ export class WebSearch {
 			throw new SearchFailure("联网搜索尚未配置；本次回复未使用网络资料。", diagnostics("configuration"), 503);
 		const normalized = plain(query, 500);
 		if (!normalized) throw new ChatError("请输入搜索关键词。", 422);
+		const cacheProvider = configuration.provider === "searxng" ? "searxng-arxiv-v1" : configuration.provider;
 		const key = createHash("sha256")
-			.update(`${configuration.provider}:${options.engine ?? ""}:${options.language ?? ""}:${normalized}`)
+			.update(`${cacheProvider}:${options.engine ?? ""}:${options.language ?? ""}:${normalized}`)
 			.digest("hex");
 		const cached = await database.get<Cache>("search-cache", key);
 		if (cached && cached.expiresAt > Date.now() && !options.bypassCache) {
@@ -361,7 +362,8 @@ export class WebSearch {
 				throw new SearchFailure("搜索服务返回格式无效；本次回复未使用网络资料。", diagnostics("invalid-response"));
 			const candidates = raw.results;
 			const failures = engineFailures(raw as Record<string, unknown>);
-			const results: SearchResult[] = [];
+			const normalizedResults: SearchResult[] = [];
+			let arxivPaper: SearchResult | undefined;
 			const seen = new Set<string>();
 			for (const candidate of candidates) {
 				if (!candidate || typeof candidate !== "object") continue;
@@ -379,9 +381,19 @@ export class WebSearch {
 					snippet = plain(item.content ?? item.snippet, 1200);
 				if (!title || !snippet) continue;
 				seen.add(link.href);
-				results.push({ id: results.length + 1, title, url: link.href, snippet });
-				if (results.length === 5) break;
+				const source = { id: normalizedResults.length + 1, title, url: link.href, snippet };
+				normalizedResults.push(source);
+				if (
+					configuration.provider === "searxng" &&
+					link.hostname === "arxiv.org" &&
+					link.pathname.startsWith("/abs/")
+				)
+					arxivPaper ??= source;
+				if (normalizedResults.length >= 5 && (configuration.provider !== "searxng" || arxivPaper)) break;
 			}
+			const results = normalizedResults.slice(0, 5);
+			// SearXNG may rank paper results after all general web pages.
+			if (arxivPaper && !results.includes(arxivPaper)) results[4] = { ...arxivPaper, id: 5 };
 			if (!results.length) {
 				if (candidates.length)
 					throw new SearchFailure(

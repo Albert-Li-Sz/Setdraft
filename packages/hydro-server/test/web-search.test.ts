@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -133,6 +133,63 @@ it("accepts arXiv paper abstracts in the default search when general web engines
 		},
 	]);
 	expect(snapshot.diagnostics).toMatchObject({ status: "partial", candidateCount: 1, acceptedCount: 1 });
+});
+it("retains an arXiv paper when scientific results are ranked behind general web pages", async () => {
+	const identity = new IdentityStore(root);
+	const pages = Array.from({ length: 5 }, (_, index) => ({
+		title: `Web page ${index + 1}`,
+		url: `https://example.com/${index + 1}`,
+		content: "General web reference",
+		engine: "bing",
+	}));
+	const search = new WebSearch(identity, async () =>
+		Response.json({
+			results: [
+				...pages,
+				{ engine: "arxiv", title: "Invalid paper", url: "javascript:blocked", content: "Invalid source" },
+				{
+					engine: "arxiv",
+					title: "Shortest paths in graphs",
+					url: "http://arxiv.org/abs/2501.00001",
+					content: "A paper abstract",
+				},
+			],
+		}),
+	);
+	const snapshot = await search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "graph shortest path");
+	expect(snapshot.results).toEqual([
+		...pages.slice(0, 4).map(({ title, url, content }, index) => ({ id: index + 1, title, url, snippet: content })),
+		{ id: 5, title: "Shortest paths in graphs", url: "http://arxiv.org/abs/2501.00001", snippet: "A paper abstract" },
+	]);
+	expect(snapshot.diagnostics).toMatchObject({ status: "healthy", candidateCount: 7, acceptedCount: 5 });
+});
+it("refreshes pre-arXiv query caches after upgrade while reusing new query caches", async () => {
+	const identity = new IdentityStore(root),
+		database = new WorkspaceDatabase(root),
+		user = randomUUID();
+	const query = "graph shortest path";
+	const oldKey = createHash("sha256").update(`searxng:::${query}`).digest("hex");
+	await database.put("search-cache", oldKey, {
+		expiresAt: Date.now() + 900000,
+		snapshot: {
+			query,
+			provider: "searxng",
+			searchedAt: new Date().toISOString(),
+			results: [{ id: 1, title: "Old cached page", url: "https://example.com/old", snippet: "Old reference" }],
+		},
+	});
+	let calls = 0;
+	const search = new WebSearch(identity, async () => {
+		calls += 1;
+		return Response.json({
+			results: [{ title: "Paper", url: "https://arxiv.org/abs/2501.00001", content: "Paper abstract" }],
+		});
+	});
+	const fresh = await search.search(database, user, randomUUID(), query);
+	expect(fresh.results[0].url).toBe("https://arxiv.org/abs/2501.00001");
+	expect(fresh.cached).not.toBe(true);
+	expect(await search.search(database, user, randomUUID(), query)).toEqual({ ...fresh, cached: true });
+	expect(calls).toBe(1);
 });
 it.each([
 	["HTTP connection error", "network"],

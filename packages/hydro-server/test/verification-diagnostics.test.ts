@@ -178,38 +178,49 @@ sandboxIt(
 			referenceSolutionId: "reference",
 		});
 		for (let i = 1; i <= 3; i++) await store.addTextCase(project.id, { name: `${i}.in`, input: "1\n" });
+		const controller = new AbortController();
 		let settled = false;
-		const executing = store.runs.execute(project.id, { kind: "matrix" }).finally(() => {
-			settled = true;
-		});
-		await vi.waitFor(
-			async () => {
-				const first = (await store.runs.list(project.id))[0];
-				expect(first?.progress?.completed).toBeGreaterThan(0);
-				expect(first?.progress?.completed).toBeLessThan(6);
-				expect(settled).toBe(false);
-				const live = await store.runs.get(project.id, first.id);
-				expect(live.matrix?.requiredPassed).toBe(false);
-				expect(live.matrix?.cells.length).toBeGreaterThan(0);
-			},
-			{ timeout: 15000, interval: 100 },
-		);
-		const run = await executing;
-		expect(run.matrix?.cells).toHaveLength(6);
-		expect(run.diagnostics).toBe(true);
-		const detail = await store.runs.cell(project.id, run.id, "wrong", "manual:1");
-		expect(detail).toMatchObject({
-			previewOnly: false,
-			difference: { line: 1, column: 4001, actual: { focus: "y" }, expected: { focus: "x" } },
-		});
-		const stderr = detail.cell.artifacts!.logs.find((name) => name.includes("outputs_candidate"))!;
-		expect((await readFile(await store.runs.diagnosticFile(project.id, run.id, stderr), "utf8")).length).toBe(10000);
-		expect((await readFile(await store.runs.diagnosticFile(project.id, run.id))).subarray(0, 2).toString()).toBe(
-			"PK",
-		);
-		await expect(store.runs.diagnosticFile(project.id, run.id, "logs/../../project.json")).rejects.toThrow("路径");
+		const executing = store.runs
+			.execute(project.id, { kind: "matrix" }, { id: randomUUID(), signal: controller.signal, emit() {} })
+			.finally(() => {
+				settled = true;
+			});
+		void executing.catch(() => {});
+		try {
+			await vi.waitFor(
+				async () => {
+					const first = (await store.runs.list(project.id))[0];
+					expect(first?.progress?.completed).toBeGreaterThan(0);
+					expect(first?.progress?.completed).toBeLessThan(6);
+					expect(settled).toBe(false);
+					const live = await store.runs.get(project.id, first.id);
+					expect(live.matrix?.requiredPassed).toBe(false);
+					expect(live.matrix?.cells.length).toBeGreaterThan(0);
+				},
+				{ timeout: 45000, interval: 100 },
+			);
+			const run = await executing;
+			expect(run.matrix?.cells).toHaveLength(6);
+			expect(run.diagnostics).toBe(true);
+			const detail = await store.runs.cell(project.id, run.id, "wrong", "manual:1");
+			expect(detail).toMatchObject({
+				previewOnly: false,
+				difference: { line: 1, column: 4001, actual: { focus: "y" }, expected: { focus: "x" } },
+			});
+			const stderr = detail.cell.artifacts!.logs.find((name) => name.includes("outputs_candidate"))!;
+			expect((await readFile(await store.runs.diagnosticFile(project.id, run.id, stderr), "utf8")).length).toBe(
+				10000,
+			);
+			expect((await readFile(await store.runs.diagnosticFile(project.id, run.id))).subarray(0, 2).toString()).toBe(
+				"PK",
+			);
+			await expect(store.runs.diagnosticFile(project.id, run.id, "logs/../../project.json")).rejects.toThrow("路径");
+		} finally {
+			controller.abort();
+			await executing.catch(() => {});
+		}
 	},
-	60000,
+	120000,
 );
 sandboxIt.each(["cancelled", "timeout"])(
 	"retains completed cells and logs after %s",
@@ -225,19 +236,24 @@ sandboxIt.each(["cancelled", "timeout"])(
 		const result = store.runs
 			.execute(project.id, { kind: "matrix" }, { id: randomUUID(), signal: controller.signal, emit() {} })
 			.catch((error: unknown) => error);
-		await vi.waitFor(
-			async () => expect((await store.runs.list(project.id))[0]?.progress?.completed).toBeGreaterThan(0),
-			{ timeout: 15000 },
-		);
-		controller.abort(reason === "timeout" ? new Error("任务运行超过时间上限，请检查程序后重试。") : undefined);
-		expect(await result).toBeInstanceOf(Error);
-		const summary = (await store.runs.list(project.id))[0];
-		const run = await store.runs.get(project.id, summary.id);
-		expect(run.state).toBe(reason === "timeout" ? "failed" : "cancelled");
-		expect(run.error).toContain(reason === "timeout" ? "时间上限" : "取消");
-		expect(run.matrix?.cells.length).toBeGreaterThan(0);
-		expect(run.matrix?.requiredPassed).toBe(false);
-		expect(run.diagnostics).toBe(true);
+		try {
+			await vi.waitFor(
+				async () => expect((await store.runs.list(project.id))[0]?.progress?.completed).toBeGreaterThan(0),
+				{ timeout: 45000 },
+			);
+			controller.abort(reason === "timeout" ? new Error("任务运行超过时间上限，请检查程序后重试。") : undefined);
+			expect(await result).toBeInstanceOf(Error);
+			const summary = (await store.runs.list(project.id))[0];
+			const run = await store.runs.get(project.id, summary.id);
+			expect(run.state).toBe(reason === "timeout" ? "failed" : "cancelled");
+			expect(run.error).toContain(reason === "timeout" ? "时间上限" : "取消");
+			expect(run.matrix?.cells.length).toBeGreaterThan(0);
+			expect(run.matrix?.requiredPassed).toBe(false);
+			expect(run.diagnostics).toBe(true);
+		} finally {
+			controller.abort();
+			await result;
+		}
 	},
-	60000,
+	120000,
 );

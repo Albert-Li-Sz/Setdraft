@@ -44,7 +44,7 @@
 	"engines": {
 		"node": ">=22.19.0"
 	},
-	"version": "1.8.0",
+	"version": "1.8.1",
 	"overrides": {
 		"protobufjs": "7.6.6"
 	}
