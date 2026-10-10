@@ -206,8 +206,16 @@ async function startService(name) {
 	});
 	const target = pidPath(name);
 	const temporary = `${target}.${process.pid}.tmp`;
-	const identity = processIdentity(child.pid);
-	if (!identity) { child.kill("SIGTERM"); throw new Error("无法确认服务进程身份，请检查系统进程查询工具。"); }
+	let identity = processIdentity(child.pid);
+	// Linux procfs can briefly expose an empty command line immediately after spawn.
+	for (let attempt = 0; !identity && attempt < 40 && child.exitCode === null && child.signalCode === null; attempt++) {
+		await new Promise((resolveIdentity) => setTimeout(resolveIdentity, 25));
+		identity = processIdentity(child.pid);
+	}
+	if (!identity) {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+		throw new Error("无法确认服务进程身份，请检查系统进程查询工具。");
+	}
 	child.unref();
 	await writeFile(temporary, JSON.stringify({ pid: child.pid, identity, startedAt: new Date().toISOString() }));
 	await rename(temporary, target);

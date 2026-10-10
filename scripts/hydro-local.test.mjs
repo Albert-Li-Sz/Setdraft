@@ -389,10 +389,35 @@ test("install, restart, upgrade and uninstall preserve .env and apply mirror set
 	for (const key of Object.keys(env)) if (key.startsWith("HYDRO_") || key.startsWith("SETDRAFT_") || key === "PORT") delete env[key];
 	env.SETDRAFT_DATABASE_URL="postgresql://test:test@localhost:5432/test";
 	env.SETDRAFT_DATABASE_ADMIN_URL=env.SETDRAFT_DATABASE_URL;
+	if (process.platform === "linux") {
+		const preload = join(fixture, "process-metadata.mjs");
+		writeFileSync(preload, `import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+const read=fs.readFileSync, attempts=new Map();
+fs.readFileSync=function(path,...options){
+ const value=read.call(this,path,...options);
+ const match=typeof path==='string' && /^\\/proc\\/(\\d+)\\/cmdline$/.exec(path);
+ if(match && String(value).replaceAll('\\0',' ').includes('hydro-local.mjs service')){
+  const stat=read('/proc/'+match[1]+'/stat','utf8');
+  const fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\\s+/);
+  if(fields[1]===String(process.pid)){
+   const count=attempts.get(match[1])??0;attempts.set(match[1],count+1);
+   if(count<2){
+    fs.appendFileSync(new URL('./process-metadata-delays.txt',import.meta.url),'delay\\n');
+    return typeof value==='string'?'':Buffer.alloc(0);
+   }
+  }
+ }
+ return value;
+};
+syncBuiltinESMExports();`);
+		env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import ${JSON.stringify(preload)}`.trim();
+	}
  const invoke = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: fixture, encoding: "utf8", env, timeout: 65_000 });
 	try {
 		const installed = invoke("install", "--keep-data", "--network", "cn", "--docker-registry", "mirror.example.com");
 		assert.equal(installed.status, 0, installed.stderr);
+		if (process.platform === "linux") assert.match(readFileSync(join(fixture, "process-metadata-delays.txt"), "utf8"), /delay\ndelay\n/u);
 		assert.match(installed.stderr, /回退到 npm 官方源/);
 		const logged = readFileSync(join(fixture, "commands.log"), "utf8");
 		assertDependencyBuildOrder(logged);

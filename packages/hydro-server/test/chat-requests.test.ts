@@ -470,6 +470,8 @@ describe("persisted chat requests", () => {
 			await queue.submit(conversation.id, id, "hello");
 			await waitFor(queue, conversation.id, id, "failed");
 			expect((await queue.get(id, conversation.id)).error).toContain("排队超过");
+			// Isolate the runtime deadline from database admission delays on a loaded runner.
+			policy.queueTimeoutMs = 10_000;
 			unblock();
 			await queue.retry(conversation.id, id);
 			await waitFor(queue, conversation.id, id, "failed");
