@@ -56,8 +56,11 @@ export function preparePdfMarkdownParts(parts: string[], images: ReadonlyMap<str
 					labelStart === undefined || labelEnd === undefined ? "" : document.slice(labelStart, labelEnd);
 				const destination = (attachment ? `file://${attachment}` : url)
 					.replaceAll("&", "&amp;")
+					.replaceAll("\\", "\\\\")
 					.replace(/[<>\r\n]/gu, encodeURIComponent);
-				const suffix = title ? ` "${title.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"` : "";
+				const suffix = title
+					? ` "${title.replaceAll("&", "&amp;").replaceAll("\\", "\\\\").replaceAll('"', "&quot;")}"`
+					: "";
 				text = `[${label}](<${destination}>${suffix})`;
 			}
 			edits.push({ start, end, text });

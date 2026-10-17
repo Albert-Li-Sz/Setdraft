@@ -24,8 +24,8 @@ export * from "./problem-types.ts";
 export * from "./verification.ts";
 
 export type CheckerMode = "text" | "custom";
-export const verificationContractVersion = 7;
-export const exportContractVersion = 5;
+export const verificationContractVersion = 8;
+export const exportContractVersion = 6;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
@@ -298,7 +298,7 @@ export interface SearchDiagnostics {
 	engines: Array<{ name: string; category: "timeout" | "captcha" | "http" | "network" | "other" }>;
 }
 export interface SearchDiagnosticReport {
-	provider: "searxng" | "tavily";
+	provider: "searxng" | "tavily" | "deepseek";
 	language: "zh" | "en";
 	aggregate: SearchDiagnostics;
 	engines: Array<{ name: string; diagnostics: SearchDiagnostics }>;
@@ -307,7 +307,7 @@ export interface SearchSnapshot {
 	cached?: boolean;
 	query: string;
 	queries?: string[];
-	provider: "searxng" | "tavily";
+	provider: "searxng" | "tavily" | "deepseek";
 	searchedAt: string;
 	results: SearchResult[];
 	diagnostics?: SearchDiagnostics;

@@ -11,7 +11,7 @@ import {
 } from "@setdraft/contracts";
 import { awkCheckerProtocol } from "./checker-protocol.ts";
 import { communicationAdapter, communicationInitialInput } from "./communication-adapter.ts";
-import { exportFileName } from "./export-contract.ts";
+import { exportFileName, readExportManifest, yamlString } from "./export-contract.ts";
 import { runInteractiveSandbox } from "./interactive-sandbox.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
 import type { CppLanguage } from "./manual-sandbox.ts";
@@ -21,10 +21,6 @@ import {
 	SandboxCleanupError,
 	sandboxRuntimeArgs,
 } from "./sandbox-runtime.ts";
-
-interface SourceManifest {
-	cases: Array<{ inputFile: string; outputFile: string }>;
-}
 
 const standardNames: Record<CppLanguage, string> = {
 	cpp11: "c++11",
@@ -231,7 +227,7 @@ export async function writeDomjudgeProblemArchive(
 	const interactiveScript = communication
 		? interactiveRunScript.replace('"$1" "$3/transcript" "$2"', '"$1" "$2" "$3"')
 		: interactiveRunScript;
-	const manifest = JSON.parse(await readFile(join(releaseRoot, "source", "manifest.json"), "utf8")) as SourceManifest;
+	const manifest = await readExportManifest(releaseRoot);
 	const problemId = domjudgeProblemId(release.id);
 	const stage = await mkdtemp(join(releaseRoot, ".domjudge-"));
 	const files = new Map<string, string>();
@@ -252,7 +248,7 @@ export async function writeDomjudgeProblemArchive(
 			[
 				"problem_format_version: legacy-icpc",
 				...(communication ? ["type: pass-fail interactive multi-pass"] : []),
-				`name: ${JSON.stringify(release.title)}`,
+				`name: ${yamlString(release.title)}`,
 				interactive ? "validation: custom interactive" : "validation: custom",
 				"limits:",
 				`  memory: ${Math.ceil(memory)}`,

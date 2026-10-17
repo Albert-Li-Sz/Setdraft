@@ -307,20 +307,48 @@ export function ManualWorkspace(props: Props) {
 		const location = readWorkspaceLocation(locationHash);
 		if (location.project !== project.id) return;
 		applyInsightLocation(location);
+		const targetId = location.field
+			? `workspace-${location.field}`
+			: location.program
+				? `program-section-${location.program}`
+				: location.section === "quality"
+					? "data-quality"
+					: `authoring-tab-${location.tab ?? "statement"}`;
+		const targetDialog = document.getElementById(targetId)?.closest("dialog");
+		let awaitingDialogFocus = targetDialog?.open === false;
+		let cancelled = false;
+		const interaction = new AbortController();
+		const cancel = () => {
+			cancelled = true;
+		};
+		const focusChanged = (event: FocusEvent) => {
+			// showModal() focuses its first control before the requested field is restored.
+			if (
+				awaitingDialogFocus &&
+				targetDialog?.open &&
+				event.target instanceof Node &&
+				targetDialog.contains(event.target)
+			) {
+				awaitingDialogFocus = false;
+				return;
+			}
+			cancel();
+		};
+		// Deferred focus restoration must not steal focus from a user already interacting.
+		document.addEventListener("pointerdown", cancel, { capture: true, signal: interaction.signal });
+		document.addEventListener("keydown", cancel, { capture: true, signal: interaction.signal });
+		document.addEventListener("focusin", focusChanged, { capture: true, signal: interaction.signal });
 		const frame = requestAnimationFrame(() => {
-			const target = document.getElementById(
-				location.field
-					? `workspace-${location.field}`
-					: location.program
-						? `program-section-${location.program}`
-						: location.section === "quality"
-							? "data-quality"
-							: `authoring-tab-${location.tab ?? "statement"}`,
-			);
+			interaction.abort();
+			if (cancelled) return;
+			const target = document.getElementById(targetId);
 			target?.scrollIntoView({ block: "nearest" });
 			target?.focus({ preventScroll: true });
 		});
-		return () => cancelAnimationFrame(frame);
+		return () => {
+			cancelAnimationFrame(frame);
+			interaction.abort();
+		};
 	}, [locationHash, project.id]);
 	useEffect(() => {
 		const layout = layoutRef.current;

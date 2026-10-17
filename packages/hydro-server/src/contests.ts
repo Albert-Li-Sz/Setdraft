@@ -15,6 +15,7 @@ import { readContestPdfOptions } from "./contest-pdf-options.ts";
 import { assertReleasesUnreferenced } from "./contest-references.ts";
 import { domjudgeProblemId } from "./domjudge-export.ts";
 import type { ExecutionContext } from "./execution-context.ts";
+import { yamlString } from "./export-contract.ts";
 import { ManualProjectError, type ManualProjectStore, type ManualRelease } from "./manual-projects.ts";
 import { hashFile } from "./project-files.ts";
 import { releaseName } from "./releases.ts";
@@ -376,7 +377,7 @@ export class ContestStore {
 					);
 					files.set(`problems/${label}.zip`, archive.path);
 					metadata.push(
-						`- id: ${domjudgeProblemId(release.id)}\n  label: ${label}\n  name: ${JSON.stringify(release.title)}\n  color: ${JSON.stringify(colorName)}\n  rgb: '${color}'`,
+						`- id: ${domjudgeProblemId(release.id)}\n  label: ${label}\n  name: ${yamlString(release.title)}\n  color: ${yamlString(colorName ?? balloon.name)}\n  rgb: '${color}'`,
 					);
 				} else {
 					const archive = await this.projects.releases.releaseFile(release.id, "hydro");

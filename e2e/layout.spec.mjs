@@ -28,7 +28,9 @@ async function frame(page, testInfo, key) {
 	if (key.includes("1920-1-zh-open")) {
 		const separator = page.locator(".editor-resizer");
 		await expect(separator).toHaveAttribute("aria-valuenow", "50");
+		await expect(separator).toBeVisible();
 		await separator.focus();
+		await expect(separator).toBeFocused();
 		await page.keyboard.press("ArrowRight");
 		await expect(separator).toHaveAttribute("aria-valuenow", "52");
 		const divider = await separator.boundingBox(), grid = await page.locator(".statement-split .editor-grid").boundingBox();
@@ -42,6 +44,41 @@ async function frame(page, testInfo, key) {
 		await page.screenshot({ path: testInfo.outputPath("workspace-1920.png") });
 	}
 }
+
+test("deferred workspace navigation preserves focus moved to the editor resizer", async ({ page, app }) => {
+	await page.clock.install();
+	await setup(page, app);
+	const project = await newProject(page);
+	await page.locator("#authoring-tab-generator").click();
+	await expect(page.locator("#authoring-tab-generator")).toBeFocused();
+	await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+	// Navigation still restores focus when no other control has received it.
+	await page.locator("#authoring-tab-statement").dispatchEvent("click");
+	await expect(page.locator(".editor-resizer")).toBeVisible();
+	await page.clock.runFor(32);
+	await expect(page.locator("#authoring-tab-statement")).toBeFocused();
+	await page.locator("#authoring-tab-generator").dispatchEvent("click");
+	await expect(page.locator("#authoring-panel-generator")).toBeVisible();
+	await page.clock.runFor(32);
+	await expect(page.locator("#authoring-tab-generator")).toBeFocused();
+	// Hold the navigation frame until the newly rendered editor has received focus.
+	await page.locator("#authoring-tab-statement").dispatchEvent("click");
+	const separator = page.locator(".editor-resizer");
+	await expect(separator).toBeVisible();
+	await separator.focus();
+	await expect(separator).toBeFocused();
+	await page.clock.runFor(32);
+	await expect(separator).toBeFocused();
+	await page.keyboard.press("ArrowRight");
+	await expect(separator).toHaveAttribute("aria-valuenow", "52");
+	await expect(page.locator("#authoring-tab-statement")).toHaveAttribute("aria-selected", "true");
+	await page.clock.resume();
+	// Opening the mobile settings dialog must still focus the requested field.
+	await page.setViewportSize({ width: 768, height: 800 });
+	await expect(page.locator(".manual-layout")).toHaveAttribute("data-compact", "true");
+	await page.goto(`${app.url}/#workspace?project=${project.id}&tab=statement&field=timeLimit`);
+	await expect(page.locator("#workspace-timeLimit")).toBeFocused();
+});
 
 for (const full of [false, true]) test(full ? "responsive matrix 320–3840, DPR 1/2, Chinese/English, navigation open/closed @layout-full" : "responsive workspace, contests and chat at mobile and desktop sizes", async ({ page, browser, app }, testInfo) => {
 	test.setTimeout(full ? 360_000 : 180_000);

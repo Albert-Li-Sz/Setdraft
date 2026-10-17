@@ -88,7 +88,7 @@ Projects store generators as `{ id, name, language, code, remark }`, with stable
 
 Restoration checks the manifest and source hashes before replacing the editable document and all test/PDF file references in one transaction. It keeps the problem ID and creation date, increments the revision, and clears the current verification report. The release source tree must be present in backups. Copies use a fresh ID and timestamps, retain current code, attachments and both manual/generated tests, and omit releases, reports and tasks. Both operations reject stale revisions and recheck account access at commit.
 
-Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. Limits can be adjusted with `SETDRAFT_CASE_MAX_BYTES`, `SETDRAFT_PROJECT_MAX_BYTES`, `SETDRAFT_TESTCASES_MAX` and `SETDRAFT_TOTAL_TIME_LIMIT_MS`.
+Administrator-only `POST /api/sandbox/build` queues a Docker image build. The sandbox uses GCC 16.2, testlib, Python 3 and Java 21. C++11/14/17/20/23 are supported; C++26 is experimental. The default text checker and custom testlib checker both run before a package can be published. The runner keeps trusted build artifacts root-owned and executes generators and contestant programs as the unprivileged `nobody` user, so they cannot rewrite the Checker, reference or verified answers they are judged by. Limits can be adjusted with `SETDRAFT_CASE_MAX_BYTES`, `SETDRAFT_PROJECT_MAX_BYTES`, `SETDRAFT_TESTCASES_MAX` and `SETDRAFT_TOTAL_TIME_LIMIT_MS`.
 
 ### Problem types and communication
 
@@ -131,7 +131,7 @@ reference through the exact exported `build`/`run` adapter. Contest eligibility 
 Communication exports add Hydro `multi_pass: 2` and DOMjudge 9.0.1 interactive/multi-pass configuration with
 `limits.validation_passes: 2`. Handoffs travel only through jury-private `nextpass.in`, never contestant-shared
 `state.txt`. FPS/QDUOJ reject communication and interactive releases. Local adapters do not replace real platform
-import/submission acceptance. Verification contract 7 and export contract 5 make older reports historical only.
+import/submission acceptance. Verification contract 8 and export contract 6 require older reports to be reverified and cached exports to be regenerated.
 
 ### Structured statements and contest PDFs
 
@@ -201,6 +201,6 @@ Administrators use `PUT/DELETE /api/ai/config` to manage named profiles for Open
 
 ## Web search and database tests
 
-`GET /api/ai/search` returns availability (administrator responses include provider/quota settings); `PUT /api/ai/search` and `POST /api/ai/search` are administrator-only configuration and connectivity checks. Chat submissions accept `webSearch`; `searchQuery` and `searchQueries` fields are rejected, including empty values. The current chat model plans 1–3 read-only queries, using necessary conversation context, before searching. Persisted `search` events include planning, per-query progress, partial failure and usage. Search results belong to the requesting user and request; retries reuse completed stages, while searching again creates a fresh plan and request. SearXNG is the default, Tavily is optional. Credentials never enter client snapshots.
+`GET /api/ai/search` returns availability (administrator responses include provider/quota settings); `PUT /api/ai/search` and `POST /api/ai/search` are administrator-only configuration and connectivity checks. Chat submissions accept `webSearch`; `searchQuery` and `searchQueries` fields are rejected, including empty values. The current chat model plans 1–3 read-only queries, using necessary conversation context, before searching. Persisted `search` events include planning, per-query progress, partial failure and usage. Search results belong to the requesting user and request; retries reuse completed stages, while searching again creates a fresh plan and request. SearXNG is the default; Tavily and the DeepSeek Search API are optional. Credentials never enter client snapshots.
 
 `npm test --workspace=@setdraft/server` starts a disposable PostgreSQL Docker container, creates a restricted application role and isolates each test in separate schemas, then removes the container. Docker is required. To use an existing dedicated test database, set `SETDRAFT_TEST_DATABASE_URL` (maintenance role) and `SETDRAFT_TEST_APP_PASSWORD` (for a pre-created `setdraft_app` role). Never point these variables at production. Model and search provider tests use mocks; sandbox integration tests require `setdraft/sandbox:local`.

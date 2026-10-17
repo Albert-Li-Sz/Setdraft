@@ -4,12 +4,8 @@ import { join } from "node:path";
 import { extractAttachmentReferences, parseHydroTimeLimitMs, writeStoredArchiveFromFiles } from "@setdraft/authoring";
 import { formatHydroStatement } from "@setdraft/authoring/statement";
 import { resolveProblemType, usesProtocol } from "@setdraft/contracts";
-import { exportFileName } from "./export-contract.ts";
+import { exportFileName, readExportManifest } from "./export-contract.ts";
 import type { ManualProject, ManualRelease } from "./manual-projects.ts";
-
-interface SourceManifest {
-	cases: Array<{ inputFile: string; outputFile: string }>;
-}
 
 const maxEmbeddedAnswerBytes = 4 * 1024 * 1024;
 const maxFpsDataBytes = 8 * 1024 * 1024;
@@ -140,8 +136,7 @@ export async function writeLegacyProblemExport(
 			"FPS、QDUOJ 暂不支持题面附件引用，无法完整导出；请使用 Hydro 包，或将含图片的题面导出为 PDF 后使用 DOMjudge 包。",
 		);
 	}
-	const manifest = JSON.parse(await readFile(join(releaseRoot, "source", "manifest.json"), "utf8")) as SourceManifest;
-	if (manifest.cases.length === 0) throw new Error("发布记录没有测试点。");
+	const manifest = await readExportManifest(releaseRoot);
 	const target = join(releaseRoot, exportFileName(format));
 	if (
 		await stat(target)

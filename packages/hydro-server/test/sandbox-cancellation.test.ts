@@ -26,7 +26,7 @@ it("requires a working sandbox image in the Linux release gate", () => {
 });
 
 it.skipIf(!dockerAvailable)(
-	"keeps sandbox output owned by the Linux service and removable",
+	"keeps sandbox output removable by the Linux service without exposing build artifacts",
 	async () => {
 		const root = await mkdtemp(join(tmpdir(), "setdraft-ownership-"));
 		try {
@@ -47,8 +47,7 @@ it.skipIf(!dockerAvailable)(
 				maxFileBytes: 1024 * 1024,
 			});
 			expect(report.success).toBe(true);
-			if (process.platform === "linux")
-				expect((await stat(join(stage, "build", "reference"))).uid).toBe(Number(sandboxUser().split(":")[0]));
+			await expect(stat(join(stage, "build"))).rejects.toMatchObject({ code: "ENOENT" });
 			await rm(stage, { recursive: true });
 			await expect(stat(stage)).rejects.toMatchObject({ code: "ENOENT" });
 		} finally {
@@ -93,7 +92,7 @@ it.skipIf(!dockerAvailable)(
 				{ timeout: 10_000, interval: 100 },
 			);
 			expect((await exec("docker", ["inspect", "--format", "{{.Config.User}}", name])).stdout.trim()).toBe(
-				sandboxUser(),
+				`0:${process.getgid?.() ?? 0}`,
 			);
 			controller.abort();
 			expect((await result)[0].status).toBe("rejected");

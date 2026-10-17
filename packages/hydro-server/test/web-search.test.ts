@@ -428,3 +428,146 @@ it("continues the model reply with a visible search failure and no invented sour
 	});
 	expect(result.messages.at(-1)?.search).toBeUndefined();
 });
+it("uses the DeepSeek Search API with a bearer key and maps snippets without internal headers", async () => {
+	const identity = new IdentityStore(root);
+	let captured: { url: URL; init: RequestInit | undefined } | undefined;
+	const search = new WebSearch(identity, async (input, init) => {
+		captured = { url: new URL(String(input)), init };
+		return Response.json({
+			results: [
+				{
+					title: "<b>DeepSeek V4</b>",
+					url: "https://example.com/deepseek",
+					snippet: "A <i>model</i> release",
+					summary: "Longer summary",
+					date: "2026-06-01T00:00:00+00:00",
+					authority: 3,
+				},
+				{ title: "Invalid", url: "javascript:alert(1)", snippet: "blocked" },
+				{ title: "Duplicate", url: "https://example.com/deepseek", snippet: "duplicate" },
+				{ title: "Summary only", url: "https://example.com/summary", snippet: "", summary: "<b>Summary</b> text" },
+			],
+		});
+	});
+	await search.configure({ enabled: true, provider: "deepseek", apiKey: "fake-deepseek-key", dailyLimit: 10 });
+	const snapshot = await search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "DeepSeek V4");
+	expect(captured?.url.href).toBe("https://api.deepseek.com/v1/tools/search");
+	expect(captured?.init?.method).toBe("POST");
+	expect(captured?.init?.redirect).toBe("error");
+	const headers = new Headers(captured?.init?.headers);
+	expect(headers.get("authorization")).toBe("Bearer fake-deepseek-key");
+	expect(headers.get("content-type")).toBe("application/json");
+	expect(headers.has("x-forwarded-for")).toBe(false);
+	expect(headers.has("x-real-ip")).toBe(false);
+	expect(JSON.parse(String(captured?.init?.body))).toEqual({
+		count: 10,
+		query: "DeepSeek V4",
+		need_content: false,
+	});
+	expect(snapshot.provider).toBe("deepseek");
+	expect(snapshot.results).toEqual([
+		{ id: 1, title: "DeepSeek V4", url: "https://example.com/deepseek", snippet: "A model release" },
+		{ id: 2, title: "Summary only", url: "https://example.com/summary", snippet: "Summary text" },
+	]);
+	expect(JSON.stringify(await search.status())).not.toContain("fake-deepseek-key");
+});
+it("truncates DeepSeek queries to the API limit without splitting characters", async () => {
+	const identity = new IdentityStore(root);
+	let body: Record<string, unknown> | undefined;
+	const search = new WebSearch(identity, async (_input, init) => {
+		body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+		return Response.json({
+			results: [{ title: "Truncated", url: "https://example.com/truncated", snippet: "Result" }],
+		});
+	});
+	await search.configure({ enabled: true, provider: "deepseek", apiKey: "fake-key", dailyLimit: 10 });
+	const snapshot = await search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "😀".repeat(200));
+	expect(body?.query).toBe("😀".repeat(128));
+	expect(snapshot.query).toBe("😀".repeat(128));
+});
+it.each([
+	[401, "搜索服务 API Key 无效"],
+	[402, "搜索服务账户余额不足"],
+	[429, "搜索服务拒绝请求"],
+])("explains DeepSeek HTTP %s without returning its response body", async (status, message) => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity, async () => new Response("fake-secret provider body", { status }));
+	await search.configure({ enabled: true, provider: "deepseek", apiKey: "fake-key", dailyLimit: 10 });
+	const failure = await search.search(new WorkspaceDatabase(root), randomUUID(), randomUUID(), "query").then(
+		() => undefined,
+		(error: unknown) => error,
+	);
+	expect(failure).toMatchObject({ statusCode: 502, message: expect.stringContaining(message) });
+	expect(JSON.stringify(failure)).not.toContain("fake-secret provider body");
+});
+it("does not reuse another provider's key after switching to DeepSeek", async () => {
+	const identity = new IdentityStore(root);
+	const search = new WebSearch(identity);
+	await search.configure({ enabled: false, provider: "tavily", apiKey: "fake-tavily-key", dailyLimit: 10 });
+	await expect(search.configure({ enabled: true, provider: "deepseek", dailyLimit: 10 })).rejects.toThrow(
+		"请填写 DeepSeek API Key。",
+	);
+	const configured = await search.configure({
+		enabled: true,
+		provider: "deepseek",
+		apiKey: "fake-deepseek-key",
+		dailyLimit: 10,
+	});
+	expect(configured).toMatchObject({ provider: "deepseek", apiKeyConfigured: true, available: true });
+	expect(JSON.stringify(configured)).not.toContain("fake-deepseek-key");
+	expect(await search.configure({ enabled: true, provider: "deepseek", dailyLimit: 10 })).toMatchObject({
+		provider: "deepseek",
+		apiKeyConfigured: true,
+	});
+	await expect(search.configure({ enabled: true, provider: "tavily", dailyLimit: 10 })).rejects.toThrow(
+		"请填写 Tavily API Key。",
+	);
+	await expect(
+		search.configure({ enabled: true, provider: ["deepseek"], apiKey: "fake-key", dailyLimit: 10 }),
+	).rejects.toThrow("搜索配置无效。");
+});
+it("diagnoses DeepSeek without probing SearXNG engines", async () => {
+	const identity = new IdentityStore(root);
+	let calls = 0;
+	const search = new WebSearch(identity, async () => {
+		calls += 1;
+		return Response.json({
+			results: [{ title: "Python", url: "https://www.python.org/", snippet: "Official documentation" }],
+		});
+	});
+	await search.configure({ enabled: true, provider: "deepseek", apiKey: "fake-key", dailyLimit: 10 });
+	const report = await search.diagnose(new WorkspaceDatabase(root), randomUUID(), "zh");
+	expect(report.provider).toBe("deepseek");
+	expect(report.engines).toEqual([]);
+	expect(report.aggregate).toMatchObject({ status: "healthy", candidateCount: 1, acceptedCount: 1 });
+	expect(calls).toBe(1);
+});
+it("keeps DeepSeek and Tavily result caches separate for the same query", async () => {
+	const identity = new IdentityStore(root);
+	const calls: string[] = [];
+	const search = new WebSearch(identity, async (input, init) => {
+		const url = new URL(String(input));
+		calls.push(url.hostname);
+		const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+		if (url.hostname === "api.deepseek.com")
+			return Response.json({
+				results: [{ title: "DeepSeek source", url: "https://example.com/deepseek", snippet: "DeepSeek result" }],
+			});
+		expect(body.api_key).toBe("fake-tavily-key");
+		return Response.json({
+			results: [{ title: "Tavily source", url: "https://example.com/tavily", content: "Tavily result" }],
+		});
+	});
+	const database = new WorkspaceDatabase(root);
+	const user = randomUUID();
+	await search.configure({ enabled: true, provider: "deepseek", apiKey: "fake-deepseek-key", dailyLimit: 10 });
+	const deepseek = await search.search(database, user, randomUUID(), "shared query");
+	await search.configure({ enabled: true, provider: "tavily", apiKey: "fake-tavily-key", dailyLimit: 10 });
+	const tavily = await search.search(database, user, randomUUID(), "shared query");
+	expect(deepseek.provider).toBe("deepseek");
+	expect(deepseek.results[0].url).toBe("https://example.com/deepseek");
+	expect(tavily.provider).toBe("tavily");
+	expect(tavily.results[0].url).toBe("https://example.com/tavily");
+	expect(tavily.cached).not.toBe(true);
+	expect(calls).toEqual(["api.deepseek.com", "api.tavily.com"]);
+});

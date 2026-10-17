@@ -44,7 +44,14 @@ export function sandboxUser(uid = process.getuid?.(), gid = process.getgid?.()):
 	return uid && uid > 0 ? `${uid}:${gid && gid > 0 ? gid : uid}` : "65534:65534";
 }
 
-export function sandboxRuntimeArgs(budget = sandboxPolicy()): string[] {
+/**
+ * Isolated execution runs the trusted harness as root with only the capabilities needed to drop
+ * generators and contestants to an unprivileged uid and terminate their process groups.
+ * The service group keeps interrupted work directories removable on Linux; interactive and
+ * export runs keep the non-root default.
+ */
+export function sandboxRuntimeArgs(budget = sandboxPolicy(), isolation = false): string[] {
+	const buildMb = Math.max(64, Math.min(1024, Math.floor(budget.memoryMb / 2)));
 	return [
 		"--network",
 		"none",
@@ -59,12 +66,17 @@ export function sandboxRuntimeArgs(budget = sandboxPolicy()): string[] {
 		"--read-only",
 		"--cap-drop",
 		"ALL",
+		...(isolation
+			? ["--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "DAC_OVERRIDE", "--cap-add", "KILL"]
+			: []),
 		"--security-opt",
 		"no-new-privileges",
 		"--user",
-		sandboxUser(),
+		isolation ? `0:${process.getgid?.() ?? 0}` : sandboxUser(),
 		"--tmpfs",
 		"/tmp:rw,exec,size=128m,mode=1777",
+		...(isolation ? ["--tmpfs", "/private:rw,size=1m,mode=700"] : []),
+		...(isolation ? ["--tmpfs", `/build:rw,exec,size=${buildMb}m,mode=755`] : []),
 	];
 }
 

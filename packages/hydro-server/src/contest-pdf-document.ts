@@ -1,3 +1,4 @@
+import { markdownAttachmentName, markdownReferences } from "@setdraft/authoring/markdown";
 import { statementSectionList } from "@setdraft/authoring/statement";
 import { type ContestPdfOptions, type ManualProject, resolveProblemType, usesProtocol } from "@setdraft/contracts";
 import { preparePdfFootnotes, preparePdfMarkdown, preparePdfMarkdownParts, typstString } from "./markdown-typst.ts";
@@ -29,6 +30,8 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 	const { title, options, problems } = document;
 	const language = options.problemLanguage === "auto" ? options.language : options.problemLanguage;
 	const assets = new Map<string, Buffer>();
+	const coverImages = new Map<string, string>();
+	const ambiguousCoverImages = new Set<string>();
 	const entries = problems.map((problem) => {
 		const images = new Map<string, string>();
 		for (const [index, attachment] of problem.attachments.entries()) {
@@ -37,6 +40,12 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
 			const name = `images/${problem.label}-${index}.${extension}`;
 			assets.set(name, Buffer.from(attachment.contentBase64, "base64"));
 			images.set(`file://${attachment.name}`, `/${name}`);
+			const reference = `file://${attachment.name}`;
+			// Cover notes have no problem scope; do not silently pick a duplicate attachment name.
+			if (coverImages.has(reference)) {
+				coverImages.delete(reference);
+				ambiguousCoverImages.add(reference);
+			} else if (!ambiguousCoverImages.has(reference)) coverImages.set(reference, `/${name}`);
 		}
 		const interactive = usesProtocol(problem);
 		const sections = problem.statementSections;
@@ -87,6 +96,15 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
   second_round: ${field("secondRound")},
 ))`;
 	});
+	if (options.titlePage) {
+		for (const { node, url } of markdownReferences(options.coverNotes)) {
+			if (node.type !== "image" && node.type !== "imageReference") continue;
+			const name = markdownAttachmentName(url);
+			if (name && ambiguousCoverImages.has(`file://${name}`))
+				throw new Error(`封面图片附件名称重复，请使用不同的附件名称：${name}`);
+		}
+	}
+	const coverNotes = options.titlePage ? preparePdfMarkdown(options.coverNotes, coverImages) : "";
 	const source = (selected: string[], standalone: boolean) => `#import "/xcpc/lib.typ": contest-conf
 #show: contest-conf.with(
   title: ${typstString(title)}, subtitle: ${typstString(options.subtitle)},
@@ -97,7 +115,7 @@ export function buildContestPdfSources(document: ContestPdfDocument) {
   enable-titlepage: ${!standalone && options.titlePage},
   enable-problem-list: ${!standalone && options.problemList},
   enable-header-footer: ${!standalone && options.headerFooter},
-  cover-notes: ${typstString(!standalone && options.titlePage ? preparePdfMarkdown(options.coverNotes) : "")},
+  cover-notes: ${typstString(standalone ? "" : coverNotes)},
   problems: (${selected.map((entry) => `${entry},`).join("\n")}),
 )
 `;

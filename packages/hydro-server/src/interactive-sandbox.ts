@@ -267,7 +267,9 @@ async function dialogue(
 			input.context?.signal.throwIfAborted();
 			const isJury = index === 1;
 			const memory = isJury ? juryMemory : contestantMemory;
-			const metrics = join(input.stage, "metrics", `${program.role}-${test.id}`);
+			// The shared jury program needs a distinct mount for each contestant and round.
+			// Replacing its previous bind source can leave Docker's file sharing on a stale directory.
+			const metrics = join(input.stage, "metrics", `${contestant.role}-${test.id}${isJury ? "-jury" : ""}`);
 			await rm(metrics, { recursive: true, force: true });
 			await mkdir(metrics, { recursive: true });
 			await chmod(metrics, 0o777);

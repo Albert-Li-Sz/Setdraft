@@ -13,7 +13,7 @@ import type { WorkspaceDatabase } from "./workspace-db.ts";
 
 interface Configuration {
 	enabled: boolean;
-	provider: "searxng" | "tavily";
+	provider: "searxng" | "tavily" | "deepseek";
 	apiKey?: string;
 	dailyLimit: number;
 }
@@ -86,6 +86,9 @@ const plain = (value: unknown, limit: number) =>
 				.trim()
 				.slice(0, limit)
 		: "";
+const DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search";
+const DEEPSEEK_QUERY_LIMIT = 128;
+const truncateCharacters = (value: string, limit: number) => Array.from(value).slice(0, limit).join("");
 
 /** Only a short, user-visible query reaches the provider; never history, attachments or project snapshots. */
 export class WebSearch {
@@ -124,25 +127,31 @@ export class WebSearch {
 	}
 	async configure(input: Record<string, unknown>): Promise<SearchConfiguration> {
 		const previous = await this.configuration();
+		const provider = input.provider;
 		if (
 			typeof input.enabled !== "boolean" ||
-			!["searxng", "tavily"].includes(String(input.provider)) ||
+			typeof provider !== "string" ||
+			!["searxng", "tavily", "deepseek"].includes(provider) ||
 			!Number.isSafeInteger(input.dailyLimit) ||
 			Number(input.dailyLimit) < 1 ||
 			Number(input.dailyLimit) > 10000
 		)
 			throw new ChatError("搜索配置无效。", 422);
+		// Do not forward the previous provider's key to a different search service.
 		const apiKey =
 			input.clearApiKey === true
 				? undefined
 				: typeof input.apiKey === "string" && input.apiKey.trim()
 					? input.apiKey.trim()
-					: previous.apiKey;
+					: provider === previous.provider
+						? previous.apiKey
+						: undefined;
 		if (apiKey && apiKey.length > 1024) throw new ChatError("搜索密钥过长。", 422);
-		if (input.provider === "tavily" && input.enabled && !apiKey) throw new ChatError("请填写 Tavily API Key。", 422);
+		if (provider !== "searxng" && input.enabled && !apiKey)
+			throw new ChatError(provider === "deepseek" ? "请填写 DeepSeek API Key。" : "请填写 Tavily API Key。", 422);
 		await this.identity.setSetting("web-search", {
 			enabled: input.enabled,
-			provider: input.provider,
+			provider,
 			apiKey,
 			dailyLimit: input.dailyLimit,
 		});
@@ -293,9 +302,11 @@ export class WebSearch {
 			throw new SearchFailure("联网搜索尚未配置；本次回复未使用网络资料。", diagnostics("configuration"), 503);
 		const normalized = plain(query, 500);
 		if (!normalized) throw new ChatError("请输入搜索关键词。", 422);
+		const effectiveQuery =
+			configuration.provider === "deepseek" ? truncateCharacters(normalized, DEEPSEEK_QUERY_LIMIT) : normalized;
 		const cacheProvider = configuration.provider === "searxng" ? "searxng-arxiv-v1" : configuration.provider;
 		const key = createHash("sha256")
-			.update(`${cacheProvider}:${options.engine ?? ""}:${options.language ?? ""}:${normalized}`)
+			.update(`${cacheProvider}:${options.engine ?? ""}:${options.language ?? ""}:${effectiveQuery}`)
 			.digest("hex");
 		const cached = await database.get<Cache>("search-cache", key);
 		if (cached && cached.expiresAt > Date.now() && !options.bypassCache) {
@@ -320,23 +331,38 @@ export class WebSearch {
 			const url =
 				configuration.provider === "searxng"
 					? new URL("search", `${process.env.SETDRAFT_SEARCH_URL?.replace(/\/$/u, "")}/`)
-					: new URL("https://api.tavily.com/search");
+					: configuration.provider === "deepseek"
+						? new URL(DEEPSEEK_SEARCH_URL)
+						: new URL("https://api.tavily.com/search");
 			if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
 				throw new SearchFailure("搜索地址配置无效；本次回复未使用网络资料。", diagnostics("configuration"), 503);
 			const init: RequestInit = { signal: cancellation, redirect: "error", headers: { accept: "application/json" } };
 			if (configuration.provider === "searxng") {
 				init.headers = { accept: "application/json", "x-forwarded-for": "127.0.0.1", "x-real-ip": "127.0.0.1" };
-				url.searchParams.set("q", normalized);
+				url.searchParams.set("q", effectiveQuery);
 				url.searchParams.set("format", "json");
 				if (!options.engine) url.searchParams.set("categories", "general");
 				if (options.engine) url.searchParams.set("engines", options.engine);
 				if (options.language) url.searchParams.set("language", options.language === "zh" ? "zh-CN" : "en");
+			} else if (configuration.provider === "deepseek") {
+				init.method = "POST";
+				init.headers = {
+					authorization: `Bearer ${configuration.apiKey}`,
+					"content-type": "application/json",
+					accept: "application/json",
+				};
+				init.body = JSON.stringify({
+					// Request a small buffer; the reply keeps at most five accepted sources.
+					count: 10,
+					query: effectiveQuery,
+					need_content: false,
+				});
 			} else {
 				init.method = "POST";
 				init.headers = { "content-type": "application/json", accept: "application/json" };
 				init.body = JSON.stringify({
 					api_key: configuration.apiKey,
-					query: normalized,
+					query: effectiveQuery,
 					search_depth: "basic",
 					max_results: 5,
 					include_answer: false,
@@ -347,9 +373,19 @@ export class WebSearch {
 			received = true;
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => {});
+				if (response.status === 401)
+					throw new SearchFailure(
+						"搜索服务 API Key 无效，请管理员重新填写；本次回复未使用网络资料。",
+						diagnostics("http", 0, 0, [], response.status),
+					);
 				if (response.status === 403 || response.status === 429)
 					throw new SearchFailure(
 						"搜索服务拒绝请求，请管理员检查接口权限或限流配置；本次回复未使用网络资料。",
+						diagnostics("http", 0, 0, [], response.status),
+					);
+				if (response.status === 402)
+					throw new SearchFailure(
+						"搜索服务账户余额不足，请管理员充值或更换搜索服务；本次回复未使用网络资料。",
 						diagnostics("http", 0, 0, [], response.status),
 					);
 				throw new SearchFailure(
@@ -378,7 +414,10 @@ export class WebSearch {
 				if (!["https:", "http:"].includes(link.protocol) || link.username || link.password || seen.has(link.href))
 					continue;
 				const title = plain(item.title, 200),
-					snippet = plain(item.content ?? item.snippet, 1200);
+					snippet =
+						configuration.provider === "deepseek"
+							? plain(item.snippet, 1200) || plain(item.summary, 1200)
+							: plain(item.content ?? item.snippet, 1200);
 				if (!title || !snippet) continue;
 				seen.add(link.href);
 				const source = { id: normalizedResults.length + 1, title, url: link.href, snippet };
@@ -411,7 +450,7 @@ export class WebSearch {
 				);
 			}
 			const snapshot: SearchSnapshot = {
-				query: normalized,
+				query: effectiveQuery,
 				provider: configuration.provider,
 				searchedAt: new Date().toISOString(),
 				results,

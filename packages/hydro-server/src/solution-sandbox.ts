@@ -25,9 +25,9 @@ const runner = `${sandboxProgramRuntime}
 cells = []
 original_run = run
 total_bytes = 0
-def run(command, input_path, output_path, timeout, memory_mb, cwd):
+def run(command, input_path, output_path, timeout, memory_mb, cwd, untrusted=False):
     global total_bytes
-    result = original_run(command, input_path, output_path, timeout, memory_mb, cwd)
+    result = original_run(command, input_path, output_path, timeout, memory_mb, cwd, untrusted)
     total_bytes += result['bytes'] + result['stderrBytes']
     if total_bytes > payload['maxTotalBytes']: raise RuntimeError('任务输出超过容量上限')
     return result
@@ -49,7 +49,7 @@ def cell(item, role, case, input_path, answer):
         compile_check = next((check for check in checks if check['stage'] == 'compile:' + role), None)
         result['log'] = compile_check['message'] if compile_check else '编译失败'
         return result
-    if not program(role, input_path, output, case['id']):
+    if not program(role, input_path, output, case['id'], untrusted=item['id'] != payload['primaryId']):
         actual = checks[-1]
         paths.update(output=str(output.relative_to(root)))
         if answer is not None: paths['expected'] = str(answer.relative_to(root))
@@ -104,7 +104,7 @@ def main():
                 commands[role] = commands['reference']; languages[role] = languages['reference']
             else:
                 check('compile:' + role, False, next(item['message'] for item in checks if item['stage'] == 'compile:reference'), verdict='CE')
-        else: source(role, item['language'], item['code'])
+        else: source(role, item['language'], item['code'], untrusted=True)
     for case in payload['cases']:
         try: cells.extend(verify(case))
         except Exception as error:
@@ -172,7 +172,8 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 		return { cells, checks: report.checks };
 	}
 	await mkdir(input.stage, { recursive: true });
-	await chmod(input.stage, 0o777);
+	// Trusted harness artifacts are root-owned; untrusted programs get only their run directory.
+	await chmod(input.stage, 0o750);
 	await mkdir(join(input.stage, "cases"), { recursive: true });
 	const cases = [];
 	for (const [index, item] of (input.cases ?? []).entries()) {
@@ -208,13 +209,13 @@ export async function runSolutionSandbox(input: SolutionSandboxInput): Promise<S
 			"--rm",
 			"--name",
 			`setdraft-task-${taskId}`,
-			...(input.sandboxArgs ?? sandboxRuntimeArgs()),
+			...(input.sandboxArgs ?? sandboxRuntimeArgs(sandboxPolicy(), true)),
 			"--mount",
-			`type=bind,source=${input.stage},target=/work`,
+			`type=bind,source=${input.stage},target=/private/work`,
 			"--entrypoint",
 			"python3",
 			input.image,
-			"/work/runner.py",
+			"/private/work/runner.py",
 		],
 		sandboxPolicy().runTimeoutMs,
 		input.context?.signal,

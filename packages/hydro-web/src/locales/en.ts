@@ -141,8 +141,8 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"留空使用本条消息前 500 字；不会发送题目和附件":
 		"Leave blank to search the first 500 characters of this message. Problems and attachments are excluded.",
 	"正在搜索网络资料…": "Searching the web…",
-	"默认使用随部署启动的 SearXNG，聚合 Bing、360 和 arXiv 论文，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。":
-		"The bundled SearXNG service searches Bing, 360 and arXiv papers. Tavily is also available. Only search queries are sent; problems, attachments and chat history are excluded.",
+	"默认使用随部署启动的 SearXNG，聚合 Bing、360 和 arXiv 论文，也可选择 Tavily 或 DeepSeek 搜索。只发送搜索关键词，不发送题目、附件和历史对话。切换搜索服务后需重新填写该服务的 API Key。":
+		"The bundled SearXNG service searches Bing, 360 and arXiv papers. Tavily and DeepSeek search are also available. Only search queries are sent; problems, attachments and chat history are excluded. After switching providers, enter the new provider's API key again.",
 	"搜索配置已保存。": "Search settings saved.",
 	"搜索连接正常。": "Search connection successful.",
 	"搜索配置读取失败。": "Could not load search settings.",
@@ -154,8 +154,12 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"模型上下文空间不足，本次回复未使用网络资料。":
 		"There is not enough model context space. This reply did not use web sources.",
 	"联网搜索暂时不可用，本次回复未使用网络资料。": "Web search is unavailable. This reply did not use web sources.",
+	"搜索服务 API Key 无效，请管理员重新填写；本次回复未使用网络资料。":
+		"The search provider API key is invalid. Ask an administrator to enter it again. This reply did not use web sources.",
 	"搜索服务拒绝请求，请管理员检查接口权限或限流配置；本次回复未使用网络资料。":
 		"The search provider rejected the request. Ask an administrator to check API access and rate limits. This reply did not use web sources.",
+	"搜索服务账户余额不足，请管理员充值或更换搜索服务；本次回复未使用网络资料。":
+		"The search provider account has insufficient balance. Ask an administrator to top up or switch providers. This reply did not use web sources.",
 	"上游搜索引擎暂时无可用结果，可能超时或触发验证；请管理员检查搜索出站网络、代理和引擎配置。本次回复未使用网络资料。":
 		"Upstream search engines returned no usable results, possibly due to timeouts or verification challenges. Ask an administrator to check outbound networking, the search proxy and engine settings. This reply did not use web sources.",
 	"未找到可用的搜索结果，请尝试更换关键词；本次回复未使用网络资料。":
@@ -165,6 +169,7 @@ export const englishMessages: Readonly<Record<string, string>> = {
 	"管理员已关闭联网搜索。": "Web search has been disabled by the administrator.",
 	"联网搜索尚未配置。": "Web search has not been configured.",
 	"请填写 Tavily API Key。": "Enter a Tavily API key.",
+	"请填写 DeepSeek API Key。": "Enter a DeepSeek API key.",
 	"搜索密钥过长。": "The search API key is too long.",
 	"搜索开关无效。": "Invalid web search option.",
 	"搜索关键词最多 500 个字符。": "Search queries can contain up to 500 characters.",

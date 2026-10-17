@@ -16,6 +16,7 @@ import {
 	type MatrixDiagnostic,
 	projectSolutions,
 	resolveProblemType,
+	usesProtocol,
 	type VerificationOptions,
 	type VerificationRun,
 	type VerificationRunPage,
@@ -26,6 +27,7 @@ import type { ExecutionContext } from "./execution-context.ts";
 import type { ManualProjectStore } from "./manual-projects.ts";
 import type { SandboxCase, SandboxCompilationCache } from "./manual-sandbox.ts";
 import { ManualProjectError } from "./project-error.ts";
+import { sandboxPolicy } from "./sandbox-policy.ts";
 import { cleanupSandboxStage, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 import { runSolutionSandbox } from "./solution-sandbox.ts";
 import {
@@ -319,7 +321,7 @@ export class VerificationRuns {
 			revision: project.revision,
 			fingerprint: "",
 			image,
-			sandboxArgs: sandboxRuntimeArgs(),
+			sandboxArgs: sandboxRuntimeArgs(sandboxPolicy(), !usesProtocol(project)),
 			verificationContractVersion,
 			problemType: resolveProblemType(project),
 			createdAt: new Date().toISOString(),

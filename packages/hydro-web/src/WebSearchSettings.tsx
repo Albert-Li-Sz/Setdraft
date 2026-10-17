@@ -7,7 +7,7 @@ import { WorkspacePausedContext } from "./workspace-paused.ts";
 
 interface Configuration {
 	enabled: boolean;
-	provider: "searxng" | "tavily";
+	provider: "searxng" | "tavily" | "deepseek";
 	dailyLimit: number;
 	available: boolean;
 	apiKeyConfigured: boolean;
@@ -29,6 +29,7 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 	const { t } = useLocale();
 	const paused = useContext(WorkspacePausedContext);
 	const [config, setConfig] = useState<Configuration>();
+	const [savedProvider, setSavedProvider] = useState<Configuration["provider"]>();
 	const [apiKey, setApiKey] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
@@ -43,7 +44,10 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 		const controller = new AbortController();
 		setMessage("");
 		void requestJson<Configuration>(apiUrl(apiOrigin, "/ai/search"), { signal: controller.signal })
-			.then((loaded) => setConfig((current) => current ?? loaded))
+			.then((loaded) => {
+				setConfig((current) => current ?? loaded);
+				setSavedProvider((current) => current ?? loaded.provider);
+			})
 			.catch((error) => {
 				if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "搜索配置读取失败。");
 			});
@@ -59,15 +63,15 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 		const controller = new AbortController();
 		action.current = controller;
 		try {
-			setConfig(
-				await requestJson<Configuration>(apiUrl(apiOrigin, "/ai/search"), {
-					method: "PUT",
-					headers: { "content-type": "application/json" },
-					signal: controller.signal,
-					body: JSON.stringify({ ...config, apiKey }),
-				}),
-			);
+			const saved = await requestJson<Configuration>(apiUrl(apiOrigin, "/ai/search"), {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				signal: controller.signal,
+				body: JSON.stringify({ ...config, apiKey }),
+			});
 			if (controller.signal.aborted) return;
+			setConfig(saved);
+			setSavedProvider(saved.provider);
 			setApiKey("");
 			setReport(undefined);
 			setMessage("搜索配置已保存。");
@@ -103,7 +107,7 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 			<h2>{t("联网搜索")}</h2>
 			<p className="settings-help">
 				{t(
-					"默认使用随部署启动的 SearXNG，聚合 Bing、360 和 arXiv 论文，也可选择 Tavily。只发送搜索关键词，不发送题目、附件和历史对话。",
+					"默认使用随部署启动的 SearXNG，聚合 Bing、360 和 arXiv 论文，也可选择 Tavily 或 DeepSeek 搜索。只发送搜索关键词，不发送题目、附件和历史对话。切换搜索服务后需重新填写该服务的 API Key。",
 				)}
 			</p>
 			{config && (
@@ -115,12 +119,17 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 					}}
 				>
 					<p className="settings-help">
-						{t(config.available ? "配置已就绪，搜索健康需主动诊断。" : "配置未就绪")}
-						{config.health && ` · ${t(healthLabels[config.health.status])}`}
+						{t(
+							config.provider === savedProvider && config.available
+								? "配置已就绪，搜索健康需主动诊断。"
+								: "配置未就绪",
+						)}
+						{config.provider === savedProvider && config.health && ` · ${t(healthLabels[config.health.status])}`}
 					</p>
 					<label className="search-settings-toggle">
 						<input
 							type="checkbox"
+							disabled={busy}
 							checked={config.enabled}
 							onChange={(event) => setConfig({ ...config, enabled: event.target.checked })}
 						/>
@@ -130,22 +139,34 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						<span>{t("搜索服务")}</span>
 						<select
 							value={config.provider}
-							onChange={(event) =>
-								setConfig({ ...config, provider: event.target.value as Configuration["provider"] })
-							}
+							disabled={busy}
+							onChange={(event) => {
+								setConfig({ ...config, provider: event.target.value as Configuration["provider"] });
+								setApiKey("");
+								setReport(undefined);
+								setMessage("");
+							}}
 						>
 							<option value="searxng">SearXNG</option>
 							<option value="tavily">Tavily</option>
+							<option value="deepseek">DeepSeek</option>
 						</select>
 					</label>
-					{config.provider === "tavily" && (
+					{config.provider !== "searxng" && (
 						<label className="field settings-field">
 							<span>API Key</span>
 							<input
 								type="password"
+								disabled={busy}
 								autoComplete="new-password"
 								value={apiKey}
-								placeholder={config.apiKeyConfigured ? t("已配置，留空保留") : "tvly-…"}
+								placeholder={
+									config.apiKeyConfigured && config.provider === savedProvider
+										? t("已配置，留空保留")
+										: config.provider === "deepseek"
+											? "sk-…"
+											: "tvly-…"
+								}
 								onChange={(event) => setApiKey(event.target.value)}
 							/>
 						</label>
@@ -154,6 +175,7 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						<span>{t("每人每日搜索次数")}</span>
 						<input
 							type="number"
+							disabled={busy}
 							required
 							min="1"
 							max="10000"
@@ -168,7 +190,7 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						<button
 							className="button secondary"
 							type="button"
-							disabled={busy || !config.available}
+							disabled={busy || !config.available || config.provider !== savedProvider}
 							onClick={() => void test("zh")}
 						>
 							{t("中文诊断")}
@@ -176,7 +198,7 @@ export function WebSearchSettings({ apiOrigin }: { apiOrigin: string }) {
 						<button
 							className="button secondary"
 							type="button"
-							disabled={busy || !config.available}
+							disabled={busy || !config.available || config.provider !== savedProvider}
 							onClick={() => void test("en")}
 						>
 							{t("英文诊断")}

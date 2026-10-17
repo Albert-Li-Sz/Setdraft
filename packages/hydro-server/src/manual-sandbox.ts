@@ -19,6 +19,7 @@ import { interactiveContainerNames, runInteractiveSandbox } from "./interactive-
 import { NOOP_OBSERVABILITY } from "./observability.ts";
 import { pythonProcessMonitor } from "./process-monitor.ts";
 import { readSandboxFile } from "./sandbox-files.ts";
+import { sandboxPolicy } from "./sandbox-policy.ts";
 import { readSandboxCheck, readSandboxReport } from "./sandbox-report.ts";
 import { removeDockerContainer, SandboxCleanupError, sandboxRuntimeArgs } from "./sandbox-runtime.ts";
 
@@ -67,7 +68,8 @@ export interface SandboxInput {
 export const sandboxProgramRuntime = String.raw`
 import hashlib, json, math, os, pathlib, re, resource, shutil, signal, subprocess, sys, time
 
-root = pathlib.Path('/work')
+root = pathlib.Path('/private/work')
+build_root = pathlib.Path('/build')
 payload = json.loads((root / 'payload.json').read_text(encoding='utf-8'))
 checks = []
 generated_count = 0
@@ -75,6 +77,16 @@ oracle_count = 0
 commands = {}
 languages = {}
 file_limit = payload['maxFileBytes']
+untrusted_uid = 65534 if root.stat().st_uid != 65534 else 65533
+untrusted_gid = next(gid for gid in (65534, 65533, 65532) if gid not in (os.getgid(), root.stat().st_gid))
+if os.geteuid() != 0:
+    raise RuntimeError('sandbox must run as root to isolate untrusted programs')
+# Group-write permissions keep interrupted output removable by the non-root Linux service.
+# Untrusted processes never share the service uid or group.
+os.umask(0o002)
+build_root.mkdir(parents=True, exist_ok=True)
+(root / 'logs').mkdir(parents=True, exist_ok=True)
+# Trusted artifacts live on a root-owned tmpfs; generators and contestants run as nobody.
 cpp_standards = {'cpp11':'c++11', 'cpp14':'c++14', 'cpp17':'c++17',
                  'cpp20':'c++20', 'cpp23':'c++23', 'cpp26':'c++26'}
 
@@ -91,15 +103,22 @@ def check(stage, passed, message, case_id=None, verdict=None, score=None, durati
     print('SETDRAFT_CHECK ' + json.dumps(item, ensure_ascii=False), flush=True)
     return passed
 
-def run(command, input_path, output_path, timeout, memory_mb, cwd):
+def run(command, input_path, output_path, timeout, memory_mb, cwd, untrusted=False):
+    # User-created scratch files remain on tmpfs, even if cancellation kills the harness.
+    if untrusted and cwd.is_relative_to(root): cwd = pathlib.Path('/tmp') / cwd.relative_to(root)
     cwd.mkdir(parents=True, exist_ok=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if untrusted: os.chmod(cwd, 0o777)
     error_path = root / 'logs' / (output_path.relative_to(root).as_posix().replace('/', '_') + '.stderr')
     error_path.parent.mkdir(parents=True, exist_ok=True)
     def limits():
         resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_CPU, (math.ceil(timeout) + 1, math.ceil(timeout) + 1))
+        if untrusted:
+            os.setgroups([])
+            os.setgid(untrusted_gid)
+            os.setuid(untrusted_uid)
     started = time.monotonic()
     with open(input_path, 'rb') if input_path else open(os.devnull, 'rb') as stdin, \
          open(output_path, 'wb') as stdout, open(error_path, 'wb') as stderr:
@@ -115,9 +134,16 @@ def run(command, input_path, output_path, timeout, memory_mb, cwd):
             'durationMs':round((time.monotonic()-started)*1000), 'bytes':size,
             'logPath':str(error_path.relative_to(root)), 'stderrBytes':error_path.stat().st_size}
 
-def source(role, language, code):
-    folder = root / 'build' / role
-    folder.mkdir(parents=True, exist_ok=True)
+def source(role, language, code, untrusted=False):
+    previous_umask = os.umask(0o022)
+    try: return compile_source(role, language, code, untrusted)
+    finally: os.umask(previous_umask)
+
+def compile_source(role, language, code, untrusted):
+    destination = build_root / role
+    folder = pathlib.Path('/tmp/compile') / role if untrusted else destination
+    folder.mkdir(mode=0o777 if untrusted else 0o700, parents=True, exist_ok=True)
+    if untrusted: os.chmod(folder, 0o777)
     path = folder / ('main.cc' if language in cpp_standards else {'python3':'main.py', 'java':'Main.java'}[language])
     path.write_text(code, encoding='utf-8')
     binary = folder / 'main'
@@ -125,22 +151,30 @@ def source(role, language, code):
                    if language in cpp_standards else
                    {'python3':['python3','-m','py_compile',str(path)],
                     'java':['javac','-J-Xmx256m',str(path)]}[language])
-    result = run(compile_cmd, None, root / 'logs' / (role + '.compile'), 45, None, folder)
+    result = run(compile_cmd, None, root / 'logs' / (role + '.compile'), 45, None, folder, untrusted=untrusted)
     if not check('compile:' + role, result['status'] == 'ok', result['stderr'] or result['status'],
                  verdict='AC' if result['status'] == 'ok' else 'CE', duration_ms=result['durationMs'], log_path=result['logPath']): return False
+    if untrusted:
+        shutil.copytree(folder, destination)
+        for item in destination.rglob('*'):
+            if item.is_symlink(): raise RuntimeError('compiler produced a symbolic link')
+            item.chmod(item.stat().st_mode & 0o755)
+        destination.chmod(0o755)
+        shutil.rmtree(folder)
+        folder, path, binary = destination, destination / path.name, destination / 'main'
     commands[role] = ([str(binary)] if language in cpp_standards else
                       {'python3':['python3','-I',str(path)],
                        'java':['java','-XX:ActiveProcessorCount=1','-XX:+UseSerialGC','-cp',str(folder),'Main']}[language])
     languages[role] = language
     return True
 
-def program(role, input_path, output_path, case_id):
+def program(role, input_path, output_path, case_id, untrusted=False):
     timeout = payload['timeLimitMs'] / 1000
     memory = payload['memoryLimitMb']
     cmd = commands[role][:]
     if languages[role] == 'java': cmd.insert(1, '-Xmx' + str(memory) + 'm')
     result = run(cmd, input_path, output_path, timeout, memory,
-                 root / 'run' / role / case_id)
+                 root / 'run' / role / case_id, untrusted=untrusted)
     verdict = {'ok':'AC', 'time_limit':'TLE', 'memory_limit':'MLE', 'runtime_error':'RE', 'output_limit':'RE'}.get(result['status'], 'SYSTEM_ERROR')
     check(role, result['status'] == 'ok', result['stderr'] or (result['status'] + ', ' + str(result['durationMs']) + ' ms'), case_id,
           verdict=verdict, duration_ms=result['durationMs'], log_path=result['logPath'], memory_bytes=result['memoryBytes'])
@@ -235,7 +269,7 @@ def main():
         if payload.get(role): programs[role] = payload[role]
     for item in payload.get('generators', []): programs[item['name']] = item
     for role, item in programs.items():
-        if not source(role, item['language'], item['code']): return
+        if not source(role, item['language'], item['code'], untrusted=role not in ('reference','oracle','checker','validator')): return
     if payload['mode'] == 'generate':
         global generated_count
         (root / 'generated').mkdir(exist_ok=True)
@@ -245,8 +279,8 @@ def main():
             first = root / 'generated' / (case_id + '.in')
             second = root / 'run' / 'repeat' / (case_id + '.in')
             command = commands[item['generator']] + item['args']
-            left = run(command, None, first, 30, 512, root / 'run' / 'generate' / case_id)
-            right = run(command, None, second, 30, 512, root / 'run' / 'regenerate' / case_id)
+            left = run(command, None, first, 30, 512, root / 'run' / 'generate' / case_id, untrusted=True)
+            right = run(command, None, second, 30, 512, root / 'run' / 'regenerate' / case_id, untrusted=True)
             if not check('generator', left['status'] == 'ok' and right['status'] == 'ok',
                          left['stderr'] or right['stderr'] or left['status'], case_id): return
             reproducible = same_file(first, second)
@@ -429,7 +463,8 @@ async function runManualSandboxImpl(input: SandboxInput): Promise<ManualSandboxR
 	context?.signal.throwIfAborted();
 	context?.emit("stage", input.mode === "generate" ? "编译并生成测试数据" : "执行完整验证");
 	await mkdir(input.stage, { recursive: true });
-	await chmod(input.stage, 0o777);
+	// Trusted harness artifacts are root-owned; untrusted programs get only their run directory.
+	await chmod(input.stage, 0o750);
 	await writeFile(join(input.stage, "runner.py"), runner);
 	await mkdir(join(input.stage, "cases"), { recursive: true });
 	for (const item of input.cases ?? []) {
@@ -467,15 +502,15 @@ async function runManualSandboxImpl(input: SandboxInput): Promise<ManualSandboxR
 			"--rm",
 			"--name",
 			`setdraft-task-${taskId}`,
-			...sandboxRuntimeArgs(),
+			...sandboxRuntimeArgs(sandboxPolicy(), true),
 			"--mount",
-			`type=bind,source=${input.stage},target=/work`,
+			`type=bind,source=${input.stage},target=/private/work`,
 			"--workdir",
-			"/work",
+			"/private/work",
 			"--entrypoint",
 			"python3",
 			input.image,
-			"/work/runner.py",
+			"/private/work/runner.py",
 		],
 		timeoutMs,
 		context?.signal,

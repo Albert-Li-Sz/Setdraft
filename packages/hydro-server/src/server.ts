@@ -613,17 +613,7 @@ export async function createHydroServer(
 			}
 			const generatedRoute = /^\/api\/projects\/([^/]+)\/generated$/u.exec(url.pathname);
 			if (generatedRoute && request.method === "DELETE") {
-				const expectedRevision = Number(request.headers["x-expected-revision"]);
-				sendJson(
-					response,
-					200,
-					await projects.clearGenerated(
-						generatedRoute[1],
-						Number.isSafeInteger(expectedRevision) && request.headers["x-expected-revision"] !== undefined
-							? expectedRevision
-							: undefined,
-					),
-				);
+				sendJson(response, 200, await projects.clearGenerated(generatedRoute[1], expectedRevision(request)));
 				return;
 			}
 			const casePreviewRoute = /^\/api\/projects\/([^/]+)\/cases\/(manual|generated)\/([^/]+)\/preview$/u.exec(

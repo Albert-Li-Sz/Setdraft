@@ -137,9 +137,16 @@ export class WorkspaceRegistry {
 			const { projects } = await this.get(user);
 			const requestId = randomUUID();
 			try {
-				return await this.search.search(projects.database, user.id, requestId, "SearXNG documentation", signal, {
-					bypassCache: true,
-				});
+				return await this.search.search(
+					projects.database,
+					user.id,
+					requestId,
+					"Python official documentation",
+					signal,
+					{
+						bypassCache: true,
+					},
+				);
 			} finally {
 				await projects.database.delete("search-cache", `request:${requestId}`);
 			}

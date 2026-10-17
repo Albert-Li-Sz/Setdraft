@@ -61,8 +61,8 @@ it.skipIf(!dockerAvailable).each(["leaf", "parent"] as const)(
 		await writeFile(join(outside, "1.out"), "PRIVATE HOST CONTENT\n");
 		const attack =
 			kind === "leaf"
-				? `std::filesystem::remove("/work/verified/1.out"); std::filesystem::create_symlink(${JSON.stringify(join(outside, "1.out"))}, "/work/verified/1.out");`
-				: `std::filesystem::remove_all("/work/verified"); std::filesystem::create_directory_symlink(${JSON.stringify(outside)}, "/work/verified");`;
+				? `std::filesystem::remove("/private/work/verified/1.out"); std::filesystem::create_symlink(${JSON.stringify(join(outside, "1.out"))}, "/private/work/verified/1.out");`
+				: `std::filesystem::remove_all("/private/work/verified"); std::filesystem::create_directory_symlink(${JSON.stringify(outside)}, "/private/work/verified");`;
 		const id = await problem(checker(attack));
 		if (kind === "leaf") await expect(projects.pipeline.finalize(id)).rejects.toThrow("普通文件");
 		else
@@ -85,7 +85,10 @@ it.skipIf(!dockerAvailable)(
 			mode: "finalize" as const,
 			stage: join(root, "stage"),
 			image: "setdraft/sandbox:local",
-			reference: { language: "python3" as const, code: "import os\nos.mkfifo('/work/events.jsonl')\nprint(1)" },
+			reference: {
+				language: "python3" as const,
+				code: "import os\nos.mkfifo('/private/work/events.jsonl')\nprint(1)",
+			},
 			generatorStandard: "cpp17" as const,
 			checkerStandard: "cpp17" as const,
 			validatorStandard: "cpp17" as const,
@@ -101,7 +104,7 @@ it.skipIf(!dockerAvailable)(
 				stage: join(root, "device"),
 				reference: {
 					language: "python3",
-					code: "import os\nos.symlink('/dev/zero', '/work/result.json')\nprint(1)",
+					code: "import os\nos.symlink('/dev/zero', '/private/work/result.json')\nprint(1)",
 				},
 			}),
 		).rejects.toThrow("普通文件");

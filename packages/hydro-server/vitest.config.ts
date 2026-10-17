@@ -3,7 +3,12 @@ import { defineConfig, mergeConfig } from "vitest/config";
 import baseConfig from "../../vitest.base.ts";
 
 export default mergeConfig(baseConfig, defineConfig({
-    test: { setupFiles: [fileURLToPath(new URL("./test/database-setup.ts", import.meta.url))], hookTimeout: 30000 },
+	test: {
+		setupFiles: [fileURLToPath(new URL("./test/database-setup.ts", import.meta.url))],
+		hookTimeout: 30000,
+		// Direct sandbox tests bypass the task queue and each start a resource-limited container.
+		maxWorkers: 2,
+	},
 	resolve: {
 		alias: [
 			{ find: /^@earendil-works\/pi-ai\/compat$/, replacement: fileURLToPath(new URL("../ai/src/compat.ts", import.meta.url)) },

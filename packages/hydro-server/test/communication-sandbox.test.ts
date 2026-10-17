@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,6 +170,15 @@ it("isolates compilation and reports WA/TLE/MLE/RE in either round, retaining va
 			expect(cell?.rounds?.[1].state).toBe(round === "first" ? "skipped" : "complete");
 		}
 	expect(result.cells.find((cell) => cell.solutionId === "compile-failed")).toMatchObject({ verdict: "CE" });
+	const juryMetrics = (await readdir(join(root, "stage", "metrics"))).filter((name) => name.endsWith("-jury"));
+	const completedRounds = result.cells.flatMap((cell) => {
+		const index = solutions.findIndex((solution) => solution.id === cell.solutionId);
+		return (cell.rounds ?? [])
+			.filter((round) => round.state === "complete")
+			.map((round) => `candidate${index}-1-round${round.round}-jury`);
+	});
+	// Every dialogue retains its own jury metrics; a later candidate must not replace its bind source.
+	expect(juryMetrics.sort()).toEqual(completedRounds.sort());
 }, 120000);
 
 it.each(["first", "second"] as const)(
