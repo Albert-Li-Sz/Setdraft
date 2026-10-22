@@ -68,6 +68,8 @@ DOMjudge 调用 `run input answer feedback-directory`，适配器保留 stdin/st
 程序页可导入通信裁判模板与 C++／Python／Java 标程。辅助头文件由适配器提供：
 `communicationRound()` 取得轮次，`inf` 读取原始私有输入，`communicationHandoff()` 读取显式交接，
 第一轮调用 `saveCommunicationHandoff(信息, 第二轮输入)` 保存交接。
+交接文件（包含原始私有输入、交接信息、第二轮输入及封装头）的总大小遵循平台单文件容量限制，
+默认 64 MiB；交接信息和第二轮输入不另设 1 MiB 上限。超限会报告容量错误。
 
 第一轮结束后以新进程和新临时目录启动同一份源码；变量和文件不继承。第二轮默认继续交互，
 也可投递第二轮输入并采用文本比较或自定义 Checker。文本／特判标准答案由主标程完整运行两轮生成。

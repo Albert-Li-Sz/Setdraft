@@ -272,6 +272,37 @@ it("uses a fresh contestant process and filesystem for round two, and keeps jury
 	expect(report.success, JSON.stringify(report.checks)).toBe(true);
 }, 90000);
 
+it.each(["interactive", "text", "custom"] as const)(
+	"accepts 3.60 MiB private input, handoff and second-round input with %s judging",
+	async (secondRound) => {
+		const bytes = 3_774_874;
+		await writeFile(join(root, "input.in"), `21\n${"x".repeat(bytes)}\n`);
+		const judgeSource = communicationJudgeTemplate("provided").replace(
+			'saveCommunicationHandoff(std::to_string(encoded), "second\\n" + std::to_string(encoded) + "\\n");',
+			`saveCommunicationHandoff(std::to_string(encoded) + std::string(${bytes}, 'x'), "second\\n" + std::to_string(encoded) + "\\n" + std::string(${bytes}, 'x'));`,
+		);
+		const code = communicationReferenceTemplate("python3").replace(
+			"print(",
+			secondRound === "interactive"
+				? "print("
+				: `if phase == "second": assert len(sys.stdin.read(${bytes})) == ${bytes}\nprint(`,
+		);
+		const report = await runManualSandbox(
+			sandbox(secondRound, "python3", {
+				timeLimitMs: 5000,
+				maxFileBytes: 16 * 1024 * 1024,
+				reference: { language: "python3", code },
+				communication: { judgeSource, judgeStandard: "cpp17", secondRound },
+			}),
+		);
+		expect(report.success, JSON.stringify(report.checks)).toBe(true);
+		expect(
+			report.checks.find((check) => check.stage === "interaction:reference")?.rounds?.map((round) => round.verdict),
+		).toEqual(["AC", "AC"]);
+	},
+	90000,
+);
+
 it("rejects requesting a third round as a judge fault", async () => {
 	const judgeSource = communicationJudgeTemplate("provided").replace(
 		'quitf(_ok, "Both rounds accepted");',

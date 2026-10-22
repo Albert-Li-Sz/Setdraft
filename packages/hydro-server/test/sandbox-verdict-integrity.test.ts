@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Generator, Solution } from "@setdraft/contracts";
@@ -87,6 +87,38 @@ it("judges an ordinary wrong answer as WA, so the forgery test cannot pass for t
 		["primary", "AC", 100],
 		["plain-wrong", "WA", 0],
 	]);
+}, 90_000);
+
+it("judges all 180 cells with private mode-0600 inputs and answers", async () => {
+	const cases = [];
+	for (let number = 1; number <= 30; number++) {
+		const inputPath = join(root, `${number}.in`);
+		const outputPath = join(root, `${number}.out`);
+		await writeFile(inputPath, `${number}\n`);
+		await writeFile(outputPath, `${number * 2}\n`);
+		await chmod(inputPath, 0o600);
+		await chmod(outputPath, 0o600);
+		cases.push({ id: String(number), inputPath, outputPath, outputName: `${number}.out` });
+	}
+	const result = await runSolutionSandbox({
+		...sandbox({ cases }),
+		solutions: [
+			solution("primary", reference.code, "accepted", { kind: "AC" }),
+			solution("auxiliary", reference.code, "accepted", { kind: "AC" }),
+			solution("zero", "input(); print(0)", "wrong", { kind: "WA" }),
+			solution("off-by-one", "print(int(input()) * 2 + 1)", "wrong", { kind: "WA" }),
+			solution("negative", "print(-int(input()) * 2)", "wrong", { kind: "WA" }),
+			solution("crash", "input(); raise RuntimeError('fixture')", "wrong", { kind: "RE" }),
+		],
+		primaryId: "primary",
+	});
+	expect(result.cells).toHaveLength(180);
+	for (const test of cases) {
+		expect(
+			result.cells.filter((cell) => cell.caseId === test.id).map((cell) => cell.verdict),
+			JSON.stringify(result.checks),
+		).toEqual(["AC", "AC", "WA", "WA", "WA", "RE"]);
+	}
 }, 90_000);
 
 it("refuses a candidate that replaces the Checker binary it is judged by", async () => {

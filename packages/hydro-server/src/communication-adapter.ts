@@ -25,9 +25,7 @@ export function readCommunicationEnvelope(
 	if (end < 0 || !match) throw new Error("通信裁判未生成合法交接文件。");
 	const sizes = match.slice(1).map(Number);
 	if (
-		sizes.some((size) => !Number.isSafeInteger(size) || size < 0) ||
-		sizes[1] > 1048576 ||
-		sizes[2] > 1048576 ||
+		sizes.some((size) => !Number.isSafeInteger(size) || size < 0 || size > maximum) ||
 		sizes.reduce((a, b) => a + b, end + 1) !== bytes.length
 	)
 		throw new Error("通信交接长度无效。");
@@ -77,7 +75,7 @@ void decode(const std::string& data) {
     size_t e = data.find('\\n');
     if (e == std::string::npos) quitf(_fail, "Missing handoff envelope");
     std::istringstream h(data.substr(0, e)); std::string tag, extra; unsigned long long a, b, c;
-    if (!(h >> tag >> a >> b >> c) || h >> extra || tag != "${magic}" || a > maximum || b > 1048576 || c > 1048576 || a + b + c != data.size() - e - 1) quitf(_fail, "Invalid handoff envelope");
+    if (!(h >> tag >> a >> b >> c) || h >> extra || tag != "${magic}" || a > maximum || b > maximum || c > maximum || a + b + c != data.size() - e - 1) quitf(_fail, "Invalid handoff envelope");
     original = data.substr(e + 1, a); handoff = data.substr(e + 1 + a, b); secondInput = data.substr(e + 1 + a + b, c);
 }
 }
@@ -85,7 +83,8 @@ int communicationRound() { return setdraft_comm::currentRound; }
 const std::string& communicationHandoff() { return setdraft_comm::handoff; }
 void saveCommunicationHandoff(const std::string& data, const std::string& secondInput = "") {
     using namespace setdraft_comm;
-    if (currentRound != 1 || saved || data.size() > 1048576 || secondInput.size() > 1048576) quitf(_fail, "Invalid handoff request; exactly two rounds are allowed");
+    if (currentRound != 1 || saved) quitf(_fail, "Invalid handoff request; exactly two rounds are allowed");
+    if (data.size() > maximum || secondInput.size() > maximum) quitf(_fail, "Handoff data or second-round input exceeds file capacity");
     std::string envelope = "${magic} " + std::to_string(original.size()) + " " + std::to_string(data.size()) + " " + std::to_string(secondInput.size()) + "\\n" + original + data + secondInput;
     if (envelope.size() > maximum) quitf(_fail, "Handoff exceeds file capacity");
     write(nextPath, envelope); saved = true;

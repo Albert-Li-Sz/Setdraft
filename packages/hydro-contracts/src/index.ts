@@ -24,8 +24,8 @@ export * from "./problem-types.ts";
 export * from "./verification.ts";
 
 export type CheckerMode = "text" | "custom";
-export const verificationContractVersion = 8;
-export const exportContractVersion = 6;
+export const verificationContractVersion = 9;
+export const exportContractVersion = 7;
 export type JudgingMode = "default" | "interactive";
 export type InteractionInputMode = "provided" | "empty";
 export type ChatProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";

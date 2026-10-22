@@ -54,6 +54,47 @@ it("reports temporary cleanup failures without overriding a committed result", a
 });
 
 sandboxIt.each([1001, 65534])(
+	"reads service-owned mode-0600 cases without exposing them to contestants with uid/gid %i",
+	(serviceId) => {
+		const args = sandboxRuntimeArgs(sandboxPolicy(), true);
+		args[args.indexOf("--user") + 1] = `0:${serviceId}`;
+		const script = [
+			"import os, pathlib, subprocess",
+			"stage = pathlib.Path('/private/work')",
+			`def service(): os.setgroups([]); os.setgid(${serviceId}); os.setuid(${serviceId})`,
+			"create = \"import pathlib; cases=pathlib.Path('cases'); cases.mkdir(mode=0o700); p=cases/'0.in'; p.write_text('21\\\\n'); p.chmod(0o600)\"",
+			"subprocess.run(['python3', '-c', create], cwd=stage, preexec_fn=service, check=True)",
+			"input_path = stage / 'cases' / '0.in'",
+			'(stage / \'payload.json\').write_text(\'{"maxFileBytes":1048576,"timeLimitMs":1000,"memoryLimitMb":256}\')',
+			sandboxProgramRuntime,
+			"assert source('candidate', 'python3', 'print(int(input()) * 2)', untrusted=True)",
+			"assert program('candidate', input_path, root/'outputs'/'0.out', '0', untrusted=True)",
+			"assert (root/'outputs'/'0.out').read_text() == '42\\n'",
+			"def nobody(): os.setgroups([]); os.setgid(untrusted_gid); os.setuid(untrusted_uid)",
+			"probe = subprocess.run(['python3', '-c', \"open('/private/work/cases/0.in').read()\"], preexec_fn=nobody, capture_output=True)",
+			"assert probe.returncode != 0 and b'PermissionError' in probe.stderr",
+		].join("\n");
+		execFileSync(
+			"docker",
+			[
+				"run",
+				"--rm",
+				...args,
+				"--tmpfs",
+				`/private/work:mode=750,uid=${serviceId},gid=${serviceId}`,
+				"--entrypoint",
+				"python3",
+				"setdraft/sandbox:local",
+				"-c",
+				script,
+			],
+			{ timeout: 15000, stdio: "pipe" },
+		);
+	},
+	20000,
+);
+
+sandboxIt.each([1001, 65534])(
 	"keeps incomplete Linux work removable with service uid/gid %i",
 	(serviceId) => {
 		const args = sandboxRuntimeArgs(sandboxPolicy(), true);
