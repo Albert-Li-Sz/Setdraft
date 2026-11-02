@@ -84,6 +84,14 @@ describe("identity lifecycle", () => {
 			await expect(identity.login({ username: "missing", password }, "remote")).rejects.toMatchObject({
 				code: "INVALID_CREDENTIALS",
 			});
+		await expect(identity.login({ username: "missing", password }, "remote")).rejects.toMatchObject({
+			statusCode: 429,
+		});
+		// Another source keeps access until the account-wide cap is reached.
+		for (let i = 0; i < 15; i++)
+			await expect(identity.login({ username: "missing", password }, `source-${i}`)).rejects.toMatchObject({
+				code: "INVALID_CREDENTIALS",
+			});
 		await expect(identity.login({ username: "missing", password }, "different-ip")).rejects.toMatchObject({
 			statusCode: 429,
 		});

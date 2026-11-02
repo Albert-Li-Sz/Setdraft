@@ -246,7 +246,9 @@ export class IdentityStore {
 	private async authenticate(input: Record<string, unknown>, ip: string): Promise<UserRow> {
 		const name = typeof input.username === "string" ? input.username.toLowerCase().slice(0, 128) : "";
 		const accountKey = `account:${hashToken(name)}`;
-		await this.throttle([accountKey, `ip:${ip}`], [5, 30]);
+		const sourceKey = `account-ip:${hashToken(`${name}\n${ip}`)}`;
+		// A single source cannot lock other users out of an account; the account-wide cap still bounds distributed guessing.
+		await this.throttle([sourceKey, accountKey, `ip:${ip}`], [5, 20, 30]);
 		const row = (await this.sql.one("SELECT * FROM users WHERE username=$1", [name])) as unknown as
 			| UserRow
 			| undefined;
@@ -255,7 +257,7 @@ export class IdentityStore {
 		const current = row ? await this.row(row.id) : undefined;
 		if (!valid || !current?.enabled || current.password_hash !== row?.password_hash)
 			throw new AuthError("用户名或密码错误。", 401, "INVALID_CREDENTIALS");
-		await this.sql.execute("DELETE FROM login_limits WHERE key=$1", [accountKey]);
+		await this.sql.execute("DELETE FROM login_limits WHERE key=ANY($1::text[])", [[accountKey, sourceKey]]);
 		await this.audit(current.id, "login", current.id);
 		return current;
 	}

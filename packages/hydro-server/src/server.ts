@@ -620,14 +620,16 @@ export async function createHydroServer(
 				url.pathname,
 			);
 			if (casePreviewRoute && request.method === "GET") {
+				let stem: string;
+				try {
+					stem = decodeURIComponent(casePreviewRoute[3]);
+				} catch {
+					throw new ManualProjectError("测试点名称编码无效。");
+				}
 				sendJson(
 					response,
 					200,
-					await projects.casePreview(
-						casePreviewRoute[1],
-						casePreviewRoute[2] as "manual" | "generated",
-						decodeURIComponent(casePreviewRoute[3]),
-					),
+					await projects.casePreview(casePreviewRoute[1], casePreviewRoute[2] as "manual" | "generated", stem),
 				);
 				return;
 			}

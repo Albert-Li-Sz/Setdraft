@@ -87,12 +87,10 @@ export class ProjectPipeline {
 					},
 				]
 			: project.cases;
-		const normalized = {
-			...project,
-			subtasks:
-				project.scoringMode === "acm" || empty ? [{ id: 1, type: "min" as const, score: 100 }] : project.subtasks,
-		};
-		const issues = validateHydroProblemSpec(this.spec(normalized, cases), this.projects.judgeLimits).issues;
+		const issues = validateHydroProblemSpec(this.spec(project, cases), this.projects.judgeLimits).issues;
+		const subtaskIssue = empty ? undefined : this.subtaskIssue(project, cases);
+		if (subtaskIssue)
+			issues.push({ code: "INVALID_CASE_SUBTASK", severity: "error", path: "subtasks", message: subtaskIssue });
 		try {
 			this.limits(project);
 		} catch (error) {
@@ -115,6 +113,20 @@ export class ProjectPipeline {
 				message: "请填写通信裁判。",
 			});
 		return issues;
+	}
+
+	/** Preflight and finalize share these rules so a passing preflight is not rejected at publication. */
+	private subtaskIssue(project: ManualProject, cases: ManualCaseSummary[]): string | undefined {
+		if (project.scoringMode === "acm") {
+			const [only] = project.subtasks;
+			if (project.subtasks.length !== 1 || only.id !== 1 || only.type !== "min" || only.score !== 100)
+				return "ACM 题目仅允许一个 100 分 min 分组。";
+			return cases.some((item) => item.subtaskId !== 1) ? "ACM 题目的所有测试点必须位于唯一分组。" : undefined;
+		}
+		const ids = new Set(project.subtasks.map((item) => item.id));
+		const orphans = cases.filter((item) => !ids.has(item.subtaskId)).map((item) => item.id);
+		if (!orphans.length) return undefined;
+		return `测试点 ${orphans.slice(0, 10).join(", ")}${orphans.length > 10 ? " 等" : ""} 所属的子任务不存在，请重新分配。`;
 	}
 
 	async generate(
@@ -393,16 +405,6 @@ export class ProjectPipeline {
 			if (!interactive && !effectiveChecker(project.checkerMode, project.checkerSource)) {
 				throw new ManualProjectError("请选择文本比对 Checker，或提供 C++ testlib Checker 源码。", 422);
 			}
-			if (
-				!emptyInput &&
-				project.scoringMode === "acm" &&
-				(project.subtasks.length !== 1 ||
-					project.subtasks[0].id !== 1 ||
-					project.subtasks[0].type !== "min" ||
-					project.subtasks[0].score !== 100)
-			) {
-				throw new ManualProjectError("ACM 题目仅允许一个 100 分 min 分组。", 422);
-			}
 			const { cases: storedCases, orphanOutputs } = await this.projects.caseList(project);
 			const cases: ManualCaseSummary[] = emptyInput
 				? [
@@ -422,9 +424,8 @@ export class ProjectPipeline {
 			if (!interactive && orphanOutputs.length)
 				throw new ManualProjectError(`存在没有对应 .in 的输出文件：${orphanOutputs.join(", ")}`, 422);
 			if (cases.length === 0) throw new ManualProjectError("请先上传测试数据或运行 Gen。", 422);
-			if (project.scoringMode === "acm" && cases.some((item) => item.subtaskId !== 1)) {
-				throw new ManualProjectError("ACM 题目的所有测试点必须位于唯一分组。", 422);
-			}
+			const subtaskIssue = emptyInput ? undefined : this.subtaskIssue(project, cases);
+			if (subtaskIssue) throw new ManualProjectError(subtaskIssue, 422);
 			if (cases.some((item) => item.origin === "generated")) {
 				if (
 					project.generatedFromHash !==

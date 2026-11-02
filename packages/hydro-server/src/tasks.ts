@@ -754,15 +754,7 @@ export class TaskQueue {
 		const events = new EventWriter(() => controller.abort());
 		const end = async (state: TaskState, result?: unknown, error?: string) => {
 			await this.settlements.settle(task.id, async () => {
-				await this.database.transaction(async () => {
-					const cancelled = state === "succeeded" && (await this.cancellationRequested(task.id));
-					await this.finish(
-						task.id,
-						cancelled ? "cancelled" : state,
-						cancelled ? undefined : result,
-						cancelled ? "任务已取消。" : error,
-					);
-				});
+				await this.finish(task.id, state, result, error);
 				this.releaseAdmission(task.id);
 			});
 		};
@@ -819,10 +811,8 @@ export class TaskQueue {
 				result = await this.contests.export(resourceId, task.format ?? "hydro", context, task.releaseName);
 			else result = await this.buildImage(context);
 			await events.flush();
-			if (timedOut) await end("failed", undefined, "任务运行超过时间上限，请检查程序后重试。");
-			else if (this.closed) await end("interrupted", undefined, "服务进程中断；可以重试此任务。");
-			else if (controller.signal.aborted) await end("cancelled", undefined, "任务已取消。");
-			else await end("succeeded", result);
+			// Work that returned has already committed its result; a late cancel or timeout cannot undo it.
+			await end("succeeded", result);
 		} catch (error) {
 			span.setAttributes({
 				"error.type": timedOut ? "TimeoutError" : errorCategory(error),

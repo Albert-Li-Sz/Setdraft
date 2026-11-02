@@ -614,9 +614,11 @@ export class VerificationRuns {
 		}
 		if (run.diagnostics && cell.artifacts) {
 			const logs = await Promise.all(
-				cell.artifacts.logs.map(async (name) =>
-					readTextPreview((await this.database.filePath("verification-file", id, `diagnostics/${name}`))!),
-				),
+				cell.artifacts.logs.map(async (name) => {
+					// Older runs may index a log the collector later skipped; show the remaining logs instead of failing.
+					const path = await this.database.filePath("verification-file", id, `diagnostics/${name}`);
+					return path ? await readTextPreview(path) : "";
+				}),
 			);
 			cell.log = logs
 				.filter((text) => text.trim())

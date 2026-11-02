@@ -274,6 +274,7 @@ export class ManualProjectStore {
 		const cases: ManualCaseSummary[] = [];
 		const orphanOutputs: string[] = [];
 		const dataIssues: NonNullable<ManualProjectSnapshot["dataIssues"]> = [];
+		const defaultSubtaskId = project.subtasks[0]?.id ?? 1;
 		for (const origin of ["manual", "generated"] as const) {
 			const files = await this.database.fileEntries(origin, project.id);
 			const byName = new Map(files.map((item) => [item.name, item.size]));
@@ -303,7 +304,7 @@ export class ManualProjectStore {
 					inputHash: file.hash,
 					outputBytes: outputFile ? byName.get(outputFile) : undefined,
 					outputHash: outputFile ? byHash.get(outputFile) : undefined,
-					subtaskId: project.caseSubtasks[`${origin}:${stem}`] ?? 1,
+					subtaskId: project.caseSubtasks[`${origin}:${stem}`] ?? defaultSubtaskId,
 				});
 			}
 		}
@@ -739,9 +740,12 @@ export class ManualProjectStore {
 
 	async deleteFile(id: string, name: string, expectedRevision?: number): Promise<ManualProjectSnapshot> {
 		await this.assertNotBusy(id);
-		dataStem(name);
+		const { stem, extension } = dataStem(name);
 		const project = await this.load(id);
 		await this.assertExpectedRevision(project, expectedRevision);
+		if (!(await this.database.filePath("manual", id, name)))
+			throw new ManualProjectError(`手动测试文件 ${name} 不存在。`, 404);
+		if (extension === "in") delete project.caseSubtasks[`manual:${stem}`];
 		project.revision++;
 		project.updatedAt = new Date().toISOString();
 		await this.database.transaction(async () => {
